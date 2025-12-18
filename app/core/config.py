@@ -21,13 +21,6 @@ class Config:
     CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-3-5-haiku-20241022')
 
 settings = Config()
-    CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-3-5-haiku-20241022')
-    
-    @classmethod
-    def validate(cls):
-        """Validate that all required config values are present."""
-        required = [
-            ('SUPABASE_URL', cls.SUPABASE_URL),
             ('SUPABASE_KEY', cls.SUPABASE_KEY),
             ('ANTHROPIC_API_KEY', cls.ANTHROPIC_API_KEY),
         ]
