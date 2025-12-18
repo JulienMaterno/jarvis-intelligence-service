@@ -56,24 +56,26 @@ class SupabaseMultiDatabase:
     # CONTACT LOOKUP
     # =========================================================================
     
-    def find_contact_by_name(self, name: str) -> Optional[Dict]:
+    def find_contact_by_name(self, name: str) -> Tuple[Optional[Dict], List[Dict]]:
         """
         Find a contact by name using fuzzy matching.
-        Returns the contact dict if found, None otherwise.
+        Returns tuple of (matched_contact, suggestions).
+        - matched_contact: The contact dict if found with high confidence, None otherwise
+        - suggestions: List of possible matches if no exact match (for user to choose)
         """
         if not name:
-            return None
+            return None, []
         
         try:
             # Split name into parts
             name_parts = name.strip().split()
             if not name_parts:
-                return None
+                return None, []
             
-            first_name = name_parts[0]
-            last_name = name_parts[-1] if len(name_parts) > 1 else None
+            first_name = name_parts[0].lower()
+            last_name = name_parts[-1].lower() if len(name_parts) > 1 else None
             
-            # Strategy 1: Exact full name match
+            # Strategy 1: Exact full name match (case-insensitive)
             if last_name:
                 result = self.client.table("contacts").select("*").ilike(
                     "first_name", first_name
@@ -83,25 +85,56 @@ class SupabaseMultiDatabase:
                 
                 if result.data:
                     logger.info(f"Found contact by exact name: {name}")
-                    return result.data[0]
+                    return result.data[0], []
             
-            # Strategy 2: First name only (if unique)
+            # Strategy 2: First name only match
             result = self.client.table("contacts").select("*").ilike(
-                "first_name", first_name
-            ).is_("deleted_at", "null").execute()
+                "first_name", f"%{first_name}%"
+            ).is_("deleted_at", "null").limit(10).execute()
             
             if len(result.data) == 1:
                 contact = result.data[0]
                 logger.info(f"Found unique contact by first name '{first_name}': {contact.get('first_name')} {contact.get('last_name')}")
-                return contact
+                return contact, []
             elif len(result.data) > 1:
-                logger.info(f"Multiple contacts match first name '{first_name}', skipping auto-link")
+                # Multiple matches - return as suggestions
+                logger.info(f"Multiple contacts match '{first_name}', returning as suggestions")
+                return None, result.data[:5]  # Max 5 suggestions
             
-            return None
+            # Strategy 3: Fuzzy search - search in both first and last name
+            result = self.client.table("contacts").select("*").or_(
+                f"first_name.ilike.%{first_name}%,last_name.ilike.%{first_name}%"
+            ).is_("deleted_at", "null").limit(5).execute()
+            
+            if result.data:
+                logger.info(f"Found {len(result.data)} fuzzy matches for '{name}'")
+                return None, result.data
+            
+            return None, []
             
         except Exception as e:
             logger.error(f"Error finding contact '{name}': {e}")
-            return None
+            return None, []
+    
+    def search_contacts(self, query: str, limit: int = 5) -> List[Dict]:
+        """
+        Search contacts by partial name match.
+        Used for suggesting corrections.
+        """
+        if not query or len(query) < 2:
+            return []
+        
+        try:
+            result = self.client.table("contacts").select(
+                "id, first_name, last_name, company, position"
+            ).or_(
+                f"first_name.ilike.%{query}%,last_name.ilike.%{query}%"
+            ).is_("deleted_at", "null").limit(limit).execute()
+            
+            return result.data
+        except Exception as e:
+            logger.error(f"Error searching contacts: {e}")
+            return []
     
     # =========================================================================
     # TRANSCRIPTS
@@ -188,13 +221,38 @@ class SupabaseMultiDatabase:
             
             logger.info(f"Creating meeting: {title}")
             
-            # Find contact by name
+            # Find contact by name with suggestions
             contact_id = None
+            contact_match_info = {
+                "searched_name": person_name,
+                "matched": False,
+                "linked_contact": None,
+                "suggestions": []
+            }
+            
             if person_name:
-                contact = self.find_contact_by_name(person_name)
+                contact, suggestions = self.find_contact_by_name(person_name)
                 if contact:
                     contact_id = contact.get('id')
+                    contact_match_info["matched"] = True
+                    contact_match_info["linked_contact"] = {
+                        "id": contact.get("id"),
+                        "name": f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip(),
+                        "company": contact.get("company"),
+                        "position": contact.get("position")
+                    }
                     logger.info(f"Linked meeting to contact: {person_name} ({contact_id})")
+                elif suggestions:
+                    contact_match_info["suggestions"] = [
+                        {
+                            "id": s.get("id"),
+                            "name": f"{s.get('first_name', '')} {s.get('last_name', '')}".strip(),
+                            "company": s.get("company"),
+                            "position": s.get("position")
+                        }
+                        for s in suggestions
+                    ]
+                    logger.info(f"No exact match for '{person_name}', found {len(suggestions)} suggestions")
             
             payload = {
                 "title": title,
@@ -219,7 +277,7 @@ class SupabaseMultiDatabase:
             meeting_url = f"supabase://meetings/{meeting_id}"
             
             logger.info(f"Meeting created: {meeting_id}")
-            return meeting_id, meeting_url
+            return meeting_id, meeting_url, contact_match_info
             
         except Exception as e:
             logger.error(f"Error creating meeting: {e}")

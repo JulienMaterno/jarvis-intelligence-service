@@ -42,14 +42,15 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
             "transcript_id": transcript_id,
             "meeting_ids": [],
             "reflection_ids": [],
-            "task_ids": []
+            "task_ids": [],
+            "contact_matches": []  # Track CRM linking results
         }
         
         primary_category = analysis.get("primary_category", "other")
         
         # Process Meetings
         for meeting in analysis.get("meetings", []):
-            m_id, m_url = db.create_meeting(
+            m_id, m_url, contact_match_info = db.create_meeting(
                 meeting_data=meeting,
                 transcript=transcript_text,
                 duration=transcript_record.get("audio_duration_seconds", 0),
@@ -57,6 +58,12 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
                 transcript_id=transcript_id
             )
             db_records["meeting_ids"].append(m_id)
+            
+            # Add contact match info with meeting context
+            if contact_match_info.get("searched_name"):
+                contact_match_info["meeting_id"] = m_id
+                contact_match_info["meeting_title"] = meeting.get("title", "Untitled")
+                db_records["contact_matches"].append(contact_match_info)
             
             # Create tasks linked to this meeting
             if analysis.get("tasks"):
@@ -128,14 +135,15 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
             "transcript_id": transcript_id,
             "meeting_ids": [],
             "reflection_ids": [],
-            "task_ids": []
+            "task_ids": [],
+            "contact_matches": []  # Track CRM linking results
         }
         
         primary_category = analysis.get("primary_category", "other")
         
         # Process Meetings
         for meeting in analysis.get("meetings", []):
-            m_id, m_url = db.create_meeting(
+            m_id, m_url, contact_match_info = db.create_meeting(
                 meeting_data=meeting,
                 transcript=request.transcript,
                 duration=request.audio_duration_seconds or 0,
@@ -143,6 +151,12 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                 transcript_id=transcript_id
             )
             db_records["meeting_ids"].append(m_id)
+            
+            # Add contact match info with meeting context
+            if contact_match_info.get("searched_name"):
+                contact_match_info["meeting_id"] = m_id
+                contact_match_info["meeting_title"] = meeting.get("title", "Untitled")
+                db_records["contact_matches"].append(contact_match_info)
             
             # Create tasks linked to this meeting
             if analysis.get("tasks"):
