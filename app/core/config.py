@@ -21,10 +21,3 @@ class Config:
     CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-3-5-haiku-20241022')
 
 settings = Config()
-            ('SUPABASE_KEY', cls.SUPABASE_KEY),
-            ('ANTHROPIC_API_KEY', cls.ANTHROPIC_API_KEY),
-        ]
-        
-        missing = [name for name, value in required if not value]
-        if missing:
-            raise ValueError(f"Missing required config: {', '.join(missing)}")
