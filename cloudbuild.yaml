@@ -1,0 +1,28 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/jarvis-intelligence-service', '.']
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/jarvis-intelligence-service']
+
+  # Deploy container to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'jarvis-intelligence-service'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/jarvis-intelligence-service'
+      - '--region'
+      - 'asia-southeast1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'SUPABASE_URL=$_SUPABASE_URL,SUPABASE_KEY=$_SUPABASE_KEY,ANTHROPIC_API_KEY=$_ANTHROPIC_API_KEY'
+
+images:
+  - 'gcr.io/$PROJECT_ID/jarvis-intelligence-service'
