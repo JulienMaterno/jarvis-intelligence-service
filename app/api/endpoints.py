@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from app.api.models import TranscriptRequest, TranscriptProcessRequest, AnalysisResponse
+from app.api.models import TranscriptRequest, TranscriptProcessRequest, AnalysisResponse, LinkContactRequest, CreateContactRequest
 from app.services.llm import ClaudeMultiAnalyzer
 from app.services.database import SupabaseMultiDatabase
 import logging
@@ -201,6 +201,134 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================================
+# CONTACT MANAGEMENT ENDPOINTS
+# =========================================================================
+
+@router.patch("/meetings/{meeting_id}/link-contact")
+async def link_contact_to_meeting(meeting_id: str, request: LinkContactRequest):
+    """
+    Link a contact to an existing meeting.
+    Used when user selects correct contact from suggestions.
+    """
+    try:
+        logger.info(f"Linking meeting {meeting_id} to contact {request.contact_id}")
+        
+        # Update the meeting with the contact_id
+        result = db.client.table("meetings").update({
+            "contact_id": request.contact_id
+        }).eq("id", meeting_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        
+        # Get the contact details for confirmation
+        contact = db.client.table("contacts").select("first_name, last_name, company").eq("id", request.contact_id).single().execute()
+        
+        contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
+        company = contact.data.get('company', '')
+        
+        logger.info(f"Meeting {meeting_id} linked to {contact_name}")
+        
+        return {
+            "status": "success",
+            "meeting_id": meeting_id,
+            "contact_id": request.contact_id,
+            "contact_name": contact_name,
+            "company": company
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error linking contact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/contacts")
+async def create_contact(request: CreateContactRequest):
+    """
+    Create a new contact in the CRM.
+    Optionally link to a meeting after creation.
+    """
+    try:
+        logger.info(f"Creating contact: {request.first_name} {request.last_name or ''}")
+        
+        payload = {
+            "first_name": request.first_name,
+            "last_name": request.last_name,
+            "company": request.company,
+            "position": request.position,
+            "email": request.email,
+            "phone": request.phone,
+        }
+        # Remove None values
+        payload = {k: v for k, v in payload.items() if v is not None}
+        
+        result = db.client.table("contacts").insert(payload).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to create contact")
+        
+        contact_id = result.data[0]["id"]
+        contact_name = f"{request.first_name} {request.last_name or ''}".strip()
+        
+        logger.info(f"Contact created: {contact_id}")
+        
+        # Optionally link to meeting
+        if request.link_to_meeting_id:
+            db.client.table("meetings").update({
+                "contact_id": contact_id
+            }).eq("id", request.link_to_meeting_id).execute()
+            logger.info(f"Linked new contact to meeting {request.link_to_meeting_id}")
+        
+        return {
+            "status": "success",
+            "contact_id": contact_id,
+            "contact_name": contact_name,
+            "linked_to_meeting": request.link_to_meeting_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating contact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/contacts/search")
+async def search_contacts(q: str, limit: int = 5):
+    """
+    Search contacts by name.
+    """
+    try:
+        if not q or len(q) < 2:
+            return {"contacts": []}
+        
+        result = db.client.table("contacts").select(
+            "id, first_name, last_name, company, position"
+        ).or_(
+            f"first_name.ilike.%{q}%,last_name.ilike.%{q}%"
+        ).is_("deleted_at", "null").limit(limit).execute()
+        
+        contacts = [
+            {
+                "id": c.get("id"),
+                "name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+                "company": c.get("company"),
+                "position": c.get("position")
+            }
+            for c in result.data
+        ]
+        
+        return {"contacts": contacts}
+        
+    except Exception as e:
+        logger.error(f"Error searching contacts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/health")
 async def health_check():
