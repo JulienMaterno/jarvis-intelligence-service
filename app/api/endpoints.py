@@ -200,6 +200,24 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                     origin_type="journal"
                 )
                 db_records["task_ids"].extend(task_ids)
+            
+            # Also create tasks from tomorrow_focus items in the journal
+            tomorrow_focus = journal.get("tomorrow_focus", [])
+            if tomorrow_focus:
+                # Convert tomorrow_focus strings to task objects
+                focus_tasks = [
+                    {"title": item, "description": "From journal tomorrow_focus", "due_date": None}
+                    for item in tomorrow_focus
+                    if isinstance(item, str) and len(item) > 3
+                ]
+                if focus_tasks:
+                    task_ids = db.create_tasks(
+                        tasks_data=focus_tasks,
+                        origin_id=j_id,
+                        origin_type="journal"
+                    )
+                    db_records["task_ids"].extend(task_ids)
+                    logger.info(f"Created {len(task_ids)} tasks from journal tomorrow_focus")
         
         # Process Meetings
         for meeting in analysis.get("meetings", []):
