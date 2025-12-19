@@ -266,7 +266,7 @@ class SupabaseMultiDatabase:
                 "contact_id": contact_id,
                 "contact_name": person_name,
                 "source_file": filename,
-                "audio_duration_seconds": duration,
+                "audio_duration_seconds": int(duration) if duration else None,
             }
             
             if transcript_id:
@@ -317,7 +317,7 @@ class SupabaseMultiDatabase:
                 "sections": sections,
                 "content": content,
                 "source_file": filename,
-                "audio_duration_seconds": duration,
+                "audio_duration_seconds": int(duration) if duration else None,
             }
             
             if transcript_id:
@@ -446,7 +446,7 @@ class SupabaseMultiDatabase:
                 "content": transcript[:5000] if transcript else None,  # Store truncated transcript
                 "source": "voice",
                 "source_file": filename,
-                "audio_duration_seconds": duration,
+                "audio_duration_seconds": int(duration) if duration else None,
                 "last_sync_source": "supabase",  # Mark that Supabase is the source
             }
             
