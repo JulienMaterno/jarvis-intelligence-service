@@ -357,11 +357,10 @@ class SupabaseMultiDatabase:
             for task in tasks_data:
                 payload = {
                     "title": task.get('task', 'Untitled Task'),
-                    "status": "todo",
+                    "status": "pending",
                     "priority": task.get('priority', 'medium').lower(),
                     "due_date": task.get('due_date'),
-                    "assignee": task.get('assignee'),
-                    "origin_table": origin_type + "s", # meetings or reflections
+                    "origin_type": origin_type,
                     "origin_id": origin_id
                 }
                 
