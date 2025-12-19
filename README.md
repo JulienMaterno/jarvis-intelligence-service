@@ -1,13 +1,23 @@
 # 🧠 Jarvis Intelligence Service
 
-> The "Brain" of the operation. A FastAPI service running on Cloud Run that analyzes transcripts using Claude 3.5 Haiku.
+> **THE CORE of the Jarvis ecosystem.** This is where ALL AI processing and business logic lives. All other services call this one.
+
+## 🎯 Role in the Ecosystem
+
+This service is the **single source of intelligence**. Other services are specialized:
+- **Audio Pipeline** → Transcribes audio, then **calls this service** for analysis
+- **Telegram Bot** → Receives user input, then **calls this service** for AI responses
+- **Sync Service** → Pure sync, does NOT call this service
+
+**Why centralized?** One place to maintain AI logic, prompts, and business rules. Easy to upgrade, easy to debug.
 
 ## 🌟 Features
 
-*   **AI Analysis**: Uses Anthropic's Claude 3.5 Haiku to extract insights, tasks, and summaries.
-*   **Structured Data**: Converts unstructured text into structured database rows (Meetings, Tasks, Reflections).
-*   **API Driven**: Exposes a REST API for other services to trigger analysis.
-*   **Scalable**: Deployed on Google Cloud Run (Serverless).
+*   **Transcript Analysis**: Extracts meetings, reflections, and tasks from voice notes
+*   **Journal Processing**: Analyzes daily journals and creates tasks from `tomorrow_focus`
+*   **Chat Interface**: AI-powered chat with context (used by Telegram Bot)
+*   **Task Extraction**: Automatically creates tasks from any analyzed content
+*   **Structured Output**: Converts unstructured text into database rows
 
 ## 🚀 Setup & Deployment
 
@@ -26,20 +36,15 @@ python main.py
 ANTHROPIC_API_KEY=sk-ant-...
 SUPABASE_URL=https://...
 SUPABASE_KEY=eyJ...
+TELEGRAM_BOT_TOKEN=...  # For sending notifications
 ```
 
 ### 2. Deploy to Google Cloud Run
 
-This service is designed to run on Cloud Run.
-
 ```bash
-# 1. Build and Submit
-gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/jarvis-intelligence-service
-
-# 2. Deploy
+# Deploy directly from source
 gcloud run deploy jarvis-intelligence-service \
-  --image gcr.io/YOUR_PROJECT_ID/jarvis-intelligence-service \
-  --platform managed \
+  --source . \
   --region asia-southeast1 \
   --allow-unauthenticated
 ```
@@ -47,24 +52,16 @@ gcloud run deploy jarvis-intelligence-service \
 ## 🔌 API Endpoints
 
 ### `POST /api/v1/process/{transcript_id}`
+Analyzes a transcript and extracts structured data.
 
-Triggers the analysis for a specific transcript that is already saved in Supabase.
+### `POST /api/v1/process-journal/{journal_id}`
+Processes a journal entry and creates tasks from tomorrow_focus.
 
-**Path Parameters:**
-*   `transcript_id`: UUID of the transcript in the `transcripts` table.
+### `POST /api/v1/chat`
+AI chat endpoint with Supabase context (used by Telegram Bot).
 
-**Response:**
-```json
-{
-  "status": "success",
-  "transcript_id": "123-abc...",
-  "analysis": {
-    "summary": "...",
-    "tasks": [...],
-    "reflections": [...]
-  }
-}
-```
+### `GET /health`
+Health check endpoint.
 
-### `GET /api/v1/health`
-Returns `{"status": "healthy"}` if the service is up.
+### `GET /`
+Returns `{"message": "Jarvis Intelligence Service Running"}`
