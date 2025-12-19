@@ -355,8 +355,12 @@ class SupabaseMultiDatabase:
             logger.info(f"Creating {len(tasks_data)} tasks linked to {origin_type} {origin_id}")
             
             for task in tasks_data:
+                # Support both 'title' and 'task' keys for task name
+                title = task.get('title') or task.get('task', 'Untitled Task')
+                
                 payload = {
-                    "title": task.get('task', 'Untitled Task'),
+                    "title": title,
+                    "description": task.get('description', ''),
                     "status": "pending",
                     "priority": task.get('priority', 'medium').lower(),
                     "due_date": task.get('due_date'),
@@ -366,6 +370,7 @@ class SupabaseMultiDatabase:
                 
                 result = self.client.table("tasks").insert(payload).execute()
                 created_ids.append(result.data[0]["id"])
+                logger.info(f"Created task: {title}")
                 
             return created_ids
             

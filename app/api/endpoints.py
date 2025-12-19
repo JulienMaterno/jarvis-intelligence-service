@@ -60,7 +60,7 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
             )
             db_records["journal_ids"].append(j_id)
             
-            # Create tasks linked to this journal
+            # Create tasks from analysis.tasks if present
             if primary_category == "journal" and analysis.get("tasks"):
                 task_ids = db.create_tasks(
                     tasks_data=analysis.get("tasks"),
@@ -68,6 +68,24 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
                     origin_type="journal"
                 )
                 db_records["task_ids"].extend(task_ids)
+            
+            # Also create tasks from tomorrow_focus items in the journal
+            tomorrow_focus = journal.get("tomorrow_focus", [])
+            if tomorrow_focus:
+                # Convert tomorrow_focus strings to task objects
+                focus_tasks = [
+                    {"title": item, "description": "From journal tomorrow_focus", "due_date": None}
+                    for item in tomorrow_focus
+                    if isinstance(item, str) and len(item) > 3
+                ]
+                if focus_tasks:
+                    task_ids = db.create_tasks(
+                        tasks_data=focus_tasks,
+                        origin_id=j_id,
+                        origin_type="journal"
+                    )
+                    db_records["task_ids"].extend(task_ids)
+                    logger.info(f"Created {len(task_ids)} tasks from journal tomorrow_focus")
         
         # Process Meetings
         for meeting in analysis.get("meetings", []):
