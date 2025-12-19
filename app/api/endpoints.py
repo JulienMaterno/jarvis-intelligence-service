@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from app.api.models import TranscriptRequest, TranscriptProcessRequest, AnalysisResponse, LinkContactRequest, CreateContactRequest
 from app.services.llm import ClaudeMultiAnalyzer
 from app.services.database import SupabaseMultiDatabase
+from app.services.sync_trigger import trigger_syncs_for_records
 import logging
 
 router = APIRouter()
@@ -132,6 +133,10 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
                     origin_type="reflection"
                 )
                  db_records["task_ids"].extend(task_ids)
+
+        # Trigger syncs in background to push new data to Notion
+        background_tasks.add_task(trigger_syncs_for_records, db_records)
+        logger.info(f"Scheduled sync triggers for created records")
 
         return AnalysisResponse(
             status="success",
@@ -270,6 +275,10 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
         # we might want to create a generic "Task Planning" entry or just attach to transcript.
         # For now, the logic above covers most cases.
         
+        # Trigger syncs in background to push new data to Notion
+        background_tasks.add_task(trigger_syncs_for_records, db_records)
+        logger.info(f"Scheduled sync triggers for created records")
+
         return AnalysisResponse(
             status="success",
             analysis=analysis,

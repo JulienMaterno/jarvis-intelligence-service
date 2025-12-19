@@ -19,5 +19,10 @@ class Config:
     # =========================================================================
     ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY') or os.getenv('CLAUDE_API_KEY')
     CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-3-5-haiku-20241022')
+    
+    # =========================================================================
+    # SYNC SERVICE (For triggering syncs after creating data)
+    # =========================================================================
+    SYNC_SERVICE_URL = os.getenv('SYNC_SERVICE_URL', 'https://jarvis-sync-service-776871804948.asia-southeast1.run.app')
 
 settings = Config()
