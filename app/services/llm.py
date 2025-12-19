@@ -109,21 +109,23 @@ Aaron is systematic about relationship management, maintaining a comprehensive N
 ---
 
 **YOUR TASK:**
-Analyze this transcript from Aaron's perspective and extract structured information for routing to 4 different databases:
+Analyze this transcript from Aaron's perspective and extract structured information for routing to 5 different databases:
 1. **Meetings Database** - For conversations with other people
-2. **Reflections Database** - For personal thoughts, ideas, evening reflections, learnings
-3. **Tasks Database** - For TRUE action items that require active effort
-4. **CRM Database** - For updating contact information ONLY about the person I met with (not everyone mentioned!)
+2. **Reflections Database** - For personal thoughts, ideas, learnings (NOT daily journals)
+3. **Journals Database** - For DAILY journal entries (evening reflections on the day, daily planning, what happened today)
+4. **Tasks Database** - For TRUE action items that require active effort
+5. **CRM Database** - For updating contact information ONLY about the person I met with (not everyone mentioned!)
 
 **IMPORTANT DISTINCTIONS:**
 - TASKS vs NON-TASKS: "Fly to Bali" is NOT a task (it's a plan that happens anyway). "Need to change my Medicare" IS a task (requires active effort). Only extract things that require me to take action.
 - CRM: Only create CRM update for the PRIMARY person I'm meeting/talking with, NOT every person mentioned in conversation.
+- JOURNAL vs REFLECTION: A JOURNAL is a daily entry (talks about "today", "this morning", "tonight", mentions the day's events). A REFLECTION is a deeper thought piece on a specific topic that's not tied to daily events.
 
 **OUTPUT FORMAT:**
 Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
 {{
-  "primary_category": "meeting|reflection|task_planning|other",
+  "primary_category": "meeting|reflection|journal|task_planning|other",
   
   "meetings": [
     {{
@@ -148,6 +150,35 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
           "topic": "Something to bring up next time",
           "context": "Why it matters - e.g., their vacation to Japan in March",
           "date_if_known": "YYYY-MM-DD or null"
+        }}
+      ]
+    }}
+  ],
+  
+  "journals": [
+    {{
+      "date": "{recording_date}",
+      "summary": "Brief 2-3 sentence summary of the day",
+      "mood": "Great|Good|Okay|Tired|Stressed or null if not clear",
+      "effort": "High|Medium|Low or null if not mentioned",
+      "sports": ["Running", "Gym", "Yoga", etc] or empty array,
+      "key_events": ["Event 1 that happened today", "Event 2"],
+      "accomplishments": ["What I achieved today"],
+      "challenges": ["Difficulties faced"],
+      "gratitude": ["Things I'm grateful for"],
+      "tomorrow_focus": ["What I plan to focus on tomorrow"],
+      "sections": [
+        {{
+          "heading": "Morning",
+          "content": "What happened in the morning..."
+        }},
+        {{
+          "heading": "Main Activities",
+          "content": "Key things I did..."
+        }},
+        {{
+          "heading": "Evening Thoughts",
+          "content": "Reflections on the day..."
         }}
       ]
     }}
@@ -197,7 +228,8 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
 1. **Primary Category:**
    - "meeting" if discussing conversation(s) with other people
-   - "reflection" if personal thoughts, evening reflections, learnings, ideas
+   - "journal" if talking about the day (today's events, evening recap, daily planning, what happened today/tomorrow)
+   - "reflection" if personal thoughts, learnings, ideas on a SPECIFIC TOPIC (not daily events)
    - "task_planning" if primarily about organizing tasks
    - "other" if none of above
 
@@ -208,25 +240,34 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - "follow_up_conversation": Things I should bring up next time I see this person - their upcoming vacation, stressful exam, new job, etc. Include dates when known. This helps me show I remember and care.
    - "summary": Write a thorough 4-6 sentence summary
 
-3. **Reflections Array:**
+3. **Journals Array (DAILY ENTRIES):**
+   - Use for daily journals: evening recaps, morning planning, "what happened today"
+   - Keywords that indicate journal: "today", "this morning", "tonight", "this evening", "tomorrow", "woke up"
+   - Extract mood/effort/sports ONLY if explicitly mentioned, otherwise null/empty
+   - Structure into sections: Morning, Main Activities, Evening Thoughts, etc.
+   - Extract tasks mentioned for tomorrow into "tomorrow_focus"
+   - One journal entry per recording (tied to the date)
+
+4. **Reflections Array:**
    - Only 1-2 tags per reflection (keep it focused)
    - "sections": Structure the reflection with clear headings and content. Use 2-4 sections like "Key Insight", "Context", "Implications", "Next Steps"
    - Make it scannable and well-organized
+   - Use for TOPIC-BASED reflections, NOT daily journals
 
-4. **Tasks Array - BE SELECTIVE:**
+5. **Tasks Array - BE SELECTIVE:**
    - ONLY extract TRUE tasks that require active effort from me
    - ✅ GOOD tasks: "Need to call the bank", "Should email John the proposal", "Have to renew passport", "Follow up with Sarah"
    - ❌ NOT tasks: "Flying to Bali next month", "Meeting with John on Tuesday", "Birthday party on Saturday" (these are events/plans, not action items)
    - Ask yourself: "Does this require me to actively DO something, or will it just happen?"
 
-5. **CRM Updates - ONE PERSON ONLY:**
+6. **CRM Updates - ONE PERSON ONLY:**
    - ONLY create CRM entry for the person I'm MEETING WITH
    - Do NOT create entries for people merely mentioned in conversation
    - If I meet with John and we discuss Sarah and Mike, only John gets a CRM update
    - "personal_notes": Things to remember - their family situation, hobbies, upcoming travel, stressful situations, preferences
-   - Skip CRM entirely if it's a reflection or no clear meeting person
+   - Skip CRM entirely if it's a reflection, journal, or no clear meeting person
 
-6. **Follow-up Conversation Section (IMPORTANT):**
+7. **Follow-up Conversation Section (IMPORTANT):**
    - Capture things I should ask about next time: "How was Japan?", "How did the exam go?", "Did you get the promotion?"
    - Include context so I remember why I'm asking
    - Add dates if mentioned (vacation dates, exam dates, etc.)

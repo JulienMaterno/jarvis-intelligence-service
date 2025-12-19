@@ -42,11 +42,32 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
             "transcript_id": transcript_id,
             "meeting_ids": [],
             "reflection_ids": [],
+            "journal_ids": [],
             "task_ids": [],
             "contact_matches": []  # Track CRM linking results
         }
         
         primary_category = analysis.get("primary_category", "other")
+        
+        # Process Journals (daily entries)
+        for journal in analysis.get("journals", []):
+            j_id, j_url = db.create_journal(
+                journal_data=journal,
+                transcript=transcript_text,
+                duration=transcript_record.get("audio_duration_seconds", 0),
+                filename=filename,
+                transcript_id=transcript_id
+            )
+            db_records["journal_ids"].append(j_id)
+            
+            # Create tasks linked to this journal
+            if primary_category == "journal" and analysis.get("tasks"):
+                task_ids = db.create_tasks(
+                    tasks_data=analysis.get("tasks"),
+                    origin_id=j_id,
+                    origin_type="journal"
+                )
+                db_records["task_ids"].extend(task_ids)
         
         # Process Meetings
         for meeting in analysis.get("meetings", []):
@@ -135,11 +156,32 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
             "transcript_id": transcript_id,
             "meeting_ids": [],
             "reflection_ids": [],
+            "journal_ids": [],
             "task_ids": [],
             "contact_matches": []  # Track CRM linking results
         }
         
         primary_category = analysis.get("primary_category", "other")
+        
+        # Process Journals (daily entries)
+        for journal in analysis.get("journals", []):
+            j_id, j_url = db.create_journal(
+                journal_data=journal,
+                transcript=request.transcript,
+                duration=request.audio_duration_seconds or 0,
+                filename=request.filename,
+                transcript_id=transcript_id
+            )
+            db_records["journal_ids"].append(j_id)
+            
+            # Create tasks linked to this journal
+            if primary_category == "journal" and analysis.get("tasks"):
+                task_ids = db.create_tasks(
+                    tasks_data=analysis.get("tasks"),
+                    origin_id=j_id,
+                    origin_type="journal"
+                )
+                db_records["task_ids"].extend(task_ids)
         
         # Process Meetings
         for meeting in analysis.get("meetings", []):

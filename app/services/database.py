@@ -374,3 +374,105 @@ class SupabaseMultiDatabase:
             logger.error(f"Error creating tasks: {e}")
             # Don't raise here, we want to return what we created
             return created_ids
+
+    # =========================================================================
+    # JOURNALS
+    # =========================================================================
+    
+    def get_journal_by_date(self, journal_date: str) -> Optional[Dict]:
+        """
+        Get a journal entry by date.
+        Returns None if not found.
+        """
+        try:
+            result = self.client.table("journals").select("*").eq(
+                "date", journal_date
+            ).is_("deleted_at", "null").execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching journal for {journal_date}: {e}")
+            return None
+    
+    def create_journal(
+        self,
+        journal_data: Dict,
+        transcript: str,
+        duration: float,
+        filename: str,
+        transcript_id: str = None
+    ) -> Tuple[str, str]:
+        """
+        Create or update journal entry in Supabase.
+        Since journals are one-per-day, this will update if exists.
+        Returns: Tuple of (journal_id, "supabase://journals/{id}")
+        """
+        try:
+            journal_date = journal_data.get('date')
+            if not journal_date:
+                raise ValueError("Journal must have a date")
+            
+            summary = journal_data.get('summary', '')
+            mood = journal_data.get('mood')
+            effort = journal_data.get('effort')
+            sports = journal_data.get('sports', [])
+            key_events = journal_data.get('key_events', [])
+            accomplishments = journal_data.get('accomplishments', [])
+            challenges = journal_data.get('challenges', [])
+            gratitude = journal_data.get('gratitude', [])
+            tomorrow_focus = journal_data.get('tomorrow_focus', [])
+            sections = journal_data.get('sections', [])
+            
+            logger.info(f"Creating/updating journal for: {journal_date}")
+            
+            # Check if journal exists for this date
+            existing = self.get_journal_by_date(journal_date)
+            
+            payload = {
+                "date": journal_date,
+                "title": f"Journal - {journal_date}",
+                "summary": summary,
+                "mood": mood,
+                "effort": effort,
+                "sports": sports if sports else None,
+                "key_events": key_events if key_events else None,
+                "accomplishments": accomplishments if accomplishments else None,
+                "challenges": challenges if challenges else None,
+                "gratitude": gratitude if gratitude else None,
+                "tomorrow_focus": tomorrow_focus if tomorrow_focus else None,
+                "sections": sections if sections else None,
+                "content": transcript[:5000] if transcript else None,  # Store truncated transcript
+                "source": "voice",
+                "source_file": filename,
+                "audio_duration_seconds": duration,
+                "last_sync_source": "supabase",  # Mark that Supabase is the source
+            }
+            
+            if transcript_id:
+                payload["transcript_id"] = transcript_id
+            
+            if existing:
+                # Update existing journal
+                journal_id = existing['id']
+                # Merge with existing data if needed (don't overwrite null with null)
+                for key in ['mood', 'effort', 'sports', 'key_events', 'accomplishments', 
+                           'challenges', 'gratitude', 'tomorrow_focus']:
+                    if payload.get(key) is None and existing.get(key):
+                        payload[key] = existing[key]
+                
+                self.client.table("journals").update(payload).eq("id", journal_id).execute()
+                logger.info(f"Journal updated: {journal_id}")
+            else:
+                # Create new journal
+                result = self.client.table("journals").insert(payload).execute()
+                journal_id = result.data[0]["id"]
+                logger.info(f"Journal created: {journal_id}")
+            
+            journal_url = f"supabase://journals/{journal_id}"
+            return journal_id, journal_url
+            
+        except Exception as e:
+            logger.error(f"Error creating/updating journal: {e}")
+            raise
