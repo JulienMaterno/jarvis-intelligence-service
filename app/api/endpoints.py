@@ -889,20 +889,23 @@ PEOPLE INTERACTED WITH: {', '.join(list(people_mentioned)[:10]) if people_mentio
 
 Based on this day's activities, generate:
 
-1. HIGHLIGHTS (2-4 bullet points): The most meaningful or interesting moments from today. Be specific and insightful, not generic. If there were meetings, mention what they might have been about. If tasks were completed, acknowledge the accomplishment. Focus on substance, not just listing things.
+1. HIGHLIGHTS (2-4 bullet points): Short, punchy highlights of the day. MAX 8-10 words each. Be specific to actual events, not generic. Examples of good format:
+   - "Deep strategy session with David on Q1 roadmap"
+   - "Finished the investor deck revisions"
+   - "Coffee catch-up with Maria"
 
-2. REFLECTION_PROMPTS (2-3 questions): Personalized questions that would help this person reflect meaningfully on TODAY specifically. Reference actual events/people from the day. Avoid generic questions like "what are you grateful for" - instead ask about specific things from the day.
+2. REFLECTION_PROMPTS (2-3 questions): Personalized questions based on TODAY's specific events. Reference actual meetings/people/tasks. Skip generic questions.
 
-3. PEOPLE_SUMMARY (1 sentence, optional): If they interacted with notable people today, a brief note about it.
+3. PEOPLE_SUMMARY (optional): One short sentence if notable interactions happened.
 
-Respond in JSON format:
+Respond in JSON:
 {{
-    "highlights": ["highlight 1", "highlight 2", ...],
-    "reflection_prompts": ["question 1?", "question 2?", ...],
-    "people_summary": "sentence about people or null"
+    "highlights": ["short highlight 1", "short highlight 2", ...],
+    "reflection_prompts": ["specific question 1?", "specific question 2?", ...],
+    "people_summary": "brief note or null"
 }}
 
-Be warm but concise. Skip the fluff."""
+Keep everything concise and punchy."""
 
         import anthropic
         import json
