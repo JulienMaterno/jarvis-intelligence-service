@@ -21,8 +21,8 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      - '--set-secrets'
-      - 'SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_KEY=SUPABASE_KEY:latest,ANTHROPIC_API_KEY=CLAUDE_API_KEY:latest'
+      - '--update-secrets'
+      - 'SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_KEY=SUPABASE_KEY:latest,ANTHROPIC_API_KEY=CLAUDE_API_KEY:latest,CLAUDE_API_KEY=CLAUDE_API_KEY:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/jarvis-intelligence-service:latest'
