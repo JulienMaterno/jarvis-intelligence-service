@@ -921,9 +921,8 @@ Keep everything concise and punchy."""
         
         client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         
-        # Fallback to Sonnet 3.5 as 4.5 ID is currently rejected by API
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
