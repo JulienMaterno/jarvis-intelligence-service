@@ -437,10 +437,23 @@ class SupabaseMultiDatabase:
             
             updated_sections = existing_sections + [divider_section] + new_sections
             
-            # Merge content
+            # Merge content - generate from new_sections if new_content not provided
             updated_content = existing_content
             if new_content:
                 updated_content = f"{existing_content}\n\n---\n{new_content}" if existing_content else new_content
+            elif new_sections:
+                # Generate content from sections as fallback
+                content_parts = [f"\n\n---\n*Added {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n"]
+                for section in new_sections:
+                    heading = section.get('heading', '')
+                    section_content = section.get('content', '')
+                    if heading:
+                        content_parts.append(f"## {heading}")
+                    if section_content:
+                        content_parts.append(section_content)
+                    content_parts.append("")
+                new_content_generated = "\n".join(content_parts).strip()
+                updated_content = f"{existing_content}{new_content_generated}" if existing_content else new_content_generated
             
             # Merge tags (unique)
             updated_tags = list(set(existing_tags + (additional_tags or [])))
@@ -483,6 +496,20 @@ class SupabaseMultiDatabase:
             sections = reflection_data.get('sections', [])
             content = reflection_data.get('content', '')
             topic_key = reflection_data.get('topic_key')  # New field for topic matching
+            
+            # Fallback: generate content from sections if content is empty
+            if not content and sections:
+                content_parts = []
+                for section in sections:
+                    heading = section.get('heading', '')
+                    section_content = section.get('content', '')
+                    if heading:
+                        content_parts.append(f"## {heading}")
+                    if section_content:
+                        content_parts.append(section_content)
+                    content_parts.append("")  # Empty line between sections
+                content = "\n".join(content_parts).strip()
+                logger.info(f"Generated content from {len(sections)} sections")
             
             logger.info(f"Creating reflection: {title}")
             

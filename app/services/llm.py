@@ -216,8 +216,9 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     {{
       "title": "Brief reflection title (max 60 chars)",
       "date": "{recording_date}",
-      "topic_key": "project-jarvis|explore-out-loud|career-thoughts|etc (lowercase, hyphenated identifier for recurring topics, or null if one-off)",
+      "topic_key": "project-jarvis|exploring-out-loud-2|career-thoughts|etc (lowercase, hyphenated identifier for recurring topics, or null if one-off)",
       "tags": ["tag1", "tag2"],
+      "content": "Full markdown content of the reflection. Combine all insights into a well-structured, readable format with headers (##) and bullet points where appropriate. This is the main body of the reflection.",
       "sections": [
         {{
           "heading": "Main Insight or Theme",
@@ -279,15 +280,22 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
 4. **Reflections Array (SMART TOPIC ROUTING):**
    - Only 1-2 tags per reflection (keep it focused)
-   - "sections": Structure the reflection with clear headings and content. Use 2-4 sections like "Key Insight", "Context", "Implications", "Next Steps"
+   - "content": ALWAYS include a full markdown `content` field with the complete reflection text (headers, bullets, everything)
+   - "sections": Also structure into 2-4 sections like "Key Insight", "Context", "Implications", "Next Steps"
    - Make it scannable and well-organized
    - Use for TOPIC-BASED reflections, NOT daily journals
+   
+   **MULTIPLE REFLECTIONS (IMPORTANT):**
+   - If the recording contains content for MULTIPLE distinct topics, create MULTIPLE reflection objects
+   - Example: If I say "some thoughts for the newsletter... also about Project Jarvis..." → create TWO reflections
+   - Each with its own topic_key, title, and content
+   - Don't merge unrelated topics into one reflection
    
    **"topic_key" DECISION LOGIC (CRITICAL):**
    - Look at the EXISTING TOPICS list above first!
    - If recording content fits an existing topic → USE THAT EXACT topic_key (will append)
    - If I say "for the newsletter", "about project X", "continuing my thoughts on Y" → match to existing or create consistent key
-   - If I say "new topic", "fresh reflection", "separate thought" → create NEW topic_key
+   - If I say "new topic", "fresh reflection", "separate thought", "create a new reflection about X" → create NEW topic_key
    - If content is genuinely unrelated to all existing topics → create NEW topic_key
    - Format: lowercase, hyphenated (e.g., "project-jarvis", "career-transition", "startup-ideas")
    - When in doubt about merging: prefer creating new topic (can be merged later, but splitting is harder)
