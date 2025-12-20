@@ -278,16 +278,44 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                 )
                 db_records["task_ids"].extend(task_ids)
 
-        # Process Reflections
+        # Process Reflections - with smart topic merging
         for reflection in analysis.get("reflections", []):
-            r_id, r_url = db.create_reflection(
-                reflection_data=reflection,
-                transcript=request.transcript,
-                duration=request.audio_duration_seconds or 0,
-                filename=request.filename,
-                transcript_id=transcript_id
-            )
-            db_records["reflection_ids"].append(r_id)
+            topic_key = reflection.get('topic_key')
+            tags = reflection.get('tags', [])
+            title = reflection.get('title', '')
+            
+            # Check if we should append to an existing reflection
+            existing_reflection = None
+            if topic_key:
+                existing_reflection = db.find_similar_reflection(
+                    topic_key=topic_key,
+                    tags=tags,
+                    title=title
+                )
+            
+            if existing_reflection:
+                # Append to existing reflection
+                logger.info(f"Appending to existing reflection: {existing_reflection['title']} (topic: {topic_key})")
+                r_id, r_url = db.append_to_reflection(
+                    reflection_id=existing_reflection['id'],
+                    new_sections=reflection.get('sections', []),
+                    new_content=reflection.get('content'),
+                    additional_tags=tags,
+                    source_file=request.filename,
+                    transcript_id=transcript_id
+                )
+                db_records["reflection_ids"].append(r_id)
+                db_records["reflection_appended"] = True
+            else:
+                # Create new reflection
+                r_id, r_url = db.create_reflection(
+                    reflection_data=reflection,
+                    transcript=request.transcript,
+                    duration=request.audio_duration_seconds or 0,
+                    filename=request.filename,
+                    transcript_id=transcript_id
+                )
+                db_records["reflection_ids"].append(r_id)
             
             # Create tasks linked to this reflection
             # (If primary category is reflection, tasks likely belong to it)
