@@ -188,6 +188,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     {{
       "title": "Brief reflection title (max 60 chars)",
       "date": "{recording_date}",
+      "topic_key": "project-jarvis|explore-out-loud|career-thoughts|etc (lowercase, hyphenated identifier for recurring topics, or null if one-off)",
       "tags": ["tag1", "tag2"],
       "sections": [
         {{
@@ -253,6 +254,13 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - "sections": Structure the reflection with clear headings and content. Use 2-4 sections like "Key Insight", "Context", "Implications", "Next Steps"
    - Make it scannable and well-organized
    - Use for TOPIC-BASED reflections, NOT daily journals
+   - **"topic_key" (IMPORTANT for recurring topics):**
+     - Use for ongoing projects, newsletters, or recurring themes that should accumulate thoughts over time
+     - Examples: "project-jarvis", "explore-out-loud-newsletter", "career-transition", "singapore-move", "startup-ideas"
+     - Keep it lowercase, hyphenated, and consistent across recordings
+     - If I say "for the newsletter" or "about Jarvis" or "regarding my move to Singapore", use the appropriate topic_key
+     - Set to null for one-off reflections that don't belong to an ongoing topic
+     - When topic_key is set, the system will APPEND to existing reflections with the same topic instead of creating new ones
 
 5. **Tasks Array - BE SELECTIVE:**
    - ONLY extract TRUE tasks that require active effort from me

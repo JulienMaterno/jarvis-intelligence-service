@@ -287,6 +287,140 @@ class SupabaseMultiDatabase:
     # REFLECTIONS
     # =========================================================================
     
+    def find_similar_reflection(self, topic_key: str, tags: List[str] = None, title: str = None) -> Optional[Dict]:
+        """
+        Find an existing reflection that matches by topic_key, tags, or title similarity.
+        Used for appending to ongoing topics like "Project Jarvis" or "Explore Out Loud Newsletter".
+        
+        Priority:
+        1. Exact topic_key match (highest confidence)
+        2. Title contains topic_key keywords
+        3. Significant tag overlap
+        
+        Returns: The matching reflection dict or None
+        """
+        if not topic_key:
+            return None
+            
+        try:
+            # Normalize topic_key for searching
+            topic_lower = topic_key.lower().strip()
+            topic_words = [w for w in topic_lower.split() if len(w) > 2]
+            
+            if not topic_words:
+                return None
+            
+            # Strategy 1: Search by topic_key field (exact match)
+            result = self.client.table("reflections").select("*").ilike(
+                "topic_key", topic_lower
+            ).is_("deleted_at", "null").order("created_at", desc=True).limit(1).execute()
+            
+            if result.data:
+                logger.info(f"Found reflection by exact topic_key: {topic_key}")
+                return result.data[0]
+            
+            # Strategy 2: Search by title containing key words
+            # Build OR query for title matching
+            for word in topic_words:
+                if len(word) >= 4:  # Only search meaningful words
+                    result = self.client.table("reflections").select("*").ilike(
+                        "title", f"%{word}%"
+                    ).is_("deleted_at", "null").order("created_at", desc=True).limit(5).execute()
+                    
+                    if result.data:
+                        # Check for good match - at least 2 words match or strong keyword
+                        for ref in result.data:
+                            ref_title_lower = ref.get('title', '').lower()
+                            matching_words = sum(1 for w in topic_words if w in ref_title_lower)
+                            # Good match if 2+ words match, or if it's a project/newsletter name
+                            if matching_words >= 2 or topic_lower in ref_title_lower:
+                                logger.info(f"Found reflection by title match: '{ref['title']}' for topic '{topic_key}'")
+                                return ref
+            
+            # Strategy 3: Tag overlap (if tags provided)
+            if tags and len(tags) >= 1:
+                for tag in tags:
+                    result = self.client.table("reflections").select("*").contains(
+                        "tags", [tag]
+                    ).is_("deleted_at", "null").order("created_at", desc=True).limit(5).execute()
+                    
+                    if result.data:
+                        # Check for significant overlap
+                        for ref in result.data:
+                            ref_tags = ref.get('tags', [])
+                            if ref_tags:
+                                overlap = set(tags) & set(ref_tags)
+                                if len(overlap) >= 1 and topic_lower in ref.get('title', '').lower():
+                                    logger.info(f"Found reflection by tag+title match: {ref['title']}")
+                                    return ref
+            
+            logger.info(f"No existing reflection found for topic: {topic_key}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding similar reflection for '{topic_key}': {e}")
+            return None
+    
+    def append_to_reflection(
+        self,
+        reflection_id: str,
+        new_sections: List[Dict],
+        new_content: str = None,
+        additional_tags: List[str] = None,
+        source_file: str = None,
+        transcript_id: str = None
+    ) -> Tuple[str, str]:
+        """
+        Append new content to an existing reflection.
+        Adds new sections at the end and optionally merges tags.
+        
+        Returns: Tuple of (reflection_id, url)
+        """
+        try:
+            # Fetch existing reflection
+            result = self.client.table("reflections").select("*").eq("id", reflection_id).execute()
+            if not result.data:
+                raise ValueError(f"Reflection {reflection_id} not found")
+            
+            existing = result.data[0]
+            existing_sections = existing.get('sections', []) or []
+            existing_tags = existing.get('tags', []) or []
+            existing_content = existing.get('content', '') or ''
+            
+            # Merge sections - add divider and new sections
+            from datetime import datetime
+            divider_section = {
+                "heading": f"--- Added {datetime.now().strftime('%Y-%m-%d %H:%M')} ---",
+                "content": f"From: {source_file}" if source_file else ""
+            }
+            
+            updated_sections = existing_sections + [divider_section] + new_sections
+            
+            # Merge content
+            updated_content = existing_content
+            if new_content:
+                updated_content = f"{existing_content}\n\n---\n{new_content}" if existing_content else new_content
+            
+            # Merge tags (unique)
+            updated_tags = list(set(existing_tags + (additional_tags or [])))
+            
+            # Update the reflection
+            update_payload = {
+                "sections": updated_sections,
+                "content": updated_content,
+                "tags": updated_tags,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            self.client.table("reflections").update(update_payload).eq("id", reflection_id).execute()
+            
+            logger.info(f"Appended to reflection {reflection_id}: +{len(new_sections)} sections")
+            return reflection_id, f"supabase://reflections/{reflection_id}"
+            
+        except Exception as e:
+            logger.error(f"Error appending to reflection {reflection_id}: {e}")
+            raise
+    
     def create_reflection(
         self,
         reflection_data: Dict,
@@ -306,6 +440,7 @@ class SupabaseMultiDatabase:
             tags = reflection_data.get('tags', [])
             sections = reflection_data.get('sections', [])
             content = reflection_data.get('content', '')
+            topic_key = reflection_data.get('topic_key')  # New field for topic matching
             
             logger.info(f"Creating reflection: {title}")
             
@@ -319,6 +454,9 @@ class SupabaseMultiDatabase:
                 "source_file": filename,
                 "audio_duration_seconds": int(duration) if duration else None,
             }
+            
+            if topic_key:
+                payload["topic_key"] = topic_key
             
             if transcript_id:
                 payload["transcript_id"] = transcript_id
