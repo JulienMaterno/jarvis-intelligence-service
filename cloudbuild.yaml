@@ -7,7 +7,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/jarvis-intelligence-service:latest']
 
-  # Deploy container to Cloud Run
+  # Deploy container to Cloud Run (env vars already set on service)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -21,8 +21,6 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      - '--update-secrets'
-      - 'SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_KEY=SUPABASE_KEY:latest,ANTHROPIC_API_KEY=CLAUDE_API_KEY:latest,CLAUDE_API_KEY=CLAUDE_API_KEY:latest'
 
 images:
   - 'gcr.io/$PROJECT_ID/jarvis-intelligence-service:latest'
