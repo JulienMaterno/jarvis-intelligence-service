@@ -123,3 +123,31 @@ class ContactSummaryResponse(BaseModel):
     interaction_counts: Dict[str, int]
     recent_interactions: List[Dict[str, Any]]
     upcoming_events: List[Dict[str, Any]]
+
+# =========================================================================
+# DAILY JOURNAL ANALYSIS MODELS
+# =========================================================================
+
+class DailyActivityData(BaseModel):
+    """Raw activity data from the day to be analyzed."""
+    meetings: Optional[List[Dict[str, Any]]] = []
+    calendar_events: Optional[List[Dict[str, Any]]] = []
+    emails: Optional[List[Dict[str, Any]]] = []
+    tasks_completed: Optional[List[Dict[str, Any]]] = []
+    tasks_created: Optional[List[Dict[str, Any]]] = []
+    reflections: Optional[List[Dict[str, Any]]] = []
+    journals: Optional[List[Dict[str, Any]]] = []
+
+class JournalPromptRequest(BaseModel):
+    """Request for AI-generated evening journal prompt."""
+    activity_data: DailyActivityData
+    user_name: Optional[str] = None
+    timezone: Optional[str] = "UTC"
+
+class JournalPromptResponse(BaseModel):
+    """AI-generated evening journal prompt."""
+    status: str
+    highlights: List[str]  # Key moments/achievements from the day
+    reflection_prompts: List[str]  # Personalized questions based on the day
+    people_summary: Optional[str] = None  # Summary of people interactions
+    message: str  # Full formatted message for Telegram

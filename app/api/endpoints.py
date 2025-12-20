@@ -4,7 +4,8 @@ from app.api.models import (
     LinkContactRequest, CreateContactRequest,
     CreateEmailRequest, EmailResponse, LinkEmailRequest,
     CreateCalendarEventRequest, CalendarEventResponse, LinkCalendarEventRequest,
-    ContactInteractionsResponse, ContactSummaryResponse
+    ContactInteractionsResponse, ContactSummaryResponse,
+    JournalPromptRequest, JournalPromptResponse
 )
 from app.services.llm import ClaudeMultiAnalyzer
 from app.services.database import SupabaseMultiDatabase
@@ -791,3 +792,187 @@ async def get_contact_summary(contact_id: str):
 @router.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+# =========================================================================
+# EVENING JOURNAL PROMPT GENERATION
+# =========================================================================
+
+@router.post("/journal/evening-prompt")
+async def generate_evening_journal_prompt(request: JournalPromptRequest):
+    """
+    Generate an AI-powered evening journal prompt based on the day's activities.
+    
+    The AI analyzes meetings, emails, calendar events, tasks etc. and:
+    1. Extracts the most meaningful highlights
+    2. Generates personalized reflection prompts
+    3. Creates a formatted message for Telegram
+    """
+    from datetime import datetime
+    
+    try:
+        logger.info("Generating AI evening journal prompt")
+        
+        activity_data = request.activity_data
+        
+        # Build context for Claude
+        context_parts = []
+        people_mentioned = set()
+        
+        # Meetings
+        if activity_data.meetings:
+            meeting_summaries = []
+            for m in activity_data.meetings:
+                title = m.get("title", "Untitled")
+                summary = m.get("summary", "")[:200] if m.get("summary") else ""
+                meeting_summaries.append(f"- {title}: {summary}")
+                if m.get("people_mentioned"):
+                    people_mentioned.update(m["people_mentioned"])
+            context_parts.append(f"MEETINGS ({len(activity_data.meetings)}):\n" + "\n".join(meeting_summaries))
+        
+        # Calendar events
+        if activity_data.calendar_events:
+            event_summaries = []
+            for e in activity_data.calendar_events:
+                title = e.get("summary") or e.get("title", "Untitled")
+                event_summaries.append(f"- {title}")
+                if e.get("attendees"):
+                    for att in e["attendees"]:
+                        if att.get("displayName"):
+                            people_mentioned.add(att["displayName"])
+            context_parts.append(f"CALENDAR EVENTS ({len(activity_data.calendar_events)}):\n" + "\n".join(event_summaries))
+        
+        # Emails (filter out noise)
+        if activity_data.emails:
+            skip_keywords = ["unsubscribe", "newsletter", "automated", "noreply", "no-reply", "github", "notification"]
+            meaningful_emails = []
+            for e in activity_data.emails:
+                subject = e.get("subject", "")
+                if not any(kw in subject.lower() for kw in skip_keywords):
+                    sender = e.get("sender", "")
+                    meaningful_emails.append(f"- {subject} (from: {sender})")
+                    if e.get("contact_name"):
+                        people_mentioned.add(e["contact_name"])
+            if meaningful_emails:
+                context_parts.append(f"EMAILS ({len(meaningful_emails)} meaningful):\n" + "\n".join(meaningful_emails[:10]))
+        
+        # Tasks completed
+        if activity_data.tasks_completed:
+            task_titles = [t.get("title", "Task") for t in activity_data.tasks_completed]
+            context_parts.append(f"TASKS COMPLETED ({len(task_titles)}):\n- " + "\n- ".join(task_titles))
+        
+        # Tasks created
+        if activity_data.tasks_created:
+            task_titles = [t.get("title", "Task") for t in activity_data.tasks_created]
+            context_parts.append(f"NEW TASKS ({len(task_titles)}):\n- " + "\n- ".join(task_titles))
+        
+        # Reflections recorded
+        if activity_data.reflections:
+            reflection_titles = [r.get("title", "Reflection") for r in activity_data.reflections]
+            context_parts.append(f"REFLECTIONS RECORDED ({len(reflection_titles)}):\n- " + "\n- ".join(reflection_titles))
+        
+        # Journals
+        if activity_data.journals:
+            for j in activity_data.journals:
+                if j.get("highlights"):
+                    context_parts.append(f"JOURNAL HIGHLIGHTS: {', '.join(j['highlights'][:5])}")
+        
+        full_context = "\n\n".join(context_parts) if context_parts else "No significant activities recorded today."
+        
+        # Call Claude for analysis
+        prompt = f"""You are a thoughtful personal assistant helping someone reflect on their day for journaling.
+
+TODAY'S ACTIVITIES:
+{full_context}
+
+PEOPLE INTERACTED WITH: {', '.join(list(people_mentioned)[:10]) if people_mentioned else 'None recorded'}
+
+Based on this day's activities, generate:
+
+1. HIGHLIGHTS (2-4 bullet points): The most meaningful or interesting moments from today. Be specific and insightful, not generic. If there were meetings, mention what they might have been about. If tasks were completed, acknowledge the accomplishment. Focus on substance, not just listing things.
+
+2. REFLECTION_PROMPTS (2-3 questions): Personalized questions that would help this person reflect meaningfully on TODAY specifically. Reference actual events/people from the day. Avoid generic questions like "what are you grateful for" - instead ask about specific things from the day.
+
+3. PEOPLE_SUMMARY (1 sentence, optional): If they interacted with notable people today, a brief note about it.
+
+Respond in JSON format:
+{{
+    "highlights": ["highlight 1", "highlight 2", ...],
+    "reflection_prompts": ["question 1?", "question 2?", ...],
+    "people_summary": "sentence about people or null"
+}}
+
+Be warm but concise. Skip the fluff."""
+
+        import anthropic
+        import json
+        import os
+        
+        client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
+        
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        # Parse response
+        response_text = response.content[0].text
+        
+        # Extract JSON from response
+        try:
+            # Try to find JSON in the response
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            if json_match:
+                analysis = json.loads(json_match.group())
+            else:
+                analysis = json.loads(response_text)
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse Claude response as JSON: {response_text}")
+            analysis = {
+                "highlights": ["Reflect on your day's activities"],
+                "reflection_prompts": ["What stood out to you today?"],
+                "people_summary": None
+            }
+        
+        highlights = analysis.get("highlights", [])
+        prompts = analysis.get("reflection_prompts", [])
+        people_summary = analysis.get("people_summary")
+        
+        # Build formatted message
+        now = datetime.utcnow()
+        message = f"""📓 **Evening Journal**
+
+🕐 _{now.strftime('%A, %B %d')}_
+
+"""
+        
+        if highlights:
+            message += "**Today's highlights:**\n"
+            for h in highlights:
+                message += f"• {h}\n"
+            message += "\n"
+        
+        if people_summary:
+            message += f"👥 {people_summary}\n\n"
+        
+        if prompts:
+            message += "**Things to reflect on:**\n"
+            for p in prompts:
+                message += f"• {p}\n"
+            message += "\n"
+        
+        message += "_Reply with a voice note or text to journal_ 🎙️"
+        
+        return JournalPromptResponse(
+            status="success",
+            highlights=highlights,
+            reflection_prompts=prompts,
+            people_summary=people_summary,
+            message=message
+        )
+        
+    except Exception as e:
+        logger.error(f"Error generating evening journal prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
