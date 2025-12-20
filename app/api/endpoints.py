@@ -895,25 +895,18 @@ TODAY'S ACTIVITIES:
 
 PEOPLE INTERACTED WITH: {', '.join(list(people_mentioned)[:10]) if people_mentioned else 'None recorded'}
 
-Based on this day's activities, generate:
+Based on this day's activities, generate a JSON response with the following fields:
 
-1. HIGHLIGHTS (2-4 bullet points): Short, punchy highlights of the day. MAX 8-10 words each. Be specific to actual events, not generic. Examples of good format:
-   - "Deep strategy session with David on Q1 roadmap"
-   - "Finished the investor deck revisions"
-   - "Coffee catch-up with Maria"
+1. "highlights": A list of 3-5 bullet points of the most relevant or interesting things done today (tasks, emails, reflections, etc.). DO NOT include meetings here unless they were the primary work output. Avoid redundancy.
+2. "meetings": A list of the meetings that occurred today. If none, return an empty list.
+3. "reflection_prompts": 2-3 personalized questions based on specific events/conversations today.
 
-2. REFLECTION_PROMPTS (2-3 questions): Personalized questions based on TODAY's specific events. Reference actual meetings/people/tasks. Skip generic questions.
-
-3. PEOPLE_SUMMARY (optional): One short sentence if notable interactions happened.
-
-Respond in JSON:
+Respond ONLY in valid JSON format:
 {{
-    "highlights": ["short highlight 1", "short highlight 2", ...],
-    "reflection_prompts": ["specific question 1?", "specific question 2?", ...],
-    "people_summary": "brief note or null"
-}}
-
-Keep everything concise and punchy."""
+    "highlights": ["string", "string"],
+    "meetings": ["string", "string"],
+    "reflection_prompts": ["string", "string"]
+}}"""
 
         import anthropic
         import json
@@ -943,13 +936,13 @@ Keep everything concise and punchy."""
             logger.warning(f"Failed to parse Claude response as JSON: {response_text}")
             analysis = {
                 "highlights": ["Reflect on your day's activities"],
-                "reflection_prompts": ["What stood out to you today?"],
-                "people_summary": None
+                "meetings": [],
+                "reflection_prompts": ["What stood out to you today?"]
             }
         
         highlights = analysis.get("highlights", [])
+        meetings = analysis.get("meetings", [])
         prompts = analysis.get("reflection_prompts", [])
-        people_summary = analysis.get("people_summary")
         
         # Build formatted message
         now = datetime.utcnow()
@@ -965,8 +958,11 @@ Keep everything concise and punchy."""
                 message += f"• {h}\n"
             message += "\n"
         
-        if people_summary:
-            message += f"👥 {people_summary}\n\n"
+        if meetings:
+            message += "**Meetings:**\n"
+            for m in meetings:
+                message += f"• {m}\n"
+            message += "\n"
         
         if prompts:
             message += "**Things to reflect on:**\n"
