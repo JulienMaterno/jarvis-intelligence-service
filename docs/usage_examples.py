@@ -114,8 +114,15 @@ print("Example 5: Linking an email to a meeting")
 # Suppose you receive a follow-up email about a meeting
 # Link the email to the meeting for complete context
 
-meeting_id = "some-meeting-uuid"  # From previous meeting creation
-email_id = "some-email-uuid"      # From email creation above
+# NOTE: Replace these with actual UUIDs from the previous examples
+# You would get these from the return values of create_email() and create_meeting()
+meeting_id = "uuid-from-create_meeting"  # Example: "a3b5c7d9-e1f2-4567-8901-234567890abc"
+email_id = "uuid-from-create_email"      # Example: "b4c6d8e0-f2a3-5678-9012-345678901bcd"
+
+# In practice:
+# meeting_id, meeting_url, contact_match = db.create_meeting(...)
+# email_id, email_url = db.create_email(...)
+# Then use those IDs below:
 
 # Link them together
 db.link_email_to_meeting(email_id, meeting_id)
@@ -132,8 +139,15 @@ print("Example 6: Linking calendar event to meeting notes")
 # After a calendar event happens, you create meeting notes
 # Link them together for complete history
 
-event_id = "some-event-uuid"    # Calendar event
-meeting_id = "some-meeting-uuid"  # Meeting notes created after
+# NOTE: Replace these with actual UUIDs from your calendar event and meeting
+# You would get these from the return values of create_calendar_event() and create_meeting()
+event_id = "uuid-from-create_calendar_event"    # Example: "c5d7e9f1-a2b3-4567-8901-234567890cde"
+meeting_id = "uuid-from-create_meeting"         # Example: "d6e8f0a2-b3c4-5678-9012-345678901def"
+
+# In practice:
+# event_id, event_url = db.create_calendar_event(...)
+# meeting_id, meeting_url, contact_match = db.create_meeting(...)
+# Then use those IDs below:
 
 # Create bidirectional link
 db.link_calendar_event_to_meeting(event_id, meeting_id)

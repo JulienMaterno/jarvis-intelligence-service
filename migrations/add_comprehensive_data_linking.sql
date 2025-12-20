@@ -372,7 +372,7 @@ BEGIN
     -- Try alternative emails
     SELECT id INTO contact_uuid
     FROM contacts
-    WHERE email_address = ANY(alternative_emails)
+    WHERE email_lower = ANY(alternative_emails)
     AND deleted_at IS NULL
     LIMIT 1;
     

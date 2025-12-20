@@ -518,9 +518,13 @@ async def create_email(request: CreateEmailRequest):
         # Get linked contact info
         contact_info = None
         if request.contact_id:
-            contact = db.client.table("contacts").select("first_name, last_name").eq("id", request.contact_id).single().execute()
-            contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
-            contact_info = {"id": request.contact_id, "name": contact_name}
+            try:
+                contact = db.client.table("contacts").select("first_name, last_name").eq("id", request.contact_id).single().execute()
+                if contact.data:
+                    contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
+                    contact_info = {"id": request.contact_id, "name": contact_name}
+            except Exception as e:
+                logger.warning(f"Could not fetch contact {request.contact_id}: {e}")
         
         return EmailResponse(
             status="success",
@@ -623,9 +627,13 @@ async def create_calendar_event(request: CreateCalendarEventRequest):
         # Get linked contact info
         contact_info = None
         if request.contact_id:
-            contact = db.client.table("contacts").select("first_name, last_name").eq("id", request.contact_id).single().execute()
-            contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
-            contact_info = {"id": request.contact_id, "name": contact_name}
+            try:
+                contact = db.client.table("contacts").select("first_name, last_name").eq("id", request.contact_id).single().execute()
+                if contact.data:
+                    contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
+                    contact_info = {"id": request.contact_id, "name": contact_name}
+            except Exception as e:
+                logger.warning(f"Could not fetch contact {request.contact_id}: {e}")
         
         return CalendarEventResponse(
             status="success",
@@ -712,8 +720,16 @@ async def get_contact_interactions(contact_id: str, limit: int = 50):
                 counts[interaction_type] += 1
         
         # Get contact info
-        contact = db.client.table("contacts").select("first_name, last_name, email, company").eq("id", contact_id).single().execute()
-        contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
+        try:
+            contact = db.client.table("contacts").select("first_name, last_name, email, company").eq("id", contact_id).single().execute()
+            if not contact.data:
+                raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
+            contact_name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching contact {contact_id}: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
         
         return ContactInteractionsResponse(
             status="success",
@@ -737,6 +753,8 @@ async def get_contact_summary(contact_id: str):
     try:
         # Get contact details
         contact = db.client.table("contacts").select("*").eq("id", contact_id).single().execute()
+        if not contact.data:
+            raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
         contact_data = contact.data
         
         # Get recent interactions
