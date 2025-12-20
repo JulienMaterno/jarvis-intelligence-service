@@ -31,7 +31,7 @@ Jarvis is a **distributed AI-powered productivity system** composed of **4 micro
 ---
 
 ### 2. 🎙️ **Audio Pipeline Service**
-**Repository**: `jarvis-audio-pipeline` (assumed)  
+**Repository**: `jarvis-audio-pipeline`  
 **Technology**: Python + Whisper/Deepgram (speech-to-text)  
 **Purpose**: Transcribes audio files to text
 
@@ -68,7 +68,7 @@ response = requests.post(
 ---
 
 ### 3. 💬 **Telegram Bot Service**
-**Repository**: `jarvis-telegram-bot` (assumed)  
+**Repository**: `jarvis-telegram-bot`  
 **Technology**: Python + python-telegram-bot  
 **Purpose**: User interface for chat and commands
 
@@ -111,7 +111,7 @@ response = requests.post(
 ---
 
 ### 4. 🔄 **Sync Service**
-**Repository**: `jarvis-sync-service` (assumed)  
+**Repository**: `jarvis-sync-service`  
 **Technology**: Python + Notion API  
 **Purpose**: Pushes data from Supabase to Notion
 
@@ -275,8 +275,7 @@ Step 5: Intelligence Service calls Claude AI
         ↓
 Step 6: Intelligence Service → Telegram Bot
         {
-          "response": "Last Tuesday you met with John to discuss 
-                       the new biotech project. He mentioned..."
+          "response": "Last Tuesday you met with John to discuss the new biotech project. He mentioned..."
         }
         ↓
 Step 7: Telegram Bot sends message to user
@@ -816,9 +815,9 @@ export INTELLIGENCE_SERVICE_URL=https://abc123.ngrok.io
 | Service | Repository | Technology | Deployment |
 |---------|-----------|------------|------------|
 | Intelligence | [jarvis-intelligence-service](https://github.com/JulienMaterno/jarvis-intelligence-service) | Python + FastAPI | Cloud Run |
-| Audio Pipeline | jarvis-audio-pipeline | Python + Whisper | Cloud Run |
-| Telegram Bot | jarvis-telegram-bot | Python + PTB | Cloud Run |
-| Sync Service | jarvis-sync-service | Python + Notion API | Cloud Run |
+| Audio Pipeline | [jarvis-audio-pipeline](https://github.com/JulienMaterno/jarvis-audio-pipeline) | Python + Whisper | Cloud Run |
+| Telegram Bot | [jarvis-telegram-bot](https://github.com/JulienMaterno/jarvis-telegram-bot) | Python + PTB | Cloud Run |
+| Sync Service | [jarvis-sync-service](https://github.com/JulienMaterno/jarvis-sync-service) | Python + Notion API | Cloud Run |
 
 ---
 

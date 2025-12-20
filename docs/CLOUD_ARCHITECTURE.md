@@ -187,7 +187,7 @@ Sensitive values (API keys, database credentials) are stored in **Secret Manager
 |-----------------------|----------------------|----------------------------|
 | `SUPABASE_URL`        | `SUPABASE_URL`       | Supabase database URL      |
 | `SUPABASE_KEY`        | `SUPABASE_KEY`       | Supabase API key           |
-| `CLAUDE_API_KEY`      | `ANTHROPIC_API_KEY`  | Claude API key for AI      |
+| `CLAUDE_API_KEY`      | `ANTHROPIC_API_KEY`  | Claude API key for AI (Note: GCP secret is named CLAUDE_API_KEY but maps to ANTHROPIC_API_KEY environment variable) |
 
 ### How Secrets are Injected
 
