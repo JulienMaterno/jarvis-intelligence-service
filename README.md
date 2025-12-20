@@ -13,11 +13,12 @@ This service is the **single source of intelligence**. Other services are specia
 
 ## 🌟 Features
 
-*   **Transcript Analysis**: Extracts meetings, reflections, and tasks from voice notes
-*   **Journal Processing**: Analyzes daily journals and creates tasks from `tomorrow_focus`
-*   **Chat Interface**: AI-powered chat with context (used by Telegram Bot)
-*   **Task Extraction**: Automatically creates tasks from any analyzed content
-*   **Structured Output**: Converts unstructured text into database rows
+*   **Smart Reflection Appending**: Automatically detects if a new reflection belongs to an existing topic (e.g., "Project Jarvis") and appends to it instead of creating a duplicate.
+*   **Transcript Analysis**: Extracts meetings, reflections, and tasks from voice notes.
+*   **Journal Processing**: Analyzes daily journals and creates tasks from `tomorrow_focus`.
+*   **Chat Interface**: AI-powered chat with context (used by Telegram Bot).
+*   **Task Extraction**: Automatically creates tasks from any analyzed content.
+*   **Structured Output**: Converts unstructured text into database rows.
 
 ## 🚀 Setup & Deployment
 
@@ -39,15 +40,13 @@ SUPABASE_KEY=eyJ...
 TELEGRAM_BOT_TOKEN=...  # For sending notifications
 ```
 
-### 2. Deploy to Google Cloud Run
+### 2. Deployment (CI/CD)
 
-```bash
-# Deploy directly from source
-gcloud run deploy jarvis-intelligence-service \
-  --source . \
-  --region asia-southeast1 \
-  --allow-unauthenticated
-```
+This service is automatically deployed to **Google Cloud Run** via **Google Cloud Build** whenever code is pushed to the `master` branch.
+
+*   **Trigger**: Push to `master`
+*   **Build Config**: `cloudbuild.yaml`
+*   **Secrets**: Managed via Google Secret Manager (`SUPABASE_URL`, `SUPABASE_KEY`, `ANTHROPIC_API_KEY`)
 
 ## 🔌 API Endpoints
 
