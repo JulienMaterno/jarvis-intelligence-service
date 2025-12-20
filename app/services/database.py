@@ -427,7 +427,8 @@ class SupabaseMultiDatabase:
         transcript: str,
         duration: float,
         filename: str,
-        transcript_id: str = None
+        transcript_id: str = None,
+        contact_id: str = None
     ) -> Tuple[str, str]:
         """
         Create reflection entry in Supabase.
@@ -460,6 +461,9 @@ class SupabaseMultiDatabase:
             
             if transcript_id:
                 payload["transcript_id"] = transcript_id
+                
+            if contact_id:
+                payload["contact_id"] = contact_id
             
             result = self.client.table("reflections").insert(payload).execute()
             reflection_id = result.data[0]["id"]
@@ -480,7 +484,8 @@ class SupabaseMultiDatabase:
         self,
         tasks_data: List[Dict],
         origin_id: str,
-        origin_type: str = "meeting"
+        origin_type: str = "meeting",
+        contact_id: str = None
     ) -> List[str]:
         """
         Create tasks in Supabase.
@@ -505,6 +510,9 @@ class SupabaseMultiDatabase:
                     "origin_type": origin_type,
                     "origin_id": origin_id
                 }
+                
+                if contact_id:
+                    payload["contact_id"] = contact_id
                 
                 result = self.client.table("tasks").insert(payload).execute()
                 created_ids.append(result.data[0]["id"])
@@ -544,7 +552,8 @@ class SupabaseMultiDatabase:
         transcript: str,
         duration: float,
         filename: str,
-        transcript_id: str = None
+        transcript_id: str = None,
+        contact_id: str = None
     ) -> Tuple[str, str]:
         """
         Create or update journal entry in Supabase.
@@ -594,6 +603,9 @@ class SupabaseMultiDatabase:
             
             if transcript_id:
                 payload["transcript_id"] = transcript_id
+                
+            if contact_id:
+                payload["contact_id"] = contact_id
             
             if existing:
                 # Update existing journal
@@ -660,6 +672,24 @@ class SupabaseMultiDatabase:
         except Exception as e:
             logger.error(f"Error finding contact by email '{email}': {e}")
             return None
+            
+    def link_past_interactions(self, contact_id: str, email: str) -> Dict:
+        """
+        Manually trigger retroactive linking for a contact.
+        Useful if the database trigger fails or for maintenance.
+        """
+        try:
+            logger.info(f"Triggering retroactive linking for {email} ({contact_id})")
+            result = self.client.rpc('link_past_interactions', {
+                'contact_uuid': contact_id,
+                'contact_email': email
+            }).execute()
+            
+            logger.info(f"Retroactive linking result: {result.data}")
+            return result.data
+        except Exception as e:
+            logger.error(f"Error running retroactive linking: {e}")
+            return {"status": "error", "message": str(e)}
     
     def find_contact_by_name_or_email(self, name: str = None, email: str = None) -> Tuple[Optional[Dict], List[Dict]]:
         """
