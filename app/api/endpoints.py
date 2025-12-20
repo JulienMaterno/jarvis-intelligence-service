@@ -922,7 +922,7 @@ Keep everything concise and punchy."""
         client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
         
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250514",
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
