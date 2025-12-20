@@ -24,6 +24,11 @@ This service is the **single source of intelligence**. Other services are specia
 *   **Structured Output**: Converts unstructured text into database rows.
 *   **CRM Integration**: Contact management with automatic linking to all interactions
 
+## 🧠 AI Models
+
+*   **Primary Model**: `claude-sonnet-4-5-20250929` (Anthropic)
+*   **Usage**: All complex reasoning, summarization, and extraction tasks.
+
 ## 🚀 Setup & Deployment
 
 ### 1. Local Development
