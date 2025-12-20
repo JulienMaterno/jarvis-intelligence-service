@@ -438,12 +438,16 @@ class SupabaseMultiDatabase:
             updated_sections = existing_sections + [divider_section] + new_sections
             
             # Merge content - generate from new_sections if new_content not provided
+            # Always add visible timestamp header for timeline tracking
+            timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M')
             updated_content = existing_content
             if new_content:
-                updated_content = f"{existing_content}\n\n---\n{new_content}" if existing_content else new_content
+                # Add timestamp to user-provided content
+                timestamped_content = f"\n\n---\n\n### 📝 Update: {timestamp_str}\n\n{new_content}"
+                updated_content = f"{existing_content}{timestamped_content}" if existing_content else f"### 📝 Entry: {timestamp_str}\n\n{new_content}"
             elif new_sections:
-                # Generate content from sections as fallback
-                content_parts = [f"\n\n---\n*Added {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n"]
+                # Generate content from sections as fallback with visible timestamp
+                content_parts = [f"\n\n---\n\n### 📝 Update: {timestamp_str}\n"]
                 for section in new_sections:
                     heading = section.get('heading', '')
                     section_content = section.get('content', '')
@@ -453,7 +457,7 @@ class SupabaseMultiDatabase:
                         content_parts.append(section_content)
                     content_parts.append("")
                 new_content_generated = "\n".join(content_parts).strip()
-                updated_content = f"{existing_content}{new_content_generated}" if existing_content else new_content_generated
+                updated_content = f"{existing_content}{new_content_generated}" if existing_content else new_content_generated.replace("Update:", "Entry:")
             
             # Merge tags (unique)
             updated_tags = list(set(existing_tags + (additional_tags or [])))
@@ -500,7 +504,8 @@ class SupabaseMultiDatabase:
             topic_key = reflection_data.get('topic_key')  # New field for topic matching
             
             # Add timestamp header to content for tracking development over time
-            timestamp_header = f"*Entry created: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"
+            timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+            timestamp_header = f"### 📝 Entry: {timestamp_str}\n\n"
             
             # Fallback: generate content from sections if content is empty
             if not content and sections:
