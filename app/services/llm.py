@@ -218,15 +218,19 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
       "date": "{recording_date}",
       "topic_key": "project-jarvis|exploring-out-loud-2|career-thoughts|etc (lowercase, hyphenated identifier for recurring topics, or null if one-off)",
       "tags": ["tag1", "tag2"],
-      "content": "Full markdown content of the reflection. Combine all insights into a well-structured, readable format with headers (##) and bullet points where appropriate. This is the main body of the reflection.",
+      "content": "COMPREHENSIVE markdown content capturing 70-90% of the transcript's substance. Include: key points, nuances, examples mentioned, and context. Use headers (##), bullet points, and quotes where appropriate. Longer transcripts = longer content. Aim for thoroughness over brevity - this is a knowledge repository.",
       "sections": [
         {{
           "heading": "Main Insight or Theme",
-          "content": "Detailed content for this section..."
+          "content": "Detailed, thorough content for this section - capture the full context and reasoning, not just bullet points"
         }},
         {{
-          "heading": "Implications or Lessons",
-          "content": "What this means going forward..."
+          "heading": "Key Points & Details",
+          "content": "All important details, examples, and specifics mentioned"
+        }},
+        {{
+          "heading": "Implications & Next Steps",
+          "content": "What this means going forward, connections to other topics"
         }}
       ]
     }}
@@ -280,9 +284,10 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
 4. **Reflections Array (SMART TOPIC ROUTING):**
    - Only 1-2 tags per reflection (keep it focused)
-   - "content": ALWAYS include a full markdown `content` field with the complete reflection text (headers, bullets, everything)
-   - "sections": Also structure into 2-4 sections like "Key Insight", "Context", "Implications", "Next Steps"
-   - Make it scannable and well-organized
+   - "content": COMPREHENSIVE markdown capturing 70-90% of the transcript substance. This is a knowledge repository - be THOROUGH, not brief. Longer transcript = longer content.
+   - "sections": Structure into 3-5 detailed sections. Each section should have substantial content, not just bullet points.
+   - Include specific examples, quotes, nuances, and context from the transcript
+   - Make it scannable BUT complete - someone reading should get the full picture without listening to the audio
    - Use for TOPIC-BASED reflections, NOT daily journals
    
    **MULTIPLE REFLECTIONS (IMPORTANT):**

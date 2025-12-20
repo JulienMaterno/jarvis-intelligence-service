@@ -489,6 +489,8 @@ class SupabaseMultiDatabase:
         Returns: Tuple of (reflection_id, "supabase://reflections/{id}")
         """
         try:
+            from datetime import datetime
+            
             title = reflection_data.get('title', 'Untitled Reflection')
             date = reflection_data.get('date')
             location = reflection_data.get('location')
@@ -497,9 +499,12 @@ class SupabaseMultiDatabase:
             content = reflection_data.get('content', '')
             topic_key = reflection_data.get('topic_key')  # New field for topic matching
             
+            # Add timestamp header to content for tracking development over time
+            timestamp_header = f"*Entry created: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n\n"
+            
             # Fallback: generate content from sections if content is empty
             if not content and sections:
-                content_parts = []
+                content_parts = [timestamp_header]
                 for section in sections:
                     heading = section.get('heading', '')
                     section_content = section.get('content', '')
@@ -510,6 +515,9 @@ class SupabaseMultiDatabase:
                     content_parts.append("")  # Empty line between sections
                 content = "\n".join(content_parts).strip()
                 logger.info(f"Generated content from {len(sections)} sections")
+            elif content:
+                # Prepend timestamp to existing content
+                content = timestamp_header + content
             
             logger.info(f"Creating reflection: {title}")
             
