@@ -287,6 +287,47 @@ class SupabaseMultiDatabase:
     # REFLECTIONS
     # =========================================================================
     
+    def get_existing_reflection_topics(self, limit: int = 30) -> List[Dict]:
+        """
+        Fetch existing reflection topics for smart routing.
+        Returns list of {topic_key, title} for topics that have topic_key set.
+        
+        This is passed to Claude so it can decide whether to append to existing
+        topics or create new ones.
+        """
+        try:
+            # Get reflections with topic_key set, ordered by most recent
+            result = self.client.table("reflections").select(
+                "topic_key, title"
+            ).not_.is_(
+                "topic_key", "null"
+            ).is_(
+                "deleted_at", "null"
+            ).order(
+                "created_at", desc=True
+            ).limit(limit).execute()
+            
+            if result.data:
+                # Deduplicate by topic_key (keep first/most recent)
+                seen = set()
+                unique_topics = []
+                for r in result.data:
+                    tk = r.get('topic_key')
+                    if tk and tk not in seen:
+                        seen.add(tk)
+                        unique_topics.append({
+                            'topic_key': tk,
+                            'title': r.get('title', 'Untitled')
+                        })
+                logger.info(f"Found {len(unique_topics)} existing reflection topics")
+                return unique_topics
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error fetching reflection topics: {e}")
+            return []
+    
     def find_similar_reflection(self, topic_key: str, tags: List[str] = None, title: str = None) -> Optional[Dict]:
         """
         Find an existing reflection that matches by topic_key, tags, or title similarity.

@@ -38,11 +38,15 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
         # Try to get date from metadata or use today
         recording_date = None # Logic to extract date if needed, or let analyzer default to today
         
-        # 2. Run Claude Analysis
+        # 2. Fetch existing reflection topics for smart routing
+        existing_topics = db.get_existing_reflection_topics()
+        
+        # 3. Run Claude Analysis (with existing topics context)
         analysis = analyzer.analyze_transcript(
             transcript=transcript_text,
             filename=filename,
-            recording_date=recording_date
+            recording_date=recording_date,
+            existing_topics=existing_topics
         )
         
         # 3. Save structured data to Supabase
@@ -199,11 +203,15 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
             language=request.language
         )
         
-        # 2. Run Claude Analysis
+        # 2. Fetch existing reflection topics for smart routing
+        existing_topics = db.get_existing_reflection_topics()
+        
+        # 3. Run Claude Analysis (with existing topics context)
         analysis = analyzer.analyze_transcript(
             transcript=request.transcript,
             filename=request.filename,
-            recording_date=request.recording_date
+            recording_date=request.recording_date,
+            existing_topics=existing_topics
         )
         
         # 3. Save structured data to Supabase

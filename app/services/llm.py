@@ -22,7 +22,13 @@ class ClaudeMultiAnalyzer:
         self.model = model or settings.CLAUDE_MODEL
         logger.info(f"Claude Multi-Database analyzer initialized with model: {self.model}")
     
-    def analyze_transcript(self, transcript: str, filename: str, recording_date: Optional[str] = None) -> Dict:
+    def analyze_transcript(
+        self, 
+        transcript: str, 
+        filename: str, 
+        recording_date: Optional[str] = None,
+        existing_topics: list = None
+    ) -> Dict:
         """
         Analyze transcript and extract structured information for multiple databases.
         
@@ -30,6 +36,7 @@ class ClaudeMultiAnalyzer:
             transcript: Full transcript text
             filename: Original audio filename
             recording_date: ISO date string of recording (defaults to today)
+            existing_topics: List of existing reflection topics from DB for smart routing
         
         Returns:
             Dict with structure:
@@ -47,7 +54,7 @@ class ClaudeMultiAnalyzer:
             if not recording_date:
                 recording_date = datetime.now().date().isoformat()
             
-            prompt = self._build_multi_analysis_prompt(transcript, filename, recording_date)
+            prompt = self._build_multi_analysis_prompt(transcript, filename, recording_date, existing_topics)
             
             response = self.client.messages.create(
                 model=self.model,
@@ -87,8 +94,29 @@ class ClaudeMultiAnalyzer:
             logger.error(f"Error analyzing transcript: {e}")
             return self._default_analysis(transcript, filename, recording_date)
     
-    def _build_multi_analysis_prompt(self, transcript: str, filename: str, recording_date: str) -> str:
+    def _build_multi_analysis_prompt(self, transcript: str, filename: str, recording_date: str, existing_topics: list = None) -> str:
         """Build comprehensive prompt for multi-database analysis."""
+        
+        # Build existing topics context
+        topics_context = ""
+        if existing_topics and len(existing_topics) > 0:
+            topics_list = "\n".join([f"  • {t['topic_key']}: \"{t['title']}\"" for t in existing_topics[:20]])
+            topics_context = f"""
+**EXISTING REFLECTION TOPICS (from database):**
+These are ongoing topics I've already been building. Consider whether this recording fits into one of them:
+{topics_list}
+
+**TOPIC ROUTING RULES:**
+- If this recording clearly relates to an existing topic → use that topic_key (content will be APPENDED)
+- If I explicitly say "new topic", "start fresh", "separate reflection" → create new topic_key
+- If the content is genuinely different from all existing topics → create new topic_key  
+- If unsure and content is substantial → prefer creating new topic (better to have too many than miss-merge)
+"""
+        else:
+            topics_context = """
+**NOTE:** No existing reflection topics in database yet. Create new topic_keys as needed.
+"""
+        
         return f"""You are analyzing an audio transcript recorded by Aaron. Extract information from Aaron's perspective (first person).
 
 **ABOUT AARON (for context):**
@@ -97,7 +125,7 @@ Aaron is a German engineer based in Sydney, currently in transition after being 
 His core interests span climate tech, biotech, agritech, foodtech, and longevity. He has a strong technical background bridging hardware and software—comfortable with embedded systems (Arduino, ESP32), automation tools like Python, and building custom infrastructure. He prefers self-hosted and open-source tools over subscription services.
 
 Aaron is systematic about relationship management, maintaining a comprehensive Notion CRM for professional and personal contacts. He's currently preparing to relocate to Singapore and Southeast Asia to explore new opportunities in the startup ecosystem there.
-
+{topics_context}
 **TRANSCRIPT CONTEXT:**
 - Filename: {filename}
 - Recording Date: {recording_date}
@@ -249,18 +277,20 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Extract tasks mentioned for tomorrow into "tomorrow_focus"
    - One journal entry per recording (tied to the date)
 
-4. **Reflections Array:**
+4. **Reflections Array (SMART TOPIC ROUTING):**
    - Only 1-2 tags per reflection (keep it focused)
    - "sections": Structure the reflection with clear headings and content. Use 2-4 sections like "Key Insight", "Context", "Implications", "Next Steps"
    - Make it scannable and well-organized
    - Use for TOPIC-BASED reflections, NOT daily journals
-   - **"topic_key" (IMPORTANT for recurring topics):**
-     - Use for ongoing projects, newsletters, or recurring themes that should accumulate thoughts over time
-     - Examples: "project-jarvis", "explore-out-loud-newsletter", "career-transition", "singapore-move", "startup-ideas"
-     - Keep it lowercase, hyphenated, and consistent across recordings
-     - If I say "for the newsletter" or "about Jarvis" or "regarding my move to Singapore", use the appropriate topic_key
-     - Set to null for one-off reflections that don't belong to an ongoing topic
-     - When topic_key is set, the system will APPEND to existing reflections with the same topic instead of creating new ones
+   
+   **"topic_key" DECISION LOGIC (CRITICAL):**
+   - Look at the EXISTING TOPICS list above first!
+   - If recording content fits an existing topic → USE THAT EXACT topic_key (will append)
+   - If I say "for the newsletter", "about project X", "continuing my thoughts on Y" → match to existing or create consistent key
+   - If I say "new topic", "fresh reflection", "separate thought" → create NEW topic_key
+   - If content is genuinely unrelated to all existing topics → create NEW topic_key
+   - Format: lowercase, hyphenated (e.g., "project-jarvis", "career-transition", "startup-ideas")
+   - When in doubt about merging: prefer creating new topic (can be merged later, but splitting is harder)
 
 5. **Tasks Array - BE SELECTIVE:**
    - ONLY extract TRUE tasks that require active effort from me
