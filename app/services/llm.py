@@ -276,7 +276,8 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
 3. **Journals Array (DAILY ENTRIES):**
    - Use for daily journals: evening recaps, morning planning, "what happened today"
-   - Keywords that indicate journal: "today", "this morning", "tonight", "this evening", "tomorrow", "woke up"
+   - Keywords that indicate journal: "today", "this morning", "tonight", "this evening", "tomorrow", "woke up", "journal", "journaling"
+   - If filename contains "Journal" or "Journaling", FORCE this category.
    - Extract mood/effort/sports ONLY if explicitly mentioned, otherwise null/empty
    - Structure into sections: Morning, Main Activities, Evening Thoughts, etc.
    - Extract tasks mentioned for tomorrow into "tomorrow_focus"

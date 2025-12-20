@@ -18,7 +18,7 @@ class Config:
     # CLAUDE API
     # =========================================================================
     ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY') or os.getenv('CLAUDE_API_KEY')
-    CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-3-5-haiku-20241022')
+    CLAUDE_MODEL = os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
     
     # =========================================================================
     # SYNC SERVICE (For triggering syncs after creating data)
