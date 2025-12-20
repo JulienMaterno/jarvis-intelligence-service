@@ -48,6 +48,12 @@ This service is automatically deployed to **Google Cloud Run** via **Google Clou
 *   **Build Config**: `cloudbuild.yaml`
 *   **Secrets**: Managed via Google Secret Manager (`SUPABASE_URL`, `SUPABASE_KEY`, `ANTHROPIC_API_KEY`)
 
+## 📚 Documentation
+
+**Understanding the Architecture**:
+- **[Cloud Architecture Guide](./docs/CLOUD_ARCHITECTURE.md)** - How Google Cloud Build and Cloud Run work for this service
+- **[Ecosystem Architecture](./docs/ECOSYSTEM_ARCHITECTURE.md)** - Complete overview of all 4 Jarvis services and how they interact
+
 ## 🔌 API Endpoints
 
 ### `POST /api/v1/process/{transcript_id}`
