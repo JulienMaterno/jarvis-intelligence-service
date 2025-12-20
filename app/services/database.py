@@ -618,3 +618,469 @@ class SupabaseMultiDatabase:
         except Exception as e:
             logger.error(f"Error creating/updating journal: {e}")
             raise
+    
+    # =========================================================================
+    # CONTACT OPERATIONS - ENHANCED
+    # =========================================================================
+    
+    def find_contact_by_email(self, email: str) -> Optional[Dict]:
+        """
+        Find a contact by email address.
+        Checks both primary email and alternative_emails.
+        
+        Returns: The contact dict if found, None otherwise
+        """
+        if not email:
+            return None
+        
+        try:
+            email_lower = email.lower().strip()
+            
+            # Strategy 1: Check primary email
+            result = self.client.table("contacts").select("*").ilike(
+                "email", email_lower
+            ).is_("deleted_at", "null").execute()
+            
+            if result.data:
+                logger.info(f"Found contact by primary email: {email}")
+                return result.data[0]
+            
+            # Strategy 2: Check alternative emails (if column exists)
+            # Using contains for jsonb array
+            result = self.client.table("contacts").select("*").contains(
+                "alternative_emails", [email_lower]
+            ).is_("deleted_at", "null").execute()
+            
+            if result.data:
+                logger.info(f"Found contact by alternative email: {email}")
+                return result.data[0]
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding contact by email '{email}': {e}")
+            return None
+    
+    def find_contact_by_name_or_email(self, name: str = None, email: str = None) -> Tuple[Optional[Dict], List[Dict]]:
+        """
+        Find a contact by name and/or email with intelligent matching.
+        
+        Args:
+            name: Full name or partial name
+            email: Email address
+        
+        Returns:
+            Tuple of (matched_contact, suggestions)
+        """
+        # Try email first (most reliable)
+        if email:
+            contact = self.find_contact_by_email(email)
+            if contact:
+                return contact, []
+        
+        # Fall back to name matching
+        if name:
+            return self.find_contact_by_name(name)
+        
+        return None, []
+    
+    def update_contact_interaction_stats(self, contact_id: str) -> None:
+        """
+        Update contact interaction statistics.
+        This is typically called automatically by database triggers,
+        but can be called manually if needed.
+        """
+        try:
+            # Call the database function
+            self.client.rpc('update_contact_interaction_stats', {
+                'contact_uuid': contact_id
+            }).execute()
+            logger.info(f"Updated interaction stats for contact {contact_id}")
+        except Exception as e:
+            logger.error(f"Error updating contact stats: {e}")
+    
+    def get_contact_interactions(self, contact_id: str, limit: int = 50) -> List[Dict]:
+        """
+        Get all interactions for a specific contact.
+        Uses the interaction_log view.
+        
+        Returns: List of interactions ordered by date (newest first)
+        """
+        try:
+            result = self.client.table("interaction_log").select("*").eq(
+                "contact_id", contact_id
+            ).limit(limit).execute()
+            
+            return result.data
+        except Exception as e:
+            logger.error(f"Error fetching interactions for contact {contact_id}: {e}")
+            return []
+    
+    # =========================================================================
+    # EMAILS
+    # =========================================================================
+    
+    def create_email(
+        self,
+        subject: str,
+        from_email: str,
+        to_emails: List[str],
+        body_text: str = None,
+        body_html: str = None,
+        from_name: str = None,
+        cc_emails: List[str] = None,
+        direction: str = "inbound",
+        sent_at: str = None,
+        received_at: str = None,
+        message_id: str = None,
+        thread_id: str = None,
+        contact_id: str = None,
+        contact_name: str = None,
+        meeting_id: str = None,
+        category: str = None,
+        tags: List[str] = None,
+        has_attachments: bool = False,
+        attachment_names: List[str] = None,
+        source_provider: str = None,
+        raw_data: Dict = None
+    ) -> Tuple[str, str]:
+        """
+        Create an email record in Supabase.
+        
+        Args:
+            subject: Email subject
+            from_email: Sender email address
+            to_emails: List of recipient emails
+            body_text: Plain text body
+            body_html: HTML body (optional)
+            from_name: Sender name
+            cc_emails: CC recipients
+            direction: 'inbound' or 'outbound'
+            sent_at: ISO timestamp when sent
+            received_at: ISO timestamp when received
+            message_id: Unique message ID from email provider
+            thread_id: Thread/conversation ID
+            contact_id: Linked contact ID
+            contact_name: Contact name (before linking)
+            meeting_id: Related meeting ID
+            category: Email category ('work', 'personal', etc.)
+            tags: List of tags
+            has_attachments: Whether email has attachments
+            attachment_names: List of attachment filenames
+            source_provider: Email provider ('gmail', 'outlook', etc.)
+            raw_data: Raw email data
+        
+        Returns:
+            Tuple of (email_id, "supabase://emails/{id}")
+        """
+        try:
+            logger.info(f"Creating email: {subject} from {from_email}")
+            
+            # Auto-link to contact if not provided
+            if not contact_id and from_email and direction == "inbound":
+                contact = self.find_contact_by_email(from_email)
+                if contact:
+                    contact_id = contact.get('id')
+                    logger.info(f"Auto-linked email to contact: {from_email} -> {contact_id}")
+            elif not contact_id and to_emails and direction == "outbound":
+                # For outbound, try to match primary recipient
+                contact = self.find_contact_by_email(to_emails[0])
+                if contact:
+                    contact_id = contact.get('id')
+                    logger.info(f"Auto-linked email to contact: {to_emails[0]} -> {contact_id}")
+            
+            # Generate snippet from body
+            snippet = None
+            if body_text:
+                snippet = body_text[:200] + "..." if len(body_text) > 200 else body_text
+            
+            payload = {
+                "subject": subject,
+                "from_email": from_email,
+                "to_emails": to_emails,
+                "direction": direction,
+            }
+            
+            # Add optional fields
+            if body_text:
+                payload["body_text"] = body_text
+            if body_html:
+                payload["body_html"] = body_html
+            if snippet:
+                payload["snippet"] = snippet
+            if from_name:
+                payload["from_name"] = from_name
+            if cc_emails:
+                payload["cc_emails"] = cc_emails
+            if sent_at:
+                payload["sent_at"] = sent_at
+            if received_at:
+                payload["received_at"] = received_at
+            if message_id:
+                payload["message_id"] = message_id
+            if thread_id:
+                payload["thread_id"] = thread_id
+            if contact_id:
+                payload["contact_id"] = contact_id
+            if contact_name:
+                payload["contact_name"] = contact_name
+            if meeting_id:
+                payload["meeting_id"] = meeting_id
+            if category:
+                payload["category"] = category
+            if tags:
+                payload["tags"] = tags
+            if has_attachments:
+                payload["has_attachments"] = has_attachments
+                payload["attachment_count"] = len(attachment_names) if attachment_names else 0
+            if attachment_names:
+                payload["attachment_names"] = attachment_names
+            if source_provider:
+                payload["source_provider"] = source_provider
+            if raw_data:
+                payload["raw_data"] = raw_data
+            
+            result = self.client.table("emails").insert(payload).execute()
+            email_id = result.data[0]["id"]
+            email_url = f"supabase://emails/{email_id}"
+            
+            logger.info(f"Email created: {email_id}")
+            return email_id, email_url
+            
+        except Exception as e:
+            logger.error(f"Error creating email: {e}")
+            raise
+    
+    def get_emails_by_contact(self, contact_id: str, limit: int = 50) -> List[Dict]:
+        """
+        Get all emails for a specific contact.
+        
+        Returns: List of emails ordered by date (newest first)
+        """
+        try:
+            result = self.client.table("emails").select("*").eq(
+                "contact_id", contact_id
+            ).is_("deleted_at", "null").order(
+                "sent_at", desc=True
+            ).limit(limit).execute()
+            
+            return result.data
+        except Exception as e:
+            logger.error(f"Error fetching emails for contact {contact_id}: {e}")
+            return []
+    
+    def get_emails_by_thread(self, thread_id: str) -> List[Dict]:
+        """
+        Get all emails in a conversation thread.
+        
+        Returns: List of emails ordered by date (oldest first)
+        """
+        try:
+            result = self.client.table("emails").select("*").eq(
+                "thread_id", thread_id
+            ).is_("deleted_at", "null").order(
+                "sent_at", desc=False
+            ).execute()
+            
+            return result.data
+        except Exception as e:
+            logger.error(f"Error fetching email thread {thread_id}: {e}")
+            return []
+    
+    def link_email_to_meeting(self, email_id: str, meeting_id: str) -> None:
+        """
+        Link an email to a meeting.
+        """
+        try:
+            self.client.table("emails").update({
+                "meeting_id": meeting_id
+            }).eq("id", email_id).execute()
+            logger.info(f"Linked email {email_id} to meeting {meeting_id}")
+        except Exception as e:
+            logger.error(f"Error linking email to meeting: {e}")
+            raise
+    
+    # =========================================================================
+    # CALENDAR EVENTS
+    # =========================================================================
+    
+    def create_calendar_event(
+        self,
+        title: str,
+        start_time: str,
+        end_time: str,
+        description: str = None,
+        location: str = None,
+        organizer_email: str = None,
+        organizer_name: str = None,
+        attendees: List[Dict] = None,
+        all_day: bool = False,
+        status: str = "confirmed",
+        contact_id: str = None,
+        contact_name: str = None,
+        meeting_id: str = None,
+        email_id: str = None,
+        event_type: str = None,
+        tags: List[str] = None,
+        meeting_url: str = None,
+        is_recurring: bool = False,
+        recurrence_rule: str = None,
+        source_provider: str = None,
+        source_event_id: str = None,
+        raw_data: Dict = None
+    ) -> Tuple[str, str]:
+        """
+        Create a calendar event record in Supabase.
+        
+        Args:
+            title: Event title
+            start_time: ISO timestamp for start
+            end_time: ISO timestamp for end
+            description: Event description
+            location: Event location
+            organizer_email: Organizer's email
+            organizer_name: Organizer's name
+            attendees: List of attendee dicts with {email, name, response_status}
+            all_day: Whether it's an all-day event
+            status: 'confirmed', 'tentative', or 'cancelled'
+            contact_id: Linked contact ID
+            contact_name: Contact name (before linking)
+            meeting_id: Related meeting ID (if notes created)
+            email_id: Related email ID (invitation)
+            event_type: 'meeting', 'appointment', etc.
+            tags: List of tags
+            meeting_url: Video conference link
+            is_recurring: Whether event repeats
+            recurrence_rule: RRULE for recurrence
+            source_provider: Calendar provider ('google_calendar', etc.)
+            source_event_id: Original event ID from provider
+            raw_data: Raw event data
+        
+        Returns:
+            Tuple of (event_id, "supabase://calendar_events/{id}")
+        """
+        try:
+            logger.info(f"Creating calendar event: {title} at {start_time}")
+            
+            # Auto-link to contact if not provided
+            if not contact_id and organizer_email:
+                contact = self.find_contact_by_email(organizer_email)
+                if contact:
+                    contact_id = contact.get('id')
+                    logger.info(f"Auto-linked event to contact: {organizer_email} -> {contact_id}")
+            
+            payload = {
+                "title": title,
+                "start_time": start_time,
+                "end_time": end_time,
+                "all_day": all_day,
+                "status": status,
+            }
+            
+            # Add optional fields
+            if description:
+                payload["description"] = description
+            if location:
+                payload["location"] = location
+            if organizer_email:
+                payload["organizer_email"] = organizer_email
+            if organizer_name:
+                payload["organizer_name"] = organizer_name
+            if attendees:
+                payload["attendees"] = attendees
+            if contact_id:
+                payload["contact_id"] = contact_id
+            if contact_name:
+                payload["contact_name"] = contact_name
+            if meeting_id:
+                payload["meeting_id"] = meeting_id
+            if email_id:
+                payload["email_id"] = email_id
+            if event_type:
+                payload["event_type"] = event_type
+            if tags:
+                payload["tags"] = tags
+            if meeting_url:
+                payload["meeting_url"] = meeting_url
+            if is_recurring:
+                payload["is_recurring"] = is_recurring
+            if recurrence_rule:
+                payload["recurrence_rule"] = recurrence_rule
+            if source_provider:
+                payload["source_provider"] = source_provider
+            if source_event_id:
+                payload["source_event_id"] = source_event_id
+            if raw_data:
+                payload["raw_data"] = raw_data
+            
+            result = self.client.table("calendar_events").insert(payload).execute()
+            event_id = result.data[0]["id"]
+            event_url = f"supabase://calendar_events/{event_id}"
+            
+            logger.info(f"Calendar event created: {event_id}")
+            return event_id, event_url
+            
+        except Exception as e:
+            logger.error(f"Error creating calendar event: {e}")
+            raise
+    
+    def get_calendar_events_by_contact(self, contact_id: str, limit: int = 50) -> List[Dict]:
+        """
+        Get all calendar events for a specific contact.
+        
+        Returns: List of events ordered by date (newest first)
+        """
+        try:
+            result = self.client.table("calendar_events").select("*").eq(
+                "contact_id", contact_id
+            ).is_("deleted_at", "null").order(
+                "start_time", desc=True
+            ).limit(limit).execute()
+            
+            return result.data
+        except Exception as e:
+            logger.error(f"Error fetching calendar events for contact {contact_id}: {e}")
+            return []
+    
+    def get_upcoming_events(self, limit: int = 20) -> List[Dict]:
+        """
+        Get upcoming calendar events.
+        
+        Returns: List of future events ordered by date (soonest first)
+        """
+        try:
+            from datetime import datetime
+            now = datetime.utcnow().isoformat()
+            
+            result = self.client.table("calendar_events").select("*").gte(
+                "start_time", now
+            ).is_("deleted_at", "null").neq(
+                "status", "cancelled"
+            ).order(
+                "start_time", desc=False
+            ).limit(limit).execute()
+            
+            return result.data
+        except Exception as e:
+            logger.error(f"Error fetching upcoming events: {e}")
+            return []
+    
+    def link_calendar_event_to_meeting(self, event_id: str, meeting_id: str) -> None:
+        """
+        Link a calendar event to a meeting record.
+        """
+        try:
+            # Update calendar event
+            self.client.table("calendar_events").update({
+                "meeting_id": meeting_id
+            }).eq("id", event_id).execute()
+            
+            # Also update meeting with calendar event reference
+            self.client.table("meetings").update({
+                "calendar_event_id": event_id
+            }).eq("id", meeting_id).execute()
+            
+            logger.info(f"Linked calendar event {event_id} to meeting {meeting_id}")
+        except Exception as e:
+            logger.error(f"Error linking calendar event to meeting: {e}")
+            raise
