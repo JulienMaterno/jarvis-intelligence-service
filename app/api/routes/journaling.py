@@ -1,0 +1,211 @@
+import json
+import logging
+import os
+import re
+from datetime import datetime
+from typing import Iterable, List, Optional, Sequence, Set
+
+import anthropic
+from fastapi import APIRouter, HTTPException
+
+from app.api.models import JournalPromptRequest, JournalPromptResponse
+
+router = APIRouter(tags=["Journaling"])
+logger = logging.getLogger("Jarvis.Intelligence.API.Journaling")
+
+MODEL_ID = os.getenv("CLAUDE_JOURNAL_MODEL", "claude-sonnet-4-5-20250929")
+MAX_LIST_ITEMS = 10
+
+
+def _limit_items(items: Sequence[str], limit: int = MAX_LIST_ITEMS) -> List[str]:
+    return [item for item in items if item][:limit]
+
+
+def _format_people_summary(names: Iterable[str]) -> str:
+    deduped = sorted({name.strip() for name in names if name and name.strip()})
+    return ", ".join(deduped[:MAX_LIST_ITEMS]) if deduped else "No direct contacts captured"
+
+
+def _collect_activity_context(request: JournalPromptRequest) -> tuple[str, Set[str]]:
+    context_parts: list[str] = []
+    people_mentioned: Set[str] = set()
+    activity_data = request.activity_data
+
+    if activity_data.meetings:
+        meeting_summaries: list[str] = []
+        for meeting in activity_data.meetings:
+            title = meeting.get("title") or "Untitled meeting"
+            summary = meeting.get("summary", "")
+            trimmed = summary[:200] if summary else ""
+            meeting_summaries.append(f"- {title}: {trimmed}".rstrip())
+            for name in meeting.get("people_mentioned", []) or []:
+                if isinstance(name, str):
+                    people_mentioned.add(name)
+        context_parts.append(
+            f"MEETINGS ({len(activity_data.meetings)}):\n" + "\n".join(meeting_summaries)
+        )
+
+    if activity_data.calendar_events:
+        event_summaries: list[str] = []
+        for event in activity_data.calendar_events:
+            title = event.get("summary") or event.get("title") or "Calendar event"
+            event_summaries.append(f"- {title}")
+            for attendee in event.get("attendees", []) or []:
+                display = attendee.get("displayName") if isinstance(attendee, dict) else None
+                if display:
+                    people_mentioned.add(display)
+        context_parts.append(
+            f"CALENDAR EVENTS ({len(activity_data.calendar_events)}):\n" + "\n".join(event_summaries)
+        )
+
+    if activity_data.emails:
+        skip_keywords = {"unsubscribe", "newsletter", "automated", "noreply", "no-reply", "github", "notification"}
+        email_summaries: list[str] = []
+        for email in activity_data.emails:
+            subject = email.get("subject", "")
+            if any(keyword in subject.lower() for keyword in skip_keywords):
+                continue
+            sender = email.get("sender") or email.get("from") or "unknown sender"
+            email_summaries.append(f"- {subject} (from: {sender})")
+            if email.get("contact_name"):
+                people_mentioned.add(email["contact_name"])
+        if email_summaries:
+            context_parts.append(
+                f"EMAILS ({len(email_summaries)} meaningful):\n" + "\n".join(email_summaries[:MAX_LIST_ITEMS])
+            )
+
+    if activity_data.tasks_completed:
+        completed = [task.get("title", "Task") for task in activity_data.tasks_completed]
+        if completed:
+            context_parts.append(
+                f"TASKS COMPLETED ({len(completed)}):\n- " + "\n- ".join(_limit_items(completed))
+            )
+
+    if activity_data.tasks_created:
+        created = [task.get("title", "Task") for task in activity_data.tasks_created]
+        if created:
+            context_parts.append(
+                f"NEW TASKS ({len(created)}):\n- " + "\n- ".join(_limit_items(created))
+            )
+
+    if activity_data.reflections:
+        reflections = [item.get("title", "Reflection") for item in activity_data.reflections]
+        if reflections:
+            context_parts.append(
+                f"REFLECTIONS RECORDED ({len(reflections)}):\n- " + "\n- ".join(_limit_items(reflections))
+            )
+
+    if activity_data.journals:
+        highlights: list[str] = []
+        for journal in activity_data.journals:
+            highlights.extend(journal.get("highlights", [])[:MAX_LIST_ITEMS])
+        if highlights:
+            context_parts.append("JOURNAL HIGHLIGHTS:\n- " + "\n- ".join(_limit_items(highlights)))
+
+    context = "\n\n".join(context_parts) if context_parts else "No significant activities recorded today."
+    return context, people_mentioned
+
+
+def _call_claude(prompt: str) -> dict:
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    response = client.messages.create(
+        model=MODEL_ID,
+        max_tokens=1000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    response_text = response.content[0].text
+
+    try:
+        json_match = re.search(r"\{[\s\S]*\}", response_text)
+        if json_match:
+            return json.loads(json_match.group())
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        logger.warning("Unable to parse Claude response; returning fallback JSON")
+        return {
+            "highlights": ["Reflect on your day's activities"],
+            "meetings": [],
+            "reflection_prompts": ["What stood out to you today?"],
+        }
+
+
+def _build_prompt(context: str, people_summary: str, user_name: Optional[str]) -> str:
+    salutation = f"You are a thoughtful personal assistant helping {user_name} reflect on their day." if user_name else "You are a thoughtful personal assistant helping someone reflect on their day."
+    return f"""{salutation}
+
+TODAY'S ACTIVITIES:
+{context}
+
+PEOPLE INTERACTED WITH: {people_summary or 'No direct contacts captured'}
+
+Based on this day's activities, generate a JSON response with the following fields:
+
+1. "highlights": A list of 3-5 bullet points of the most relevant or interesting things done today (tasks, emails, reflections, etc.). Do not include meetings here unless they were the primary work output. Avoid redundancy.
+2. "meetings": A list of the meetings that occurred today. If none, return an empty list.
+3. "reflection_prompts": 2-3 personalized questions based on specific events or conversations today.
+
+Respond ONLY in valid JSON format:
+{{
+    "highlights": ["string", "string"],
+    "meetings": ["string", "string"],
+    "reflection_prompts": ["string", "string"]
+}}
+"""
+
+
+def _build_message(highlights: List[str], meetings: List[str], prompts: List[str], people_summary: str) -> str:
+    now = datetime.utcnow()
+    lines: list[str] = []
+
+    lines.append("**Evening Journal**")
+    lines.append(f"_{now.strftime('%A, %B %d')}_")
+    lines.append("")
+
+    if highlights:
+        lines.append("**Today's highlights:**")
+        lines.extend(f"- {item}" for item in highlights)
+        lines.append("")
+
+    if meetings:
+        lines.append("**Meetings:**")
+        lines.extend(f"- {item}" for item in meetings)
+        lines.append("")
+
+    if prompts:
+        lines.append("**Things to reflect on:**")
+        lines.extend(f"- {item}" for item in prompts)
+        lines.append("")
+
+    lines.append(f"People you interacted with: {people_summary}")
+    lines.append("Reply with a voice note or text to journal.")
+
+    return "\n".join(lines).strip()
+
+
+@router.post("/journal/evening-prompt", response_model=JournalPromptResponse)
+async def generate_evening_journal_prompt(request: JournalPromptRequest) -> JournalPromptResponse:
+    """Generate an evening journal prompt grounded in the day's activity history."""
+    try:
+        context, people_mentioned = _collect_activity_context(request)
+        people_summary = _format_people_summary(people_mentioned)
+        prompt = _build_prompt(context, people_summary, request.user_name)
+        analysis = _call_claude(prompt)
+
+        highlights = _limit_items(analysis.get("highlights", []), limit=5)
+        meetings = _limit_items(analysis.get("meetings", []), limit=MAX_LIST_ITEMS)
+        reflection_prompts = _limit_items(analysis.get("reflection_prompts", []), limit=3)
+
+        message = _build_message(highlights, meetings, reflection_prompts, people_summary)
+
+        return JournalPromptResponse(
+            status="success",
+            highlights=highlights,
+            reflection_prompts=reflection_prompts,
+            people_summary=people_summary,
+            message=message,
+        )
+
+    except Exception as exc:
+        logger.exception("Failed to build evening journal prompt")
+        raise HTTPException(status_code=500, detail=str(exc))
