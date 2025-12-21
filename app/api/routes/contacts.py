@@ -14,8 +14,6 @@ from app.api.models import (
 router = APIRouter(tags=["Contacts"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Contacts")
 
-def _build_contact_name(first_name: str | None, last_name: str | None) -> str:
-
 
 def _build_contact_name(first_name: Optional[str], last_name: Optional[str]) -> str:
     pieces = [first_name or "", last_name or ""]
