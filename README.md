@@ -84,13 +84,19 @@ SYNC_SERVICE_URL=https://jarvis-sync-service-...
 DEFAULT_TELEGRAM_CHAT_ID=123456789
 ```
 
-### Deployment (Automated)
+### Deployment (Automated via GitHub)
 
 **DO NOT** manually deploy. Push to `master` branch triggers Google Cloud Build automatically.
 
-- **Trigger**: Push to `master`
+- **Cloud Build Trigger**: `jarvis-intelligence-service-deploy`
+- **Branch**: `^master$`
 - **Build Config**: `cloudbuild.yaml`
-- **Secrets**: Google Secret Manager
+- **Secrets**: Google Secret Manager (injected at runtime)
+
+```bash
+# Deploy by pushing to master
+git add -A && git commit -m "Your changes" && git push origin master
+```
 
 ## 📚 Documentation
 
@@ -112,7 +118,7 @@ DEFAULT_TELEGRAM_CHAT_ID=123456789
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/journal/evening-prompt` | POST | Generate evening reflection prompt |
+| `/api/v1/journal/evening-prompt` | POST | Generate evening reflection prompt (includes ActivityWatch data if available) |
 
 ### Contacts
 
