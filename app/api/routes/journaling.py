@@ -127,6 +127,47 @@ def _collect_activity_context(request: JournalPromptRequest) -> tuple[str, Set[s
         if screen_lines:
             context_parts.append("SCREEN TIME (ActivityWatch):\n" + "\n".join(screen_lines))
 
+    # Reading data - books and highlights
+    if activity_data.reading:
+        reading = activity_data.reading
+        reading_lines: list[str] = []
+        
+        # Currently reading books
+        currently_reading = reading.get("currently_reading", [])
+        if currently_reading:
+            reading_lines.append("Currently reading:")
+            for book in currently_reading[:3]:
+                title = book.get("title", "Unknown")
+                author = book.get("author", "")
+                progress = book.get("progress_percent", 0)
+                author_str = f" by {author}" if author else ""
+                reading_lines.append(f"  - {title}{author_str} ({progress}% complete)")
+        
+        # Today's highlights
+        highlights = reading.get("todays_highlights", [])
+        if highlights:
+            reading_lines.append(f"\nToday's book highlights ({len(highlights)}):")
+            for h in highlights[:5]:
+                content = h.get("content", "")[:100]
+                book = h.get("book_title", "")
+                if content:
+                    reading_lines.append(f"  - \"{content}...\" ({book})")
+                    if h.get("note"):
+                        reading_lines.append(f"    Note: {h['note'][:80]}")
+        
+        # Recently finished
+        finished = reading.get("recently_finished", [])
+        if finished:
+            reading_lines.append(f"\nRecently finished:")
+            for book in finished[:3]:
+                title = book.get("title", "Unknown")
+                rating = book.get("rating")
+                rating_str = f" ({'⭐' * rating})" if rating else ""
+                reading_lines.append(f"  - {title}{rating_str}")
+        
+        if reading_lines:
+            context_parts.append("READING:\n" + "\n".join(reading_lines))
+
     context = "\n\n".join(context_parts) if context_parts else "No significant activities recorded today."
     return context, people_mentioned
 
@@ -184,7 +225,8 @@ def _build_message(
     meetings: List[str],
     prompts: List[str],
     people_summary: str,
-    screen_time: Optional[dict] = None
+    screen_time: Optional[dict] = None,
+    reading: Optional[dict] = None
 ) -> str:
     now = datetime.utcnow()
     lines: list[str] = []
@@ -202,6 +244,25 @@ def _build_message(
         lines.append("**Meetings:**")
         lines.extend(f"- {item}" for item in meetings)
         lines.append("")
+
+    # Include reading progress if available
+    if reading:
+        currently_reading = reading.get("currently_reading", [])
+        todays_highlights = reading.get("todays_highlights", [])
+        
+        if currently_reading or todays_highlights:
+            lines.append("**📚 Reading:**")
+            
+            if currently_reading:
+                for book in currently_reading[:2]:
+                    title = book.get("title", "Unknown")
+                    progress = book.get("progress_percent", 0)
+                    lines.append(f"- {title}: {progress}% complete")
+            
+            if todays_highlights:
+                lines.append(f"- {len(todays_highlights)} new highlight(s) today")
+            
+            lines.append("")
 
     # Include screen time summary if available
     if screen_time:
@@ -242,12 +303,16 @@ async def generate_evening_journal_prompt(request: JournalPromptRequest) -> Jour
         meetings = _limit_items(analysis.get("meetings", []), limit=MAX_LIST_ITEMS)
         reflection_prompts = _limit_items(analysis.get("reflection_prompts", []), limit=3)
 
-        # Get screen time for message template
+        # Get screen time and reading data for message template
         screen_time = None
         if request.activity_data.screen_time:
             screen_time = request.activity_data.screen_time
+        
+        reading = None
+        if request.activity_data.reading:
+            reading = request.activity_data.reading
 
-        message = _build_message(highlights, meetings, reflection_prompts, people_summary, screen_time)
+        message = _build_message(highlights, meetings, reflection_prompts, people_summary, screen_time, reading)
 
         return JournalPromptResponse(
             status="success",

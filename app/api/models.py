@@ -139,6 +139,7 @@ class DailyActivityData(BaseModel):
     reflections: List[Dict[str, Any]] = Field(default_factory=list)
     journals: List[Dict[str, Any]] = Field(default_factory=list)
     screen_time: Optional[Dict[str, Any]] = Field(default=None, description="ActivityWatch screen time summary")
+    reading: Optional[Dict[str, Any]] = Field(default=None, description="Reading progress and highlights")
 
 class JournalPromptRequest(BaseModel):
     """Request for AI-generated evening journal prompt."""
