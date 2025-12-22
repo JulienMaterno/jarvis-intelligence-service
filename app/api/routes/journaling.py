@@ -102,6 +102,31 @@ def _collect_activity_context(request: JournalPromptRequest) -> tuple[str, Set[s
         if highlights:
             context_parts.append("JOURNAL HIGHLIGHTS:\n- " + "\n- ".join(_limit_items(highlights)))
 
+    # Screen time from ActivityWatch
+    if activity_data.screen_time:
+        st = activity_data.screen_time
+        screen_lines: list[str] = []
+        
+        if st.get("total_active_hours"):
+            screen_lines.append(f"Total active screen time: {st['total_active_hours']}h")
+        if st.get("productive_hours"):
+            screen_lines.append(f"Productive time: {st['productive_hours']}h")
+        if st.get("distracting_hours"):
+            screen_lines.append(f"Distracting time: {st['distracting_hours']}h")
+        
+        top_apps = st.get("top_apps", [])
+        if top_apps:
+            app_names = [app.get("app", app) if isinstance(app, dict) else str(app) for app in top_apps[:5]]
+            screen_lines.append(f"Top apps: {', '.join(app_names)}")
+        
+        top_sites = st.get("top_sites", [])
+        if top_sites:
+            site_names = [site.get("site", site) if isinstance(site, dict) else str(site) for site in top_sites[:5]]
+            screen_lines.append(f"Top websites: {', '.join(site_names)}")
+        
+        if screen_lines:
+            context_parts.append("SCREEN TIME (ActivityWatch):\n" + "\n".join(screen_lines))
+
     context = "\n\n".join(context_parts) if context_parts else "No significant activities recorded today."
     return context, people_mentioned
 
@@ -154,7 +179,13 @@ Respond ONLY in valid JSON format:
 """
 
 
-def _build_message(highlights: List[str], meetings: List[str], prompts: List[str], people_summary: str) -> str:
+def _build_message(
+    highlights: List[str],
+    meetings: List[str],
+    prompts: List[str],
+    people_summary: str,
+    screen_time: Optional[dict] = None
+) -> str:
     now = datetime.utcnow()
     lines: list[str] = []
 
@@ -170,6 +201,21 @@ def _build_message(highlights: List[str], meetings: List[str], prompts: List[str
     if meetings:
         lines.append("**Meetings:**")
         lines.extend(f"- {item}" for item in meetings)
+        lines.append("")
+
+    # Include screen time summary if available
+    if screen_time:
+        lines.append("**Screen Time:**")
+        if screen_time.get("total_active_hours"):
+            lines.append(f"- Active: {screen_time['total_active_hours']}h")
+        if screen_time.get("productive_hours"):
+            lines.append(f"- Productive: {screen_time['productive_hours']}h")
+        if screen_time.get("distracting_hours"):
+            lines.append(f"- Distracting: {screen_time['distracting_hours']}h")
+        top_apps = screen_time.get("top_apps", [])
+        if top_apps:
+            app_names = [app.get("app", app) if isinstance(app, dict) else str(app) for app in top_apps[:3]]
+            lines.append(f"- Top apps: {', '.join(app_names)}")
         lines.append("")
 
     if prompts:
@@ -196,7 +242,12 @@ async def generate_evening_journal_prompt(request: JournalPromptRequest) -> Jour
         meetings = _limit_items(analysis.get("meetings", []), limit=MAX_LIST_ITEMS)
         reflection_prompts = _limit_items(analysis.get("reflection_prompts", []), limit=3)
 
-        message = _build_message(highlights, meetings, reflection_prompts, people_summary)
+        # Get screen time for message template
+        screen_time = None
+        if request.activity_data.screen_time:
+            screen_time = request.activity_data.screen_time
+
+        message = _build_message(highlights, meetings, reflection_prompts, people_summary, screen_time)
 
         return JournalPromptResponse(
             status="success",
