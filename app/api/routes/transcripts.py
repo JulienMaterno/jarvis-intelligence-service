@@ -13,11 +13,16 @@ logger = logging.getLogger("Jarvis.Intelligence.API.Transcripts")
 async def _send_processing_notification(db_records: dict, analysis: dict) -> None:
     """Send Telegram notification with processing results."""
     try:
-        message = build_processing_result_message(db_records, analysis)
+        category = analysis.get("primary_category", "other")
+        message = build_processing_result_message(
+            category=category,
+            db_records=db_records,
+            analysis=analysis
+        )
         await send_telegram_message(message)
         logger.info("Sent Telegram notification for transcript processing")
     except Exception as e:
-        logger.warning("Failed to send Telegram notification: %s", e)
+        logger.error("Failed to send Telegram notification: %s", e, exc_info=True)
 
 
 def _ensure_task_creation(

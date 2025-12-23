@@ -131,20 +131,18 @@ def build_processing_result_message(
             lines.append(f"  {item}")
         lines.append("")
     
-    # Contact linking feedback
+    # Contact linking feedback - only show linked contacts, skip unlinked
     contact_matches = db_records.get("contact_matches", [])
-    if contact_matches:
+    linked_contacts = [m for m in contact_matches if m.get("matched")]
+    if linked_contacts:
         lines.append("*Contacts:*")
-        for match in contact_matches:
+        for match in linked_contacts:
             name = match.get("searched_name", "Unknown")
-            if match.get("matched"):
-                linked = match.get("linked_contact", {})
-                linked_name = linked.get("name", name)
-                company = linked.get("company", "")
-                company_str = f" ({company})" if company else ""
-                lines.append(f"  👤 Linked: {linked_name}{company_str}")
-            elif match.get("suggestions"):
-                lines.append(f"  ⚠️ Unknown: {name}")
+            linked = match.get("linked_contact", {})
+            linked_name = linked.get("name", name)
+            company = linked.get("company", "")
+            company_str = f" ({company})" if company else ""
+            lines.append(f"  👤 Linked: {linked_name}{company_str}")
         lines.append("")
     
     # Footer with feedback options

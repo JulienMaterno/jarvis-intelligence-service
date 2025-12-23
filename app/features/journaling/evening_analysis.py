@@ -54,6 +54,7 @@ class JournalAnalysisRequest(BaseModel):
     activity_data: ActivityData
     user_name: Optional[str] = None
     timezone: str = "UTC"
+    previous_journals: Optional[List[Dict]] = None  # Last few journal entries for context
 
 
 class JournalAnalysisResponse(BaseModel):
@@ -256,10 +257,32 @@ def build_activity_context(data: ActivityData) -> str:
 # PROMPT ENGINEERING
 # =============================================================================
 
-def build_analysis_prompt(context: str, user_name: Optional[str] = None) -> str:
+def build_analysis_prompt(context: str, user_name: Optional[str] = None, previous_journals: Optional[List[Dict]] = None) -> str:
     """Build the prompt for Claude to analyze the day and generate journal content."""
     
     name_ref = user_name or "the user"
+    
+    # Add previous journals context if available
+    previous_context = ""
+    if previous_journals:
+        prev_lines = []
+        for j in previous_journals[:3]:  # Last 3 days
+            date = j.get("date", "Unknown")
+            content = j.get("content", "")[:500]
+            if content:
+                prev_lines.append(f"--- {date} ---\n{content}\n")
+        
+        if prev_lines:
+            previous_context = f"""
+
+RECENT JOURNAL ENTRIES (for context and continuity):
+{chr(10).join(prev_lines)}
+
+Use this context to:
+- Reference ongoing themes or projects
+- Note progress on things mentioned before
+- Connect today's events to recent patterns
+"""
     
     return f"""You are a thoughtful, observant personal AI assistant helping {name_ref} reflect on their day. You have access to everything that happened in the last 24 hours.
 
@@ -267,10 +290,11 @@ Your role is to:
 1. Identify the most meaningful moments and accomplishments
 2. Notice patterns, themes, or interesting observations
 3. Ask deep, thoughtful questions that encourage genuine reflection
-4. Help create a valuable journal entry
+4. Help create a valuable journal summary
 
 TODAY'S ACTIVITIES (Last 24 hours):
 {context}
+{previous_context}
 
 Based on this comprehensive view of the day, generate a JSON response with:
 
@@ -296,11 +320,13 @@ Based on this comprehensive view of the day, generate a JSON response with:
    - "How do you feel about your day?"
    - "What did you learn today?"
 
-5. "journal_content" - A 2-3 paragraph journal entry written in first person as if {name_ref} wrote it. Include:
-   - What happened today (be specific)
-   - How things went
-   - Any thoughts or reflections
-   - Make it feel personal and authentic, not robotic
+5. "journal_content" - A 2-3 paragraph DESCRIPTION of {name_ref}'s day. IMPORTANT RULES:
+   - Write in THIRD PERSON, describing what {name_ref} did (NOT first person "I did...")
+   - Example: "{name_ref} started the day with..." or "Today, {name_ref} focused on..."
+   - Be specific about events, accomplishments, and notable moments
+   - Include any observations about patterns or themes
+   - This is an observer's summary, not a personal diary entry
+   - Keep a warm but objective tone
 
 Respond ONLY in valid JSON format:
 {{
@@ -464,8 +490,12 @@ def analyze_day_for_journal(request: JournalAnalysisRequest) -> JournalAnalysisR
         # Build context from all activities
         context = build_activity_context(request.activity_data)
         
-        # Build prompt and call Claude
-        prompt = build_analysis_prompt(context, request.user_name)
+        # Build prompt with previous journals context and call Claude
+        prompt = build_analysis_prompt(
+            context, 
+            request.user_name,
+            previous_journals=request.previous_journals
+        )
         analysis = call_claude_for_analysis(prompt)
         
         # Get summary for stats
