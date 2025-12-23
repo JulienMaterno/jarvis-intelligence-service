@@ -7,14 +7,86 @@ from typing import Iterable, List, Optional, Sequence, Set
 
 import anthropic
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-from app.api.models import JournalPromptRequest, JournalPromptResponse
+# Import the new enhanced analysis module
+from app.features.journaling.evening_analysis import (
+    analyze_day_for_journal,
+    JournalAnalysisRequest,
+    JournalAnalysisResponse,
+    ActivityData,
+)
 
 router = APIRouter(tags=["Journaling"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Journaling")
 
 MODEL_ID = os.getenv("CLAUDE_JOURNAL_MODEL", "claude-sonnet-4-5-20250929")
 MAX_LIST_ITEMS = 10
+
+
+# =============================================================================
+# LEGACY MODELS (for backwards compatibility)
+# =============================================================================
+
+class LegacyActivityData(BaseModel):
+    """Legacy activity data model for backwards compatibility."""
+    meetings: List[dict] = Field(default_factory=list)
+    calendar_events: List[dict] = Field(default_factory=list)
+    emails: List[dict] = Field(default_factory=list)
+    tasks_completed: List[dict] = Field(default_factory=list)
+    tasks_created: List[dict] = Field(default_factory=list)
+    reflections: List[dict] = Field(default_factory=list)
+    journals: List[dict] = Field(default_factory=list)
+    screen_time: Optional[dict] = None
+    reading: Optional[dict] = None
+    highlights: List[dict] = Field(default_factory=list)
+
+
+class JournalPromptRequest(BaseModel):
+    """Request for evening journal prompt - supports both legacy and new format."""
+    activity_data: LegacyActivityData
+    user_name: Optional[str] = None
+    timezone: str = "UTC"
+
+
+class JournalPromptResponse(BaseModel):
+    """Response with evening journal prompt."""
+    status: str
+    highlights: List[str] = Field(default_factory=list)
+    reflection_prompts: List[str] = Field(default_factory=list)  # Legacy name
+    reflection_questions: List[str] = Field(default_factory=list)  # New name
+    observations: List[str] = Field(default_factory=list)
+    people_summary: str = ""
+    message: str = ""
+    journal_content: str = ""
+
+
+# =============================================================================
+# NEW ENHANCED ENDPOINT
+# =============================================================================
+
+@router.post("/journal/evening-analysis", response_model=JournalAnalysisResponse)
+async def generate_evening_analysis(request: JournalAnalysisRequest) -> JournalAnalysisResponse:
+    """
+    NEW ENHANCED ENDPOINT: Generate comprehensive evening journal analysis.
+    
+    This endpoint analyzes all daily activities and generates:
+    - Key highlights from the day
+    - Thoughtful reflection questions based on specific events
+    - Observations and patterns noticed
+    - Auto-generated journal content
+    - Formatted Telegram message
+    """
+    try:
+        return analyze_day_for_journal(request)
+    except Exception as exc:
+        logger.exception("Failed to generate evening analysis")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# LEGACY ENDPOINT (maintained for backwards compatibility)
+# =============================================================================
 
 
 def _limit_items(items: Sequence[str], limit: int = MAX_LIST_ITEMS) -> List[str]:
