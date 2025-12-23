@@ -268,7 +268,8 @@ def build_analysis_prompt(context: str, user_name: Optional[str] = None, previou
         prev_lines = []
         for j in previous_journals[:3]:  # Last 3 days
             date = j.get("date", "Unknown")
-            content = j.get("content", "")[:500]
+            content = j.get("content") or ""  # Handle None content
+            content = content[:500] if content else ""
             if content:
                 prev_lines.append(f"--- {date} ---\n{content}\n")
         
