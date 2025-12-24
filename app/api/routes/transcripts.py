@@ -4,7 +4,11 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.api.dependencies import get_services
 from app.api.models import AnalysisResponse, TranscriptRequest
 from app.services.sync_trigger import trigger_syncs_for_records
-from app.features.telegram import send_telegram_message, build_processing_result_message
+from app.features.telegram import (
+    send_telegram_message, 
+    build_processing_result_message,
+    send_meeting_feedback,
+)
 
 router = APIRouter(tags=["Transcripts"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Transcripts")
@@ -23,6 +27,38 @@ async def _send_processing_notification(db_records: dict, analysis: dict) -> Non
         logger.info("Sent Telegram notification for transcript processing")
     except Exception as e:
         logger.error("Failed to send Telegram notification: %s", e, exc_info=True)
+
+
+async def _send_meeting_feedback_notifications(
+    meeting_ids: list, 
+    meetings_data: list, 
+    contact_matches: list
+) -> None:
+    """
+    Send feedback notifications for each meeting created.
+    This triggers for ALL meetings, whether standalone or with journals.
+    """
+    if not meeting_ids or not meetings_data:
+        return
+    
+    try:
+        for i, (meeting_id, meeting_data) in enumerate(zip(meeting_ids, meetings_data)):
+            # Find matching contact info for this meeting
+            contact_match = None
+            for cm in contact_matches:
+                if cm.get("meeting_id") == meeting_id:
+                    contact_match = cm
+                    break
+            
+            # Send feedback message for this meeting
+            await send_meeting_feedback(
+                meeting_id=meeting_id,
+                meeting_data=meeting_data,
+                contact_match=contact_match
+            )
+            logger.info(f"Sent meeting feedback for: {meeting_data.get('title', 'Untitled')}")
+    except Exception as e:
+        logger.error("Failed to send meeting feedback notifications: %s", e, exc_info=True)
 
 
 def _ensure_task_creation(
@@ -200,8 +236,19 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
                 )
                 db_records["task_ids"].extend(task_ids)
 
+        # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        
+        # Send meeting feedback for EACH meeting (even if created with journal)
+        if db_records["meeting_ids"]:
+            background_tasks.add_task(
+                _send_meeting_feedback_notifications,
+                db_records["meeting_ids"],
+                analysis.get("meetings", []),
+                db_records["contact_matches"]
+            )
+        
         logger.info("Scheduled sync triggers for records from transcript %s", transcript_id)
 
         return AnalysisResponse(status="success", analysis=analysis, db_records=db_records)
@@ -356,8 +403,19 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                 )
                 db_records["task_ids"].extend(task_ids)
 
+        # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        
+        # Send meeting feedback for EACH meeting (even if created with journal)
+        if db_records["meeting_ids"]:
+            background_tasks.add_task(
+                _send_meeting_feedback_notifications,
+                db_records["meeting_ids"],
+                analysis.get("meetings", []),
+                db_records["contact_matches"]
+            )
+        
         logger.info("Scheduled sync triggers for new transcript %s", transcript_id)
 
         return AnalysisResponse(status="success", analysis=analysis, db_records=db_records)

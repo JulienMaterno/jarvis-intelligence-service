@@ -151,6 +151,116 @@ def build_processing_result_message(
     return "\n".join(lines)
 
 
+def build_meeting_feedback_message(
+    meeting_id: str,
+    meeting_data: Dict[str, Any],
+    contact_match: Dict[str, Any] = None
+) -> str:
+    """
+    Build a meeting-specific feedback message with correction options.
+    
+    This message asks the user to confirm or correct:
+    - Meeting title and summary
+    - Contact association
+    - Topics discussed
+    - Follow-up items
+    
+    Args:
+        meeting_id: UUID of the created meeting
+        meeting_data: The meeting analysis data
+        contact_match: Optional contact matching info
+    
+    Returns:
+        Formatted message with feedback options
+    """
+    lines = []
+    
+    title = meeting_data.get("title", "Untitled Meeting")
+    person = meeting_data.get("person_name", "")
+    summary = meeting_data.get("summary", "")[:200]
+    date = meeting_data.get("date", "today")
+    topics = meeting_data.get("topics_discussed", [])
+    
+    lines.append(f"📅 *Meeting Created*")
+    lines.append("")
+    lines.append(f"*{title}*")
+    if person:
+        lines.append(f"With: {person}")
+    lines.append(f"Date: {date}")
+    lines.append("")
+    
+    if summary:
+        lines.append(f"_{summary}_")
+        lines.append("")
+    
+    if topics:
+        lines.append("*Topics discussed:*")
+        for t in topics[:5]:
+            if isinstance(t, dict):
+                topic_name = t.get("topic", "")
+                lines.append(f"  • {topic_name}")
+            else:
+                lines.append(f"  • {t}")
+        lines.append("")
+    
+    # Contact linking status
+    if contact_match:
+        if contact_match.get("matched"):
+            linked = contact_match.get("linked_contact", {})
+            linked_name = linked.get("name", person)
+            company = linked.get("company", "")
+            company_str = f" ({company})" if company else ""
+            lines.append(f"👤 Linked to: {linked_name}{company_str}")
+        else:
+            searched_name = contact_match.get("searched_name", person)
+            suggestions = contact_match.get("suggestions", [])
+            
+            lines.append(f"❓ *Contact not found:* {searched_name}")
+            if suggestions:
+                lines.append("Reply with a number to link:")
+                for i, s in enumerate(suggestions[:5], 1):
+                    name = s.get("name", "Unknown")
+                    company = s.get("company", "")
+                    company_str = f" ({company})" if company else ""
+                    lines.append(f"  {i}. {name}{company_str}")
+                lines.append("  0. Skip")
+                lines.append("  Or type the correct name")
+            else:
+                lines.append("Type the correct name or '0' to skip")
+        lines.append("")
+    
+    # Feedback prompt
+    lines.append("*Is this correct?*")
+    lines.append("• Reply 'yes' or ✓ if correct")
+    lines.append("• Reply with corrections if not")
+    lines.append(f"• Meeting ID: `{meeting_id[:8]}...`")
+    
+    return "\n".join(lines)
+
+
+async def send_meeting_feedback(
+    meeting_id: str,
+    meeting_data: Dict[str, Any],
+    contact_match: Dict[str, Any] = None,
+    chat_id: int = None
+) -> bool:
+    """
+    Send a meeting feedback message to Telegram.
+    Called whenever a meeting is created.
+    
+    Args:
+        meeting_id: UUID of the created meeting
+        meeting_data: The meeting analysis data  
+        contact_match: Optional contact matching info
+        chat_id: Target chat ID (defaults to TELEGRAM_CHAT_ID)
+    
+    Returns:
+        True if sent successfully
+    """
+    message = build_meeting_feedback_message(meeting_id, meeting_data, contact_match)
+    return await send_telegram_message(message, chat_id=chat_id)
+
+
 def build_journal_day_summary_message(
     journal_data: Dict[str, Any],
     reflection_prompts: List[str] = None
