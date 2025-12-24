@@ -18,23 +18,36 @@ _CLAUDE_MODEL_FALLBACKS = [
 ]
 _CLAUDE_MODEL_OPTIONS = [_CLAUDE_MODEL_PRIMARY] + [m for m in _CLAUDE_MODEL_FALLBACKS if m and m != _CLAUDE_MODEL_PRIMARY]
 
+# Service URLs (single source of truth)
 _SYNC_SERVICE_URL = os.getenv('SYNC_SERVICE_URL', 'https://jarvis-sync-service-776871804948.asia-southeast1.run.app')
+_TELEGRAM_BOT_URL = os.getenv('TELEGRAM_BOT_URL', 'https://jarvis-telegram-bot-qkz4et4n4q-as.a.run.app')
+_AUDIO_PIPELINE_URL = os.getenv('AUDIO_PIPELINE_URL', 'https://jarvis-audio-pipeline-qkz4et4n4q-as.a.run.app')
+
+# Telegram config
+_TELEGRAM_CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID', '0'))
 
 
 class Config:
     """Central configuration for the intelligence service."""
 
+    # Database
     SUPABASE_URL = _SUPABASE_URL
     SUPABASE_KEY = _SUPABASE_KEY
 
+    # AI/LLM
     ANTHROPIC_API_KEY = _ANTHROPIC_API_KEY
-
     CLAUDE_MODEL_PRIMARY = _CLAUDE_MODEL_PRIMARY
     CLAUDE_MODEL_FALLBACKS = _CLAUDE_MODEL_FALLBACKS
     CLAUDE_MODEL = _CLAUDE_MODEL_PRIMARY
     CLAUDE_MODEL_OPTIONS = _CLAUDE_MODEL_OPTIONS
 
+    # Service URLs
     SYNC_SERVICE_URL = _SYNC_SERVICE_URL
+    TELEGRAM_BOT_URL = _TELEGRAM_BOT_URL
+    AUDIO_PIPELINE_URL = _AUDIO_PIPELINE_URL
+    
+    # Telegram
+    TELEGRAM_CHAT_ID = _TELEGRAM_CHAT_ID
 
 
 settings = Config()

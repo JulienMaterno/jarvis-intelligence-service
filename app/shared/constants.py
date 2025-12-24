@@ -1,6 +1,11 @@
 """
 Shared constants and configuration for the Intelligence Service.
+
+Note: Service URLs and Telegram config are now centralized in app.core.config.
+This module re-exports them for backwards compatibility.
 """
+
+from app.core.config import settings
 
 # Valid primary categories for transcript analysis
 PRIMARY_CATEGORIES = {
@@ -11,14 +16,11 @@ PRIMARY_CATEGORIES = {
     "other",
 }
 
-# Telegram bot chat ID for notifications (from env in production)
-import os
-TELEGRAM_BOT_URL = os.getenv("TELEGRAM_BOT_URL", "https://jarvis-telegram-bot-qkz4et4n4q-as.a.run.app")
-TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0"))
-
-# Service URLs
-SYNC_SERVICE_URL = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
-AUDIO_PIPELINE_URL = os.getenv("AUDIO_PIPELINE_URL", "https://jarvis-audio-pipeline-qkz4et4n4q-as.a.run.app")
-
 # Language settings
 OUTPUT_LANGUAGE = "English"  # All outputs should be in English regardless of input language
+
+# Re-export from centralized config (for backwards compatibility)
+TELEGRAM_BOT_URL = settings.TELEGRAM_BOT_URL
+TELEGRAM_CHAT_ID = settings.TELEGRAM_CHAT_ID
+SYNC_SERVICE_URL = settings.SYNC_SERVICE_URL
+AUDIO_PIPELINE_URL = settings.AUDIO_PIPELINE_URL
