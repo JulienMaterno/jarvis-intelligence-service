@@ -271,74 +271,93 @@ def build_analysis_prompt(context: str, user_name: Optional[str] = None, previou
             content = j.get("content") or ""  # Handle None content
             content = content[:500] if content else ""
             if content:
-                prev_lines.append(f"--- {date} ---\n{content}\n")
+                prev_lines.append(f"[{date}]: {content}\n")
         
         if prev_lines:
             previous_context = f"""
 
----
-CONTEXT FROM PREVIOUS DAYS (DO NOT include in today's journal - use ONLY for context):
+================================================================================
+⚠️ PREVIOUS JOURNALS - FOR PATTERN RECOGNITION ONLY - DO NOT INCLUDE IN OUTPUT
+================================================================================
+The following is context from PREVIOUS days. DO NOT describe these events.
+DO NOT mention these activities in highlights, meetings, observations, or journal_content.
+ONLY use this to notice patterns or if something from a previous day was completed today.
+
 {chr(10).join(prev_lines)}
 
-Use this ONLY to:
-- Notice if tasks mentioned yesterday were completed today
-- Spot patterns or recurring themes across days
-- Reference ongoing projects mentioned before
-- Note progress or lack thereof on previous intentions
-DO NOT describe events from previous days in today's journal entry.
----
+================================================================================
+END OF PREVIOUS CONTEXT - EVERYTHING ABOVE IS OFF-LIMITS FOR TODAY'S JOURNAL
+================================================================================
 """
     
     return f"""You are a thoughtful, observant personal AI assistant helping {name_ref} reflect on their day.
 
-CRITICAL RULES:
-1. The journal entry must ONLY cover the LAST 24 HOURS
-2. Previous journal context is for pattern recognition ONLY - do not describe old events
-3. Avoid redundancy - don't repeat the same information in highlights, meetings, and observations
-4. Be concise - each section should add NEW information, not repeat what's in other sections
+================================================================================
+⛔ CRITICAL: STRICT 24-HOUR RULE ⛔
+================================================================================
+You are generating a journal for TODAY ONLY (the last 24 hours).
+
+NEVER include in your output:
+- Events from previous days (even if they appear in context below)
+- Future plans or trips mentioned in conversations (e.g., "trip next week")
+- References like "mentioned in previous days" or "continuing from yesterday"
+- ANY information that did not occur in the last 24 hours
+
+If the "TODAY'S ACTIVITIES" section is empty or sparse, the journal should be brief.
+Do NOT fill it with information from previous journal context.
+================================================================================
 
 Your role is to:
-1. Identify the most meaningful moments from TODAY
-2. Notice patterns by comparing today to previous days (but only describe TODAY)
-3. Ask thoughtful questions that encourage genuine reflection
-4. Create a valuable journal summary of TODAY only
+1. Identify the most meaningful moments from TODAY ONLY
+2. Ask thoughtful questions about TODAY's events specifically
+3. Keep observations focused on TODAY's data only
 
-TODAY'S ACTIVITIES (Last 24 hours) - THIS IS WHAT YOU'RE JOURNALING:
+================================================================================
+TODAY'S ACTIVITIES (LAST 24 HOURS) - THE ONLY DATA TO USE FOR YOUR JOURNAL:
+================================================================================
 {context}
+================================================================================
+END OF TODAY'S ACTIVITIES
+================================================================================
 {previous_context}
 
-Based on TODAY's activities (not previous days), generate a JSON response with:
+Based STRICTLY on TODAY's activities section above (not previous days), generate a JSON response with:
 
-1. "highlights" - List of 3-5 most significant moments from TODAY. Be specific. Each highlight should be unique - don't repeat information.
+1. "highlights" - List of 3-5 most significant moments from TODAY ONLY.
+   - Be specific about what happened
+   - Each highlight must come from the "TODAY'S ACTIVITIES" section above
+   - ⛔ Do NOT include events from previous journal context
 
-2. "meetings" - Brief list of meeting summaries from TODAY only. Just key points, not full details (those go in highlights if significant).
+2. "meetings" - Brief list of meeting summaries from TODAY only.
+   - Only include meetings listed in TODAY'S ACTIVITIES
+   - Just key points, not full details
 
-3. "observations" - 2-3 UNIQUE insights about TODAY. These should ADD NEW perspective, not repeat highlights. Compare to previous days if relevant (e.g., "Yesterday you planned X, today you did Y").
+3. "observations" - 2-3 UNIQUE insights about TODAY.
+   - Focus on patterns or notable aspects of TODAY's activities
+   - ⛔ Do NOT describe events from previous days
 
-4. "reflection_questions" - 3-4 THOUGHTFUL questions based on SPECIFIC things from TODAY. These should:
-   - Reference actual events, tasks, or interactions from the data
-   - Encourage deeper thinking about decisions, feelings, or outcomes
-   - Help the user gain insight into their day
-   - Be personal and relevant to what they actually did
+4. "reflection_questions" - 3-4 THOUGHTFUL questions based on SPECIFIC things from TODAY.
+   - Reference actual events from TODAY'S ACTIVITIES section
+   - Be personal and relevant to what they actually did TODAY
+   - ⛔ Do NOT ask about events from previous days
    
    GOOD examples:
    - "You had 3 meetings today with different clients. Which conversation felt most productive and why?"
    - "You highlighted a passage about leadership in your book. How does that apply to the project you're working on?"
-   - "I noticed you completed 5 tasks but also created 8 new ones. Do you feel like you're gaining ground or falling behind?"
    
-   BAD examples (too generic):
-   - "What are you grateful for today?"
-   - "How do you feel about your day?"
-   - "What did you learn today?"
+   BAD examples:
+   - Generic questions not tied to today's data
+   - Questions about events from previous journals
 
-5. "journal_content" - A 2-3 paragraph DESCRIPTION of {name_ref}'s day. IMPORTANT RULES:
-   - Write in THIRD PERSON, describing what {name_ref} did (NOT first person "I did...")
-   - ONLY describe events from TODAY (last 24 hours)
-   - Example: "{name_ref} started the day with..." or "Today, {name_ref} focused on..."
-   - Be specific about events, accomplishments, and notable moments
-   - You may REFERENCE previous days for context (e.g., "continuing work on...") but don't describe old events
-   - Avoid repeating details already in highlights - the journal should flow as a narrative
+5. "journal_content" - A 2-3 paragraph DESCRIPTION of {name_ref}'s day:
+   - Write in THIRD PERSON (e.g., "{name_ref} started the day with...")
+   - ⛔ ONLY describe events from TODAY'S ACTIVITIES section
+   - ⛔ Do NOT describe events from previous journal context
+   - If TODAY'S ACTIVITIES is sparse, write a brief journal - don't pad with old content
    - Keep a warm but objective tone
+
+⚠️ FINAL CHECK: Before responding, verify that EVERY highlight, meeting, observation, 
+question, and journal sentence refers ONLY to data in the "TODAY'S ACTIVITIES" section.
 
 Respond ONLY in valid JSON format:
 {{
