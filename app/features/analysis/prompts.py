@@ -173,40 +173,65 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
 **CRITICAL RULES:**
 
-1. **Primary Category** - Set based on main content:
+1. **RESPECT USER INSTRUCTIONS** - This is the MOST IMPORTANT rule:
+   - If the user explicitly says "don't create a meeting", "no meeting record", "skip the meeting" → DO NOT create a meeting entry
+   - If the user says "this is not a task", "don't add as task", "just noting" → DO NOT create a task
+   - If the user says "don't record this", "off the record", "just thinking out loud" → minimize/skip extraction
+   - Listen for phrases like "I'm not asking you to...", "don't make a...", "this is just for context"
+   - The user's explicit instructions ALWAYS override your automatic categorization
+   - When in doubt about user intent, err on the side of NOT creating records
+
+2. **Primary Category** - Set based on main content:
    - "journal" if this is about daily events, planning, or has journal indicators
    - "meeting" if primarily about conversation with someone
    - "reflection" if deeper thoughts on a specific topic
    - "task_planning" if mainly about organizing tasks
    - "other" if none apply
 
-2. **ALWAYS EXTRACT TASKS** - Listen carefully for action items:
-   - "I need to...", "I should...", "I have to...", "Tomorrow I will..."
-   - "gotta do X", "must remember to...", "need to reach out to..."
-   - Things to buy, people to contact, places to go, things to fix
-   - From tomorrow_focus in journals, also create separate task entries!
+3. **STRICT TASK EXTRACTION** - Only create tasks for ACTUAL action items:
    
-   GOOD tasks: "Get new cash", "Buy ear plugs", "Text Alinta", "Respond to Will"
-   NOT tasks: "Flying to Bali" (that's an event, not an action item)
+   ✅ GOOD tasks (require effort/action from user):
+   - "I need to get new cash" → task: "Get new cash"
+   - "Buy ear plugs before the flight" → task: "Buy ear plugs"
+   - "Text Alinta about dinner" → task: "Text Alinta about dinner"
+   - "Respond to Will's email" → task: "Respond to Will's email"
+   - "Book dentist appointment" → task: "Book dentist appointment"
+   
+   ❌ NOT tasks (just context, events, or reminders for conversation):
+   - "Next time I talk to John I should ask about his project" → This is MEETING FOLLOW-UP context, put in "follow_up_conversation" field
+   - "When I see her again I want to mention X" → MEETING FOLLOW-UP, not a task
+   - "Flying to Bali tomorrow" → This is an EVENT, not a task
+   - "Meeting with Sarah at 3pm" → This is an EVENT, not a task
+   - "I wonder if I should..." → This is a THOUGHT, not a task
+   - "It would be nice to..." → This is a WISH, not a task
+   - "Remember to ask X about Y" → Only a task if there's a clear action; otherwise it's meeting follow-up
 
-3. **JOURNALS** - Create a journal if the recording is about the day:
+   KEY DISTINCTION:
+   - "Ask John about his vacation" with no specific timing = put in meeting's follow_up_conversation
+   - "Send John an email asking about vacation" = THIS is a task (specific action: send email)
+
+4. **JOURNALS** - Create a journal if the recording is about the day:
    - One journal per day (use the date)
    - Extract mood/effort ONLY if explicitly mentioned
    - "tomorrow_focus" should capture ALL things mentioned for tomorrow
    - You CAN create BOTH a journal AND reflections from one recording
+   - Items in "tomorrow_focus" should be brief reminders, not necessarily tasks
 
-4. **REFLECTIONS** - For topic-based thoughts:
+5. **REFLECTIONS** - For topic-based thoughts:
    - Use existing topic_key if content fits an existing topic
    - Create new topic_key for genuinely new topics
    - Multiple reflections OK if multiple topics discussed
    - "content" should be COMPREHENSIVE (70-90% of relevant substance)
 
-5. **MEETINGS** - For conversations with people:
+6. **MEETINGS** - For conversations with people:
    - "person_name" is the PRIMARY person met with
    - "people_mentioned" is everyone else discussed
    - Only the PRIMARY person gets a CRM update
+   - Use "follow_up_conversation" for things to discuss NEXT TIME you see this person
+     Example: "Next time I see John, ask about his startup" → goes in follow_up_conversation, NOT tasks
+   - follow_up_conversation is for CONVERSATIONAL reminders, not action items
 
-6. **CRM** - Only for the person actually met with:
+7. **CRM** - Only for the person actually met with:
    - Don't create CRM entries for people merely mentioned
    - Capture personal details: family, hobbies, upcoming events
 
