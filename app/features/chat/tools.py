@@ -389,6 +389,25 @@ IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text sear
             },
             "required": []
         }
+    },
+    # Location & Timezone
+    {
+        "name": "get_user_location",
+        "description": "Get the user's current location and timezone. Use this when you need to know where the user is, their timezone, or local time for scheduling.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "get_current_time",
+        "description": "Get the current date and time in the user's timezone. Use this before any time-related questions or scheduling.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
     }
 ]
 
@@ -435,6 +454,11 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _summarize_activity(tool_input.get("period", "today"))
         elif tool_name == "who_to_contact":
             return _who_to_contact(tool_input)
+        # Location & Timezone
+        elif tool_name == "get_user_location":
+            return _get_user_location()
+        elif tool_name == "get_current_time":
+            return _get_current_time()
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -539,23 +563,32 @@ def _get_contact_history(contact_name: str) -> Dict[str, Any]:
 def _create_task(input: Dict) -> Dict[str, Any]:
     """Create a new task."""
     try:
+        now = datetime.now(timezone.utc).isoformat()
+        
         payload = {
             "title": input.get("title"),
             "description": input.get("description", ""),
             "status": "pending",
             "priority": input.get("priority", "medium"),
-            "origin_type": "chat"
+            "created_at": now,
+            "updated_at": now
         }
         
         if input.get("due_date"):
             payload["due_date"] = input["due_date"]
         
+        logger.info(f"Creating task via chat: {payload}")
         result = supabase.table("tasks").insert(payload).execute()
+        
+        if not result.data:
+            return {"error": "Insert returned no data"}
+        
         task_id = result.data[0]["id"]
         
-        logger.info(f"Created task via chat: {input.get('title')}")
+        logger.info(f"Created task via chat: {input.get('title')} -> {task_id}")
         return {"success": True, "task_id": task_id, "message": f"Task '{input.get('title')}' created"}
     except Exception as e:
+        logger.error(f"Failed to create task: {e}")
         return {"error": str(e)}
 
 
@@ -1057,3 +1090,84 @@ def _who_to_contact(input: Dict) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# =============================================================================
+# LOCATION & TIMEZONE TOOLS
+# =============================================================================
+
+def _get_user_location() -> Dict[str, Any]:
+    """Get user's stored location and timezone."""
+    try:
+        # Get location from sync_state (key-value store)
+        result = supabase.table("sync_state").select("key, value, updated_at").in_(
+            "key", ["user_location", "user_timezone", "user_city", "user_country"]
+        ).execute()
+        
+        location_data = {}
+        for row in (result.data or []):
+            location_data[row["key"]] = row["value"]
+            if row["key"] == "user_location":
+                location_data["location_updated_at"] = row["updated_at"]
+        
+        if not location_data:
+            return {
+                "error": "Location not set. User needs to share location via Telegram or iOS Shortcut.",
+                "timezone": "UTC",
+                "city": "Unknown",
+                "how_to_set": "Send a location message in Telegram, or set up an iOS Shortcut automation"
+            }
+        
+        return {
+            "latitude": location_data.get("user_location", "").split(",")[0] if "," in location_data.get("user_location", "") else None,
+            "longitude": location_data.get("user_location", "").split(",")[1] if "," in location_data.get("user_location", "") else None,
+            "timezone": location_data.get("user_timezone", "UTC"),
+            "city": location_data.get("user_city", "Unknown"),
+            "country": location_data.get("user_country", "Unknown"),
+            "updated_at": location_data.get("location_updated_at")
+        }
+    except Exception as e:
+        return {"error": str(e), "timezone": "UTC"}
+
+
+def _get_current_time() -> Dict[str, Any]:
+    """Get current time in user's timezone."""
+    try:
+        from zoneinfo import ZoneInfo
+        
+        # Get user timezone
+        result = supabase.table("sync_state").select("value").eq(
+            "key", "user_timezone"
+        ).limit(1).execute()
+        
+        user_tz = "UTC"
+        if result.data:
+            user_tz = result.data[0]["value"]
+        
+        try:
+            tz = ZoneInfo(user_tz)
+        except Exception:
+            tz = ZoneInfo("UTC")
+            user_tz = "UTC"
+        
+        now = datetime.now(tz)
+        
+        return {
+            "timezone": user_tz,
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "day_of_week": now.strftime("%A"),
+            "iso": now.isoformat(),
+            "utc_offset": now.strftime("%z")
+        }
+    except Exception as e:
+        # Fallback to UTC
+        now = datetime.now(timezone.utc)
+        return {
+            "timezone": "UTC",
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "day_of_week": now.strftime("%A"),
+            "iso": now.isoformat(),
+            "error": str(e)
+        }
