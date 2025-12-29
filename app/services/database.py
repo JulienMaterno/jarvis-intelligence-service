@@ -584,6 +584,7 @@ class SupabaseMultiDatabase:
     ) -> List[str]:
         """
         Create tasks in Supabase.
+        Checks for existing tasks with same title to prevent duplicates.
         """
         created_ids = []
         if not tasks_data:
@@ -595,6 +596,16 @@ class SupabaseMultiDatabase:
             for task in tasks_data:
                 # Support both 'title' and 'task' keys for task name
                 title = task.get('title') or task.get('task', 'Untitled Task')
+                
+                # Check if task with same title already exists (not deleted)
+                existing = self.client.table("tasks").select("id, title").eq(
+                    "title", title
+                ).is_("deleted_at", "null").limit(1).execute()
+                
+                if existing.data:
+                    logger.info(f"Task already exists, skipping: {title}")
+                    created_ids.append(existing.data[0]["id"])  # Return existing ID
+                    continue
                 
                 payload = {
                     "title": title,
