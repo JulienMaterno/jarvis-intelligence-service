@@ -19,6 +19,7 @@ This service is the **single source of intelligence**. Other services are specia
 - **Contact Linking**: Auto-matches mentioned people to CRM contacts
 - **Telegram Notifications**: Sends processing results to user
 - **Evening Journal Prompts**: Generates personalized prompts with day context
+- **Meeting Briefings**: Auto-generates context before meetings (contact history, past meetings, emails)
 - **Task Extraction**: Creates actionable tasks from any analyzed content
 
 ## 🧠 AI Models
@@ -40,7 +41,9 @@ jarvis-intelligence-service/
 │   │       ├── journaling.py  # /journal/evening-prompt
 │   │       ├── contacts.py    # Contact CRUD + linking
 │   │       ├── emails.py      # Email processing
-│   │       └── calendar.py    # Calendar integration
+│   │       ├── calendar.py    # Calendar integration
+│   │       ├── briefing.py    # Meeting briefings (scheduled + on-demand)
+│   │       └── health.py      # Health check endpoints
 │   │
 │   ├── services/
 │   │   ├── llm.py             # ClaudeMultiAnalyzer
@@ -50,6 +53,10 @@ jarvis-intelligence-service/
 │   ├── features/              # Modular feature modules
 │   │   ├── analysis/
 │   │   │   └── prompts.py     # Centralized LLM prompts
+│   │   ├── briefing/
+│   │   │   └── meeting_briefing.py  # Pre-meeting context generation
+│   │   ├── journaling/
+│   │   │   └── evening_prompts.py   # Evening journal prompt logic
 │   │   └── telegram/
 │   │       └── notifications.py
 │   │
@@ -137,6 +144,15 @@ git add -A && git commit -m "Your changes" && git push origin master
 | `/api/v1/emails` | POST | Create email record |
 | `/api/v1/calendar-events` | POST | Create calendar event |
 | `/api/v1/calendar-events/upcoming` | GET | Get upcoming events |
+
+### Briefings
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/briefings/check` | POST | Check upcoming meetings and generate briefings |
+| `/api/v1/briefings/event/{event_id}` | POST | Generate briefing for specific calendar event |
+| `/api/v1/briefings/schedule-hourly` | POST | Scan and schedule briefings (Cloud Scheduler) |
+| `/api/v1/briefings/send-due` | POST | Send due briefings (runs every minute) |
 
 ### Health
 

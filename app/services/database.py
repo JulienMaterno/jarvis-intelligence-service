@@ -335,8 +335,9 @@ class SupabaseMultiDatabase:
         
         Priority:
         1. Exact topic_key match (highest confidence)
-        2. Title contains topic_key keywords
-        3. Significant tag overlap
+        2. Topic_key in title (e.g., topic_key="project-jarvis" matches title containing "project jarvis")
+        3. Title contains topic_key keywords
+        4. Significant tag overlap
         
         Returns: The matching reflection dict or None
         """
@@ -346,22 +347,35 @@ class SupabaseMultiDatabase:
         try:
             # Normalize topic_key for searching
             topic_lower = topic_key.lower().strip()
-            topic_words = [w for w in topic_lower.split() if len(w) > 2]
+            # Convert hyphenated to space-separated for title matching
+            topic_as_title = topic_lower.replace("-", " ")
+            topic_words = [w for w in topic_lower.replace("-", " ").split() if len(w) > 2]
             
             if not topic_words:
                 return None
             
-            # Strategy 1: Search by topic_key field (exact match)
+            # Strategy 1: Search by topic_key field (exact match, case-insensitive)
             result = self.client.table("reflections").select("*").ilike(
                 "topic_key", topic_lower
             ).is_("deleted_at", "null").order("created_at", desc=True).limit(1).execute()
             
             if result.data:
-                logger.info(f"Found reflection by exact topic_key: {topic_key}")
+                logger.info(f"Found reflection by exact topic_key: {topic_key} -> '{result.data[0].get('title')}'")
                 return result.data[0]
             
-            # Strategy 2: Search by title containing key words
-            # Build OR query for title matching
+            # Strategy 2: Search by title containing the topic (space or hyphen version)
+            # This catches reflections created before topic_key was set
+            for search_term in [topic_as_title, topic_lower]:
+                if len(search_term) >= 5:  # Only search if meaningful
+                    result = self.client.table("reflections").select("*").ilike(
+                        "title", f"%{search_term}%"
+                    ).is_("deleted_at", "null").order("created_at", desc=True).limit(1).execute()
+                    
+                    if result.data:
+                        logger.info(f"Found reflection by title match: '{result.data[0].get('title')}' for topic '{topic_key}'")
+                        return result.data[0]
+            
+            # Strategy 3: Search by individual key words in title (for multi-word topics)
             for word in topic_words:
                 if len(word) >= 4:  # Only search meaningful words
                     result = self.client.table("reflections").select("*").ilike(
@@ -373,12 +387,12 @@ class SupabaseMultiDatabase:
                         for ref in result.data:
                             ref_title_lower = ref.get('title', '').lower()
                             matching_words = sum(1 for w in topic_words if w in ref_title_lower)
-                            # Good match if 2+ words match, or if it's a project/newsletter name
-                            if matching_words >= 2 or topic_lower in ref_title_lower:
-                                logger.info(f"Found reflection by title match: '{ref['title']}' for topic '{topic_key}'")
+                            # Good match if 2+ words match, or if topic_as_title is in title
+                            if matching_words >= 2 or topic_as_title in ref_title_lower:
+                                logger.info(f"Found reflection by keyword match: '{ref['title']}' for topic '{topic_key}'")
                                 return ref
             
-            # Strategy 3: Tag overlap (if tags provided)
+            # Strategy 4: Tag overlap (if tags provided)
             if tags and len(tags) >= 1:
                 for tag in tags:
                     result = self.client.table("reflections").select("*").contains(
@@ -391,7 +405,7 @@ class SupabaseMultiDatabase:
                             ref_tags = ref.get('tags', [])
                             if ref_tags:
                                 overlap = set(tags) & set(ref_tags)
-                                if len(overlap) >= 1 and topic_lower in ref.get('title', '').lower():
+                                if len(overlap) >= 1 and any(w in ref.get('title', '').lower() for w in topic_words):
                                     logger.info(f"Found reflection by tag+title match: {ref['title']}")
                                     return ref
             

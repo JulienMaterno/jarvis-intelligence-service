@@ -27,23 +27,24 @@ def build_multi_analysis_prompt(
     # Build existing topics context
     if existing_topics:
         topics_lines = "\n".join([
-            f"  - {topic.get('topic_key', 'unknown')}: \"{topic.get('title', '').strip()}\""
+            f"  - topic_key: \"{topic.get('topic_key', 'unknown')}\" | title: \"{topic.get('title', '').strip()}\""
             for topic in existing_topics[:20]
         ])
         topics_context = f"""
 **EXISTING REFLECTION TOPICS (from database):**
-These are ongoing topics already in the system. Consider whether this recording fits into one of them:
+Review these existing high-level topics before creating any new reflections:
 {topics_lines}
 
-**TOPIC ROUTING RULES:**
-- If this recording clearly relates to an existing topic → use that topic_key (content will be APPENDED)
-- If user explicitly says "new topic", "start fresh", "separate reflection" → create new topic_key
-- If the content is genuinely different from all existing topics → create new topic_key  
-- When unsure and content is substantial → prefer creating new topic (better to have too many than miss-merge)
+**IMPORTANT - TOPIC ROUTING:**
+- If this recording relates to ANY existing topic above → use that EXACT topic_key (content will be APPENDED)
+- Only create a NEW topic_key if the content is genuinely different from ALL existing topics
+- topic_keys are HIGH-LEVEL categories (e.g., "life-in-australia" not "kangaroos")
+- When in doubt, PREFER using an existing topic_key over creating a new one
 """
     else:
         topics_context = """
-**NOTE:** No existing reflection topics in database yet. Create new topic_keys as needed.
+**NOTE:** No existing reflection topics in database yet. Create HIGH-LEVEL topic_keys as needed.
+Remember: topic_keys should be broad themes (e.g., "career-development" not "job-interview-prep")
 """
 
     # Default user context if not provided
@@ -137,7 +138,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     {{
       "title": "Reflection title (max 60 chars, IN ENGLISH)",
       "date": "{recording_date}",
-      "topic_key": "lowercase-hyphenated-topic-key or null",
+      "topic_key": "high-level-topic-key (REQUIRED - see rules below)",
       "tags": ["tag1", "tag2"],
       "content": "Comprehensive markdown content capturing 70-90% of substance (IN ENGLISH)",
       "sections": [
@@ -218,10 +219,36 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Items in "tomorrow_focus" should be brief reminders, not necessarily tasks
 
 5. **REFLECTIONS** - For topic-based thoughts:
+   - **topic_key is REQUIRED** for every reflection - never leave it null
    - Use existing topic_key if content fits an existing topic
    - Create new topic_key for genuinely new topics
    - Multiple reflections OK if multiple topics discussed
    - "content" should be COMPREHENSIVE (70-90% of relevant substance)
+   
+   **TOPIC_KEY CREATION RULES (CRITICAL):**
+   - topic_keys must be HIGH-LEVEL, BROAD themes - not narrow subtopics
+   - Think "what folder would this live in?" not "what specific thing is mentioned?"
+   
+   ✅ GOOD topic_keys (high-level):
+   - "life-in-australia" (not "kangaroos" or "sydney-beaches")
+   - "career-development" (not "salary-negotiation")  
+   - "project-jarvis" (not "jarvis-telegram-bot")
+   - "relationships" (not "dinner-with-sarah")
+   - "health-fitness" (not "morning-jog")
+   - "singapore-relocation" (not "visa-application")
+   - "climate-tech-thoughts" (not "carbon-capture")
+   - "personal-growth" (not "meditation-session")
+   
+   ❌ BAD topic_keys (too narrow):
+   - "kangaroos-in-sydney" → should be "life-in-australia"
+   - "monday-gym-session" → should be "health-fitness"
+   - "fixing-bug-123" → should be "project-jarvis" or "engineering-work"
+   - "call-with-tom" → this should be a MEETING, not a reflection
+   
+   **ROUTING DECISION:**
+   - First: Check if content fits ANY existing topic from the list
+   - If yes: Use that exact topic_key (content will be appended)
+   - If no: Create a NEW high-level topic_key
 
 6. **MEETINGS** - For conversations with people:
    - "person_name" is the PRIMARY person met with
@@ -235,7 +262,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Don't create CRM entries for people merely mentioned
    - Capture personal details: family, hobbies, upcoming events
 
-7. **LANGUAGE** - All output MUST be in English:
+8. **LANGUAGE** - All output MUST be in English:
    - Translate German/Turkish/other to English
    - Keep names and proper nouns in original form
    - Preserve meaning and nuance while translating

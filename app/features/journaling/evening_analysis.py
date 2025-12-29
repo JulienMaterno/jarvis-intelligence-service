@@ -58,12 +58,16 @@ class JournalAnalysisRequest(BaseModel):
 
 
 class JournalAnalysisResponse(BaseModel):
-    """Response from evening journal analysis."""
+    """Response from evening journal analysis.
+    
+    Note: 'meetings' and 'observations' fields are kept for backwards compatibility
+    but the new prompt no longer generates them (they're merged into highlights/questions).
+    """
     status: str
     highlights: List[str] = Field(default_factory=list)
-    meetings: List[str] = Field(default_factory=list)
+    meetings: List[str] = Field(default_factory=list)  # Deprecated - kept for compatibility
     reflection_questions: List[str] = Field(default_factory=list)
-    observations: List[str] = Field(default_factory=list)
+    observations: List[str] = Field(default_factory=list)  # Deprecated - merged into questions
     journal_content: str = ""
     message: str = ""
 
@@ -258,116 +262,64 @@ def build_activity_context(data: ActivityData) -> str:
 # =============================================================================
 
 def build_analysis_prompt(context: str, user_name: Optional[str] = None, previous_journals: Optional[List[Dict]] = None) -> str:
-    """Build the prompt for Claude to analyze the day and generate journal content."""
+    """Build a concise prompt for Claude to analyze the day and generate journal content."""
     
     name_ref = user_name or "the user"
     
-    # Add previous journals context if available
+    # Add previous journals context if available (minimal, just for deduplication)
     previous_context = ""
     if previous_journals:
         prev_lines = []
-        for j in previous_journals[:3]:  # Last 3 days
+        for j in previous_journals[:2]:  # Only last 2 days for deduplication
             date = j.get("date", "Unknown")
-            content = j.get("content") or ""  # Handle None content
-            content = content[:500] if content else ""
+            content = j.get("content") or ""
+            # Only include a brief summary to help avoid mentioning same things
             if content:
-                prev_lines.append(f"[{date}]: {content}\n")
+                prev_lines.append(f"[{date}]: {content[:200]}...")
         
         if prev_lines:
             previous_context = f"""
-
-================================================================================
-⚠️ PREVIOUS JOURNALS - FOR PATTERN RECOGNITION ONLY - DO NOT INCLUDE IN OUTPUT
-================================================================================
-The following is context from PREVIOUS days. DO NOT describe these events.
-DO NOT mention these activities in highlights, meetings, observations, or journal_content.
-ONLY use this to notice patterns or if something from a previous day was completed today.
-
+--- PREVIOUS DAYS (for deduplication only - DO NOT mention these events) ---
 {chr(10).join(prev_lines)}
-
-================================================================================
-END OF PREVIOUS CONTEXT - EVERYTHING ABOVE IS OFF-LIMITS FOR TODAY'S JOURNAL
-================================================================================
+--- END PREVIOUS CONTEXT ---
 """
     
-    return f"""You are a thoughtful, observant personal AI assistant helping {name_ref} reflect on their day.
+    return f"""You are {name_ref}'s thoughtful personal assistant generating a brief evening journal.
 
-================================================================================
-⛔ CRITICAL: STRICT 24-HOUR RULE ⛔
-================================================================================
-You are generating a journal for TODAY ONLY (the last 24 hours).
+CRITICAL RULES:
+1. ONLY include events from TODAY'S ACTIVITIES below
+2. Be CONCISE - less is more. Quiet days = short journals
+3. NO redundancy - each fact should appear exactly ONCE
+4. DO NOT list things separately if they're the same event (e.g., meeting + calendar event)
+5. Integrate insights about reading, screen time, etc. naturally - don't list them as separate sections
 
-NEVER include in your output:
-- Events from previous days (even if they appear in context below)
-- Future plans or trips mentioned in conversations (e.g., "trip next week")
-- References like "mentioned in previous days" or "continuing from yesterday"
-- ANY information that did not occur in the last 24 hours
-
-If the "TODAY'S ACTIVITIES" section is empty or sparse, the journal should be brief.
-Do NOT fill it with information from previous journal context.
-================================================================================
-
-Your role is to:
-1. Identify the most meaningful moments from TODAY ONLY
-2. Ask thoughtful questions about TODAY's events specifically
-3. Keep observations focused on TODAY's data only
-
-================================================================================
-TODAY'S ACTIVITIES (LAST 24 HOURS) - THE ONLY DATA TO USE FOR YOUR JOURNAL:
-================================================================================
+TODAY'S ACTIVITIES:
 {context}
-================================================================================
-END OF TODAY'S ACTIVITIES
-================================================================================
 {previous_context}
 
-Based STRICTLY on TODAY's activities section above (not previous days), generate a JSON response with:
+Generate JSON with these fields. Keep it SHORT and NON-REDUNDANT:
 
-1. "highlights" - List of 3-5 most significant moments from TODAY ONLY.
-   - Be specific about what happened
-   - Each highlight must come from the "TODAY'S ACTIVITIES" section above
-   - ⛔ Do NOT include events from previous journal context
-
-2. "meetings" - Brief list of meeting summaries from TODAY only.
-   - Only include meetings listed in TODAY'S ACTIVITIES
-   - Just key points, not full details
-
-3. "observations" - 2-3 UNIQUE insights about TODAY.
-   - Focus on patterns or notable aspects of TODAY's activities
-   - ⛔ Do NOT describe events from previous days
-
-4. "reflection_questions" - 3-4 THOUGHTFUL questions based on SPECIFIC things from TODAY.
-   - Reference actual events from TODAY'S ACTIVITIES section
-   - Be personal and relevant to what they actually did TODAY
-   - ⛔ Do NOT ask about events from previous days
-   
-   GOOD examples:
-   - "You had 3 meetings today with different clients. Which conversation felt most productive and why?"
-   - "You highlighted a passage about leadership in your book. How does that apply to the project you're working on?"
-   
-   BAD examples:
-   - Generic questions not tied to today's data
-   - Questions about events from previous journals
-
-5. "journal_content" - A 2-3 paragraph DESCRIPTION of {name_ref}'s day:
-   - Write in THIRD PERSON (e.g., "{name_ref} started the day with...")
-   - ⛔ ONLY describe events from TODAY'S ACTIVITIES section
-   - ⛔ Do NOT describe events from previous journal context
-   - If TODAY'S ACTIVITIES is sparse, write a brief journal - don't pad with old content
-   - Keep a warm but objective tone
-
-⚠️ FINAL CHECK: Before responding, verify that EVERY highlight, meeting, observation, 
-question, and journal sentence refers ONLY to data in the "TODAY'S ACTIVITIES" section.
-
-Respond ONLY in valid JSON format:
 {{
-    "highlights": ["string"],
-    "meetings": ["string"],
-    "observations": ["string"],
-    "reflection_questions": ["string"],
-    "journal_content": "string"
+    "highlights": [
+        // 2-4 KEY moments only. Quality over quantity.
+        // Skip if day was quiet. Empty array is fine.
+        // Each item: one sentence, specific, no overlap with other items
+    ],
+    "reflection_questions": [
+        // 2-3 thoughtful questions that combine observations WITH curiosity
+        // Reference specific events from today
+        // MERGE insights into questions (don't have separate "observations")
+        // Example: "You spent 5h in deep work today but only completed 1 task - what made it feel productive or draining?"
+    ],
+    "journal_content": "Brief 1-2 paragraph description in third person. Focus only on what's meaningful. For quiet days, a single sentence is fine."
 }}
-"""
+
+BREVITY GUIDE:
+- Quiet day (0-2 meetings, few tasks): 2-3 highlights max, 2 questions, 1-2 sentences in journal_content
+- Normal day (3-5 meetings, multiple tasks): 3-4 highlights, 2-3 questions, short paragraph
+- Busy day (5+ meetings): 4-5 highlights max, 3 questions, 2 paragraphs
+
+Respond with valid JSON only."""
 
 
 # =============================================================================
@@ -381,7 +333,7 @@ def call_claude_for_analysis(prompt: str) -> Dict[str, Any]:
     try:
         response = client.messages.create(
             model=MODEL_ID,
-            max_tokens=2000,
+            max_tokens=1500,  # Reduced for conciseness
             messages=[{"role": "user", "content": prompt}]
         )
         
@@ -398,10 +350,8 @@ def call_claude_for_analysis(prompt: str) -> Dict[str, Any]:
         logger.warning(f"Failed to parse Claude response: {e}")
         return {
             "highlights": ["Take a moment to reflect on your day"],
-            "meetings": [],
-            "observations": ["Today was recorded but needs your interpretation"],
             "reflection_questions": ["What stood out to you most about today?"],
-            "journal_content": "Today was a day of various activities. Take some time to reflect on what mattered most."
+            "journal_content": "A day of quiet activities. Take some time to reflect."
         }
     except Exception as e:
         logger.error(f"Claude API error: {e}")
@@ -418,91 +368,72 @@ def format_telegram_message(
     reading: Optional[Dict] = None,
     highlights: Optional[List[Dict]] = None
 ) -> str:
-    """Format the analysis into a Telegram message."""
+    """Format the analysis into a CONCISE Telegram message.
+    
+    Design principles:
+    - No redundancy (don't list meetings AND key moments about same event)
+    - Reading/highlights integrated into flow, not separate sections
+    - Observations merged into questions
+    - Quiet days = shorter messages
+    """
     now = datetime.now(timezone.utc)
     lines = []
     
-    # Header
+    # Header with date
     lines.append("📓 **Evening Journal**")
     lines.append(f"_{now.strftime('%A, %B %d, %Y')}_")
     lines.append("")
     
-    # Quick Stats
+    # Quick Stats (one line summary)
     if activity_summary:
         stats = []
-        if activity_summary.get("meetings_count", 0):
-            stats.append(f"🤝 {activity_summary['meetings_count']} meetings")
-        if activity_summary.get("tasks_completed_count", 0):
-            stats.append(f"✅ {activity_summary['tasks_completed_count']} completed")
-        if activity_summary.get("tasks_created_count", 0):
-            stats.append(f"📝 {activity_summary['tasks_created_count']} new tasks")
-        if activity_summary.get("highlights_count", 0):
-            stats.append(f"📚 {activity_summary['highlights_count']} highlights")
+        meetings = activity_summary.get("meetings_count", 0)
+        completed = activity_summary.get("tasks_completed_count", 0)
+        created = activity_summary.get("tasks_created_count", 0)
+        book_highlights = activity_summary.get("highlights_count", 0)
+        
+        if meetings:
+            stats.append(f"🤝 {meetings} meeting{'s' if meetings > 1 else ''}")
+        if completed:
+            stats.append(f"✅ {completed} done")
+        if created:
+            stats.append(f"📝 {created} new tasks")
+        if book_highlights:
+            stats.append(f"📚 {book_highlights} highlights")
+        
+        # Include reading progress inline
+        if reading:
+            currently_reading = reading.get("currently_reading", [])
+            for book in currently_reading[:1]:  # Just one book
+                progress = book.get('progress_percent', 0)
+                if progress > 0:
+                    stats.append(f"📖 {book.get('title', 'Reading')}: {progress}%")
         
         if stats:
             lines.append("**Your Day:** " + " • ".join(stats))
             lines.append("")
     
-    # AI Highlights
+    # Key Moments (AI-generated highlights - the main content)
     ai_highlights = analysis.get("highlights", [])
     if ai_highlights:
         lines.append("**✨ Key Moments:**")
-        for h in ai_highlights[:5]:
+        for h in ai_highlights[:4]:  # Max 4
             lines.append(f"• {h}")
         lines.append("")
     
-    # Meetings
-    meetings = analysis.get("meetings", [])
-    if meetings:
-        lines.append("**🤝 Meetings:**")
-        for m in meetings[:4]:
-            lines.append(f"• {m}")
-        lines.append("")
+    # Skip separate meetings/observations/book sections - they're now merged into highlights/questions
     
-    # Observations
-    observations = analysis.get("observations", [])
-    if observations:
-        lines.append("**👁 I Noticed:**")
-        for o in observations[:3]:
-            lines.append(f"• {o}")
-        lines.append("")
-    
-    # Reading Section
-    if reading:
-        currently_reading = reading.get("currently_reading", [])
-        recently_finished = reading.get("recently_finished", [])
-        
-        if currently_reading or recently_finished:
-            lines.append("**📚 Reading:**")
-            for book in currently_reading[:2]:
-                lines.append(f"• {book.get('title', 'Book')}: {book.get('progress_percent', 0)}%")
-            for book in recently_finished[:1]:
-                lines.append(f"• Finished: {book.get('title', 'Book')}")
-            lines.append("")
-    
-    # Book Highlights
-    if highlights:
-        lines.append("**💡 Today's Highlights:**")
-        for h in highlights[:2]:
-            content = h.get("content", "")[:100]
-            book = h.get("book_title", "")
-            if content:
-                lines.append(f'_"{content}..."_')
-                if book:
-                    lines.append(f"  — {book}")
-        lines.append("")
-    
-    # Reflection Questions - THE KEY PART
+    # Reflection Questions (with observations baked in)
     questions = analysis.get("reflection_questions", [])
     if questions:
-        lines.append("**🤔 Questions for You:**")
-        for q in questions[:4]:
+        lines.append("**🤔 Reflect:**")
+        for q in questions[:3]:  # Max 3 questions
             lines.append(f"• {q}")
         lines.append("")
     
     # Call to action
     lines.append("---")
-    lines.append("_Reply with voice or text to add your thoughts._")
+    lines.append("_Reply with voice or text to capture your thoughts._")
     
     return "\n".join(lines)
 
