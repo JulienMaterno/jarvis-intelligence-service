@@ -392,6 +392,33 @@ IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text sear
     },
     # Location & Timezone
     {
+        "name": "set_user_location",
+        "description": """Set the user's location and timezone. Use this when the user says things like:
+- 'I'm in Jakarta' / 'I'm now in Singapore' / 'I moved to Berlin'
+- 'My timezone is Europe/Istanbul' / 'Set my timezone to PST'
+- 'I'm traveling to Tokyo'
+
+This updates their stored location for all future time-related operations.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name (e.g., 'Jakarta', 'Istanbul', 'New York')"
+                },
+                "country": {
+                    "type": "string",
+                    "description": "Country name (optional)"
+                },
+                "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone (e.g., 'Asia/Jakarta', 'Europe/Istanbul'). If not provided, will be inferred from city."
+                }
+            },
+            "required": ["city"]
+        }
+    },
+    {
         "name": "get_user_location",
         "description": "Get the user's current location and timezone. Use this when you need to know where the user is, their timezone, or local time for scheduling.",
         "input_schema": {
@@ -455,6 +482,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         elif tool_name == "who_to_contact":
             return _who_to_contact(tool_input)
         # Location & Timezone
+        elif tool_name == "set_user_location":
+            return _set_user_location(tool_input)
         elif tool_name == "get_user_location":
             return _get_user_location()
         elif tool_name == "get_current_time":
@@ -1096,35 +1125,144 @@ def _who_to_contact(input: Dict) -> Dict[str, Any]:
 # LOCATION & TIMEZONE TOOLS
 # =============================================================================
 
+# Common city to timezone mapping
+CITY_TIMEZONES = {
+    # Europe
+    "istanbul": "Europe/Istanbul",
+    "london": "Europe/London",
+    "paris": "Europe/Paris",
+    "berlin": "Europe/Berlin",
+    "amsterdam": "Europe/Amsterdam",
+    "zurich": "Europe/Zurich",
+    "vienna": "Europe/Vienna",
+    "madrid": "Europe/Madrid",
+    "rome": "Europe/Rome",
+    "moscow": "Europe/Moscow",
+    # Asia
+    "jakarta": "Asia/Jakarta",
+    "singapore": "Asia/Singapore",
+    "tokyo": "Asia/Tokyo",
+    "hong kong": "Asia/Hong_Kong",
+    "shanghai": "Asia/Shanghai",
+    "beijing": "Asia/Shanghai",
+    "seoul": "Asia/Seoul",
+    "dubai": "Asia/Dubai",
+    "mumbai": "Asia/Kolkata",
+    "delhi": "Asia/Kolkata",
+    "bangkok": "Asia/Bangkok",
+    "kuala lumpur": "Asia/Kuala_Lumpur",
+    "manila": "Asia/Manila",
+    "taipei": "Asia/Taipei",
+    # Americas
+    "new york": "America/New_York",
+    "los angeles": "America/Los_Angeles",
+    "san francisco": "America/Los_Angeles",
+    "chicago": "America/Chicago",
+    "miami": "America/New_York",
+    "toronto": "America/Toronto",
+    "vancouver": "America/Vancouver",
+    "mexico city": "America/Mexico_City",
+    "sao paulo": "America/Sao_Paulo",
+    # Australia/Pacific
+    "sydney": "Australia/Sydney",
+    "melbourne": "Australia/Melbourne",
+    "auckland": "Pacific/Auckland",
+}
+
+
+def _set_user_location(input: Dict) -> Dict[str, Any]:
+    """Set user's location and timezone from text."""
+    try:
+        city = input.get("city", "").strip()
+        country = input.get("country", "")
+        timezone_input = input.get("timezone", "")
+        
+        if not city:
+            return {"error": "City is required"}
+        
+        # Determine timezone
+        if timezone_input:
+            # User provided explicit timezone
+            user_tz = timezone_input
+        else:
+            # Try to infer from city name
+            city_lower = city.lower()
+            user_tz = CITY_TIMEZONES.get(city_lower)
+            
+            if not user_tz:
+                # Try partial match
+                for city_key, tz in CITY_TIMEZONES.items():
+                    if city_lower in city_key or city_key in city_lower:
+                        user_tz = tz
+                        break
+            
+            if not user_tz:
+                return {
+                    "error": f"Could not determine timezone for '{city}'. Please specify timezone explicitly.",
+                    "hint": "Say something like 'My timezone is Asia/Jakarta' or 'Europe/Istanbul'"
+                }
+        
+        # Validate timezone
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(user_tz)
+        except Exception:
+            return {"error": f"Invalid timezone: {user_tz}"}
+        
+        now = datetime.now(timezone.utc).isoformat()
+        
+        # Upsert to sync_state
+        updates = [
+            {"key": "user_timezone", "value": user_tz, "updated_at": now},
+            {"key": "user_city", "value": city, "updated_at": now},
+        ]
+        
+        if country:
+            updates.append({"key": "user_country", "value": country, "updated_at": now})
+        
+        for update in updates:
+            supabase.table("sync_state").upsert(update, on_conflict="key").execute()
+        
+        logger.info(f"User location set via chat: {city}, TZ: {user_tz}")
+        
+        return {
+            "success": True,
+            "city": city,
+            "country": country or "Not specified",
+            "timezone": user_tz,
+            "message": f"Location updated to {city} ({user_tz})"
+        }
+    except Exception as e:
+        logger.error(f"Failed to set location: {e}")
+        return {"error": str(e)}
+
+
 def _get_user_location() -> Dict[str, Any]:
     """Get user's stored location and timezone."""
     try:
         # Get location from sync_state (key-value store)
         result = supabase.table("sync_state").select("key, value, updated_at").in_(
-            "key", ["user_location", "user_timezone", "user_city", "user_country"]
+            "key", ["user_timezone", "user_city", "user_country"]
         ).execute()
         
         location_data = {}
         for row in (result.data or []):
             location_data[row["key"]] = row["value"]
-            if row["key"] == "user_location":
-                location_data["location_updated_at"] = row["updated_at"]
+            if row["key"] == "user_city":
+                location_data["updated_at"] = row["updated_at"]
         
-        if not location_data:
+        if not location_data.get("user_city") and not location_data.get("user_timezone"):
             return {
-                "error": "Location not set. User needs to share location via Telegram or iOS Shortcut.",
+                "error": "Location not set. Ask user to say something like 'I'm in Istanbul' or 'My timezone is Europe/Istanbul'",
                 "timezone": "UTC",
-                "city": "Unknown",
-                "how_to_set": "Send a location message in Telegram, or set up an iOS Shortcut automation"
+                "city": "Unknown"
             }
         
         return {
-            "latitude": location_data.get("user_location", "").split(",")[0] if "," in location_data.get("user_location", "") else None,
-            "longitude": location_data.get("user_location", "").split(",")[1] if "," in location_data.get("user_location", "") else None,
             "timezone": location_data.get("user_timezone", "UTC"),
             "city": location_data.get("user_city", "Unknown"),
             "country": location_data.get("user_country", "Unknown"),
-            "updated_at": location_data.get("location_updated_at")
+            "updated_at": location_data.get("updated_at")
         }
     except Exception as e:
         return {"error": str(e), "timezone": "UTC"}
