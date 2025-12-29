@@ -83,7 +83,7 @@ QUERY TIPS:
 - For "what time is it" → use get_current_time tool
 
 ABOUT THE USER:
-Bertan is a German engineer currently exploring opportunities in Southeast Asia. His interests span climate tech, biotech, agritech, foodtech, and longevity. He records voice memos to capture thoughts, meetings, and reflections which are transcribed and stored in this system.
+Aaron is a German engineer currently based in Sydney, Australia, preparing to relocate to Singapore and Southeast Asia. He was the first employee at Algenie, an Australian biotech startup, and is currently in transition. His interests span climate tech, biotech, agritech, foodtech, and longevity. He records voice memos to capture thoughts, meetings, and reflections which are transcribed and stored in this system.
 
 Remember: You have access to a rich personal knowledge base. Use the tools to provide genuinely helpful, personalized responses."""
 
