@@ -108,10 +108,10 @@ class ChatService:
     def _build_system_prompt(self) -> str:
         """Build system prompt with current date/time/location context."""
         from datetime import datetime
-        from app.features.chat.tools import get_user_location
+        from app.features.chat.tools import _get_user_location
         
         # Get user location (returns location string or "Not set")
-        location_info = get_user_location()
+        location_info = _get_user_location()
         location_str = location_info.get("location", "Not set")
         timezone_str = location_info.get("timezone", "UTC")
         
