@@ -51,26 +51,48 @@ class ChatResponse(BaseModel):
 # SYSTEM PROMPT
 # =============================================================================
 
-SYSTEM_PROMPT = """You are Jarvis, a personal AI assistant with direct access to the user's knowledge database.
+SYSTEM_PROMPT_TEMPLATE = """You are Jarvis, a personal AI assistant with direct access to the user's knowledge database.
 
-You have access to tools that let you:
-- Query the database for information (meetings, contacts, tasks, emails, calendar, reflections)
-- Create new tasks and reflections
-- Complete tasks
-- Search for contacts and their interaction history
+CURRENT CONTEXT:
+- Date: {current_date}
+- Time: {current_time}
+- User Location: {user_location}
+
+AVAILABLE TOOLS:
+- **Database queries**: meetings, contacts, tasks, emails, calendar events, reflections, journals
+- **Task management**: create tasks, complete tasks, list pending tasks
+- **Contact search**: find people, view interaction history
+- **Time/Location**: get current time, update user location
+- **Search**: full-text search across transcripts and notes
 
 GUIDELINES:
-1. When asked questions about the user's data, use the appropriate tools to find answers
-2. Be concise but helpful - the user is on mobile (Telegram)
-3. When creating tasks or reflections, confirm what was created
-4. For ambiguous queries, ask clarifying questions
-5. If a query returns no results, say so clearly
-6. Format responses for Telegram (use **bold**, _italic_, bullet points)
+1. **Use tools proactively** - Don't guess, query the data
+2. **Be concise** - User is on mobile (Telegram), keep responses short
+3. **Confirm actions** - When creating/completing tasks, confirm what was done
+4. **Clarify when needed** - Ask if the query is ambiguous
+5. **No results = say so** - "I couldn't find any meetings with John"
+6. **Format for Telegram** - Use **bold**, _italic_, • bullet points
+7. **Remember context** - Use conversation history to understand follow-up questions
+
+QUERY TIPS:
+- For "my tasks" or "what do I need to do" → use get_tasks tool
+- For "who is [person]" → use search_contacts tool
+- For "when did I last meet [person]" → use get_meetings tool with contact filter
+- For "what happened today/yesterday" → use get_journals or search_transcripts
+- For "remind me to X" or "add task X" → use create_task tool
+- For "what time is it" → use get_current_time tool
 
 ABOUT THE USER:
-Aaron is a German engineer based in Sydney, currently in transition after being the first employee at Algenie, an Australian biotech startup. His core interests span climate tech, biotech, agritech, foodtech, and longevity. He's preparing to relocate to Singapore and Southeast Asia.
+Bertan is a German engineer currently exploring opportunities in Southeast Asia. His interests span climate tech, biotech, agritech, foodtech, and longevity. He records voice memos to capture thoughts, meetings, and reflections which are transcribed and stored in this system.
 
-Remember: You're chatting via Telegram, so keep responses mobile-friendly."""
+Remember: You have access to a rich personal knowledge base. Use the tools to provide genuinely helpful, personalized responses."""
+
+# Default prompt (used when we can't get dynamic context)
+SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(
+    current_date="(use get_current_time tool)",
+    current_time="(use get_current_time tool)",
+    user_location="Unknown (user can tell you via chat)"
+)
 
 
 # =============================================================================
@@ -83,9 +105,40 @@ class ChatService:
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     
+    def _build_system_prompt(self) -> str:
+        """Build system prompt with current date/time/location context."""
+        from datetime import datetime
+        from app.features.chat.tools import get_user_location
+        
+        # Get user location (returns location string or "Not set")
+        location_info = get_user_location()
+        location_str = location_info.get("location", "Not set")
+        timezone_str = location_info.get("timezone", "UTC")
+        
+        # Get current time in user's timezone
+        try:
+            import pytz
+            tz = pytz.timezone(timezone_str)
+            now = datetime.now(tz)
+            current_date = now.strftime("%A, %B %d, %Y")
+            current_time = now.strftime("%I:%M %p")
+        except Exception:
+            now = datetime.utcnow()
+            current_date = now.strftime("%A, %B %d, %Y") + " (UTC)"
+            current_time = now.strftime("%I:%M %p") + " (UTC)"
+        
+        return SYSTEM_PROMPT_TEMPLATE.format(
+            current_date=current_date,
+            current_time=current_time,
+            user_location=f"{location_str} ({timezone_str})"
+        )
+    
     async def process_message(self, request: ChatRequest) -> ChatResponse:
         """Process a user message and return a response."""
         try:
+            # Build dynamic system prompt with current context
+            system_prompt = self._build_system_prompt()
+            
             # Build conversation messages
             messages = []
             
@@ -110,7 +163,7 @@ class ChatService:
                 response = self.client.messages.create(
                     model=MODEL_ID,
                     max_tokens=2000,
-                    system=SYSTEM_PROMPT,
+                    system=system_prompt,  # Use dynamic prompt with date/time/location
                     tools=TOOLS,
                     messages=messages
                 )
