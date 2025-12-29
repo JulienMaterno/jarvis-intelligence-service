@@ -233,6 +233,162 @@ IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text sear
             },
             "required": []
         }
+    },
+    # =========================================================================
+    # PHASE 1 ADDITIONS - More useful tools
+    # =========================================================================
+    {
+        "name": "search_transcripts",
+        "description": "Search through raw voice memo transcripts for specific content or keywords.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search term to find in transcripts"
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Look back N days (default: 30)",
+                    "default": 30
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_journals",
+        "description": "Get journal entries. Use this to see what happened on specific days, moods, accomplishments, tomorrow's focus.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Get journals from last N days",
+                    "default": 7
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Specific date in YYYY-MM-DD format"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "search_meetings",
+        "description": "Search meetings by topic, person, or content. Use this to find past discussions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search term (topic, person name, etc.)"
+                },
+                "contact_name": {
+                    "type": "string",
+                    "description": "Filter by contact name"
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Look back N days",
+                    "default": 90
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 10
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "update_task",
+        "description": "Update a task's priority, due date, or status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_title": {
+                    "type": "string",
+                    "description": "Task title to find (partial match)"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Or task ID directly"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"],
+                    "description": "New priority"
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": "New due date (YYYY-MM-DD)"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed"],
+                    "description": "New status"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "add_contact_note",
+        "description": "Add a note to a contact's profile. Good for remembering personal details.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact_name": {
+                    "type": "string",
+                    "description": "Contact name to add note to"
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Note to add (will be appended to existing notes)"
+                }
+            },
+            "required": ["contact_name", "note"]
+        }
+    },
+    {
+        "name": "summarize_activity",
+        "description": "Get a summary of recent activity: meetings, tasks completed, reflections, etc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "enum": ["today", "yesterday", "this_week", "last_week"],
+                    "default": "today"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "who_to_contact",
+        "description": "Find contacts you haven't interacted with recently. Good for maintaining relationships.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days_inactive": {
+                    "type": "integer",
+                    "description": "Days since last interaction",
+                    "default": 30
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 5
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -264,6 +420,21 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _complete_task(tool_input)
         elif tool_name == "get_reflections":
             return _get_reflections(tool_input)
+        # Phase 1 additions
+        elif tool_name == "search_transcripts":
+            return _search_transcripts(tool_input)
+        elif tool_name == "get_journals":
+            return _get_journals(tool_input)
+        elif tool_name == "search_meetings":
+            return _search_meetings(tool_input)
+        elif tool_name == "update_task":
+            return _update_task(tool_input)
+        elif tool_name == "add_contact_note":
+            return _add_contact_note(tool_input)
+        elif tool_name == "summarize_activity":
+            return _summarize_activity(tool_input.get("period", "today"))
+        elif tool_name == "who_to_contact":
+            return _who_to_contact(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -557,5 +728,332 @@ def _get_reflections(input: Dict) -> Dict[str, Any]:
             })
         
         return {"reflections": reflections, "count": len(reflections)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# =============================================================================
+# PHASE 1 TOOL IMPLEMENTATIONS
+# =============================================================================
+
+def _search_transcripts(input: Dict) -> Dict[str, Any]:
+    """Search through voice memo transcripts."""
+    try:
+        query_text = input.get("query", "")
+        days = input.get("days", 30)
+        limit = input.get("limit", 5)
+        
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        
+        result = supabase.table("transcripts").select(
+            "id, source_file, full_text, created_at, language"
+        ).ilike(
+            "full_text", f"%{query_text}%"
+        ).gte("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
+        
+        transcripts = []
+        for t in result.data or []:
+            full_text = t.get("full_text", "")
+            # Find the relevant snippet around the search term
+            lower_text = full_text.lower()
+            query_lower = query_text.lower()
+            pos = lower_text.find(query_lower)
+            
+            if pos >= 0:
+                start = max(0, pos - 100)
+                end = min(len(full_text), pos + len(query_text) + 100)
+                snippet = "..." + full_text[start:end] + "..."
+            else:
+                snippet = full_text[:200] + "..."
+            
+            transcripts.append({
+                "id": t.get("id"),
+                "source_file": t.get("source_file"),
+                "date": t.get("created_at", "")[:10],
+                "snippet": snippet,
+                "language": t.get("language")
+            })
+        
+        return {"transcripts": transcripts, "count": len(transcripts), "query": query_text}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _get_journals(input: Dict) -> Dict[str, Any]:
+    """Get journal entries."""
+    try:
+        if input.get("date"):
+            # Specific date
+            result = supabase.table("journals").select(
+                "id, date, title, summary, mood, key_events, accomplishments, challenges, tomorrow_focus"
+            ).eq("date", input["date"]).limit(1).execute()
+        else:
+            # Last N days
+            days = input.get("days", 7)
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+            
+            result = supabase.table("journals").select(
+                "id, date, title, summary, mood, key_events, accomplishments, challenges, tomorrow_focus"
+            ).gte("date", cutoff).order("date", desc=True).execute()
+        
+        journals = []
+        for j in result.data or []:
+            journals.append({
+                "date": j.get("date"),
+                "summary": j.get("summary"),
+                "mood": j.get("mood"),
+                "key_events": j.get("key_events", []),
+                "accomplishments": j.get("accomplishments", []),
+                "challenges": j.get("challenges", []),
+                "tomorrow_focus": j.get("tomorrow_focus", [])
+            })
+        
+        return {"journals": journals, "count": len(journals)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _search_meetings(input: Dict) -> Dict[str, Any]:
+    """Search meetings by topic, person, or content."""
+    try:
+        days = input.get("days", 90)
+        limit = input.get("limit", 10)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        
+        query = supabase.table("meetings").select(
+            "id, title, date, summary, contact_name, topics_discussed, people_mentioned"
+        ).gte("date", cutoff)
+        
+        if input.get("query"):
+            search = input["query"]
+            query = query.or_(
+                f"title.ilike.%{search}%,summary.ilike.%{search}%,contact_name.ilike.%{search}%"
+            )
+        
+        if input.get("contact_name"):
+            query = query.ilike("contact_name", f"%{input['contact_name']}%")
+        
+        result = query.order("date", desc=True).limit(limit).execute()
+        
+        meetings = []
+        for m in result.data or []:
+            meetings.append({
+                "id": m.get("id"),
+                "title": m.get("title"),
+                "date": m.get("date"),
+                "contact": m.get("contact_name"),
+                "summary": (m.get("summary") or "")[:200],
+                "topics": [t.get("topic") for t in (m.get("topics_discussed") or [])[:3]],
+                "people_mentioned": m.get("people_mentioned", [])[:5]
+            })
+        
+        return {"meetings": meetings, "count": len(meetings)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _update_task(input: Dict) -> Dict[str, Any]:
+    """Update a task's priority, due date, or status."""
+    try:
+        task_id = input.get("task_id")
+        task_title = input.get("task_title")
+        
+        if not task_id and not task_title:
+            return {"error": "Provide either task_id or task_title"}
+        
+        # Find the task
+        if task_id:
+            query = supabase.table("tasks").select("id, title").eq("id", task_id)
+        else:
+            query = supabase.table("tasks").select("id, title").ilike("title", f"%{task_title}%")
+        
+        result = query.is_("deleted_at", "null").limit(1).execute()
+        
+        if not result.data:
+            return {"error": f"Task not found: {task_title or task_id}"}
+        
+        task = result.data[0]
+        
+        # Build update payload
+        updates = {}
+        if input.get("priority"):
+            updates["priority"] = input["priority"]
+        if input.get("due_date"):
+            updates["due_date"] = input["due_date"]
+        if input.get("status"):
+            updates["status"] = input["status"]
+            if input["status"] == "completed":
+                updates["completed_at"] = datetime.now(timezone.utc).isoformat()
+        
+        if not updates:
+            return {"error": "No updates provided. Specify priority, due_date, or status."}
+        
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        
+        supabase.table("tasks").update(updates).eq("id", task["id"]).execute()
+        
+        logger.info(f"Updated task via chat: {task['title']} -> {updates}")
+        return {"success": True, "task": task["title"], "updates": updates}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _add_contact_note(input: Dict) -> Dict[str, Any]:
+    """Add a note to a contact's profile."""
+    try:
+        contact_name = input.get("contact_name", "")
+        note = input.get("note", "")
+        
+        if not note:
+            return {"error": "Note content is required"}
+        
+        # Find contact
+        result = supabase.table("contacts").select("id, first_name, last_name, notes").or_(
+            f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+        ).is_("deleted_at", "null").limit(1).execute()
+        
+        if not result.data:
+            return {"error": f"Contact '{contact_name}' not found"}
+        
+        contact = result.data[0]
+        existing_notes = contact.get("notes") or ""
+        
+        # Append new note with timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        new_notes = f"{existing_notes}\n\n[{timestamp}] {note}".strip()
+        
+        supabase.table("contacts").update({
+            "notes": new_notes,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", contact["id"]).execute()
+        
+        name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+        logger.info(f"Added note to contact via chat: {name}")
+        return {"success": True, "contact": name, "note_added": note}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _summarize_activity(period: str = "today") -> Dict[str, Any]:
+    """Get a summary of recent activity."""
+    try:
+        now = datetime.now(timezone.utc)
+        
+        if period == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now
+        elif period == "yesterday":
+            start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "this_week":
+            # Start of week (Monday)
+            days_since_monday = now.weekday()
+            start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now
+        elif period == "last_week":
+            days_since_monday = now.weekday()
+            end = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            start = end - timedelta(days=7)
+        else:
+            return {"error": f"Unknown period: {period}"}
+        
+        start_iso = start.isoformat()
+        end_iso = end.isoformat()
+        
+        # Get meetings
+        meetings = supabase.table("meetings").select(
+            "title, contact_name"
+        ).gte("date", start_iso).lte("date", end_iso).execute()
+        
+        # Get tasks completed
+        tasks_completed = supabase.table("tasks").select(
+            "title"
+        ).gte("completed_at", start_iso).lte("completed_at", end_iso).eq("status", "completed").execute()
+        
+        # Get tasks created
+        tasks_created = supabase.table("tasks").select(
+            "title"
+        ).gte("created_at", start_iso).lte("created_at", end_iso).execute()
+        
+        # Get reflections
+        reflections = supabase.table("reflections").select(
+            "title, topic_key"
+        ).gte("created_at", start_iso).lte("created_at", end_iso).is_("deleted_at", "null").execute()
+        
+        # Get emails
+        emails_received = supabase.table("emails").select(
+            "subject"
+        ).gte("date", start_iso).lte("date", end_iso).eq("direction", "inbound").execute()
+        
+        return {
+            "period": period,
+            "start": start_iso[:10],
+            "end": end_iso[:10],
+            "summary": {
+                "meetings": len(meetings.data or []),
+                "meeting_contacts": list(set(m.get("contact_name") for m in (meetings.data or []) if m.get("contact_name"))),
+                "tasks_completed": len(tasks_completed.data or []),
+                "tasks_created": len(tasks_created.data or []),
+                "reflections": len(reflections.data or []),
+                "reflection_topics": list(set(r.get("topic_key") for r in (reflections.data or []) if r.get("topic_key"))),
+                "emails_received": len(emails_received.data or [])
+            }
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _who_to_contact(input: Dict) -> Dict[str, Any]:
+    """Find contacts you haven't interacted with recently."""
+    try:
+        days_inactive = input.get("days_inactive", 30)
+        limit = input.get("limit", 5)
+        
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days_inactive)).isoformat()
+        
+        # Get contacts with their last meeting date
+        # This is a simplified approach - ideally we'd check meetings, emails, and events
+        contacts = supabase.table("contacts").select(
+            "id, first_name, last_name, company, email"
+        ).is_("deleted_at", "null").execute()
+        
+        inactive_contacts = []
+        
+        for contact in (contacts.data or []):
+            contact_id = contact["id"]
+            
+            # Check for recent meetings
+            recent_meeting = supabase.table("meetings").select(
+                "date"
+            ).eq("contact_id", contact_id).gte("date", cutoff).limit(1).execute()
+            
+            if not recent_meeting.data:
+                # Check for recent emails
+                email = contact.get("email")
+                recent_email = None
+                if email:
+                    recent_email = supabase.table("emails").select(
+                        "date"
+                    ).or_(
+                        f"sender.ilike.%{email}%,recipient.ilike.%{email}%"
+                    ).gte("date", cutoff).limit(1).execute()
+                
+                if not recent_email or not recent_email.data:
+                    # This contact is inactive
+                    name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+                    inactive_contacts.append({
+                        "name": name,
+                        "company": contact.get("company"),
+                        "email": contact.get("email")
+                    })
+                    
+                    if len(inactive_contacts) >= limit:
+                        break
+        
+        return {
+            "inactive_contacts": inactive_contacts,
+            "count": len(inactive_contacts),
+            "days_threshold": days_inactive
+        }
     except Exception as e:
         return {"error": str(e)}
