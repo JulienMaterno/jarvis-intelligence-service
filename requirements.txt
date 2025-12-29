@@ -5,4 +5,5 @@ supabase
 anthropic
 python-dotenv
 httpx
-timezonefinderpytz
+timezonefinder
+pytz
