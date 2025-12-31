@@ -35,6 +35,64 @@ class BeeperService:
         logger.info("Beeper service initialized (hybrid mode)")
     
     # =========================================================================
+    # STATUS
+    # =========================================================================
+    
+    async def get_status(self) -> Dict[str, Any]:
+        """
+        Get Beeper connectivity status.
+        
+        Checks:
+        1. Database stats (synced chats/messages)
+        2. Bridge connectivity (if reachable)
+        
+        Returns:
+            Status dict with db_stats and bridge_status
+        """
+        result = {
+            "status": "ok",
+            "db_stats": {},
+            "bridge_status": "unknown"
+        }
+        
+        # Get database stats
+        try:
+            chats_count = self.db.table("beeper_chats") \
+                .select("id", count="exact") \
+                .execute()
+            messages_count = self.db.table("beeper_messages") \
+                .select("id", count="exact") \
+                .execute()
+            
+            result["db_stats"] = {
+                "chats": chats_count.count or 0,
+                "messages": messages_count.count or 0
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get DB stats: {e}")
+            result["db_stats"] = {"error": str(e)}
+        
+        # Check bridge connectivity
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{BEEPER_BRIDGE_URL}/health")
+                if resp.status_code == 200:
+                    bridge_data = resp.json()
+                    result["bridge_status"] = "connected" if bridge_data.get("beeper_connected") else "disconnected"
+                    result["platforms"] = list(bridge_data.get("accounts", {}).keys())
+                else:
+                    result["bridge_status"] = "error"
+        except httpx.ConnectError:
+            result["bridge_status"] = "offline"
+        except httpx.TimeoutException:
+            result["bridge_status"] = "timeout"
+        except Exception as e:
+            logger.warning(f"Failed to check bridge: {e}")
+            result["bridge_status"] = "error"
+        
+        return result
+    
+    # =========================================================================
     # INBOX & CHATS
     # =========================================================================
     
