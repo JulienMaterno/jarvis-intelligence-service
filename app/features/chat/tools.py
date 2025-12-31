@@ -30,8 +30,8 @@ Available tables:
 - tasks: Action items (title, description, status, priority, due_date, completed_at)
 - reflections: Personal reflections (title, content, topic_key, tags, date)
 - journals: Daily journals (date, summary, mood, key_events, tomorrow_focus)
-- calendar_events: Calendar (summary, start_time, end_time, location, attendees)
-- emails: Email records (subject, sender, recipient, date, snippet)
+- calendar_events: Calendar (google_event_id, summary, start_time, end_time, location, attendees, status)
+- emails: Full email records (subject, sender, recipient, date, snippet, body_text, body_html, thread_id, label_ids, contact_id)
 - transcripts: Voice transcripts (full_text, source_file, created_at)
 - books: Reading list (title, author, status, rating, current_page, total_pages, summary, notes)
 - highlights: Book highlights (book_title, content, note, chapter, page_number, is_favorite)
@@ -152,7 +152,9 @@ IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text sear
     },
     {
         "name": "get_recent_emails",
-        "description": "Get recent emails, optionally filtered by sender or subject.",
+        "description": """Get recent emails from the database, optionally filtered by sender or subject.
+This returns emails that have been synced to the knowledge base.
+Use include_body=true to get full email content (not just snippets).""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -169,12 +171,58 @@ IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text sear
                     "type": "string",
                     "description": "Filter by subject keyword"
                 },
+                "include_body": {
+                    "type": "boolean",
+                    "description": "Include full email body text (not just snippet)",
+                    "default": False
+                },
                 "limit": {
                     "type": "integer",
                     "default": 10
                 }
             },
             "required": []
+        }
+    },
+    {
+        "name": "get_email_by_id",
+        "description": """Get full details of a specific email by its ID.
+Returns the complete email including full body text.
+Use this after get_recent_emails to read full content of a specific email.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email_id": {
+                    "type": "string",
+                    "description": "The email ID (UUID from the database)"
+                }
+            },
+            "required": ["email_id"]
+        }
+    },
+    {
+        "name": "search_emails_live",
+        "description": """Search Gmail inbox in real-time using Gmail's search syntax.
+Use this for:
+- Finding very recent emails (last few hours)
+- Complex searches that need Gmail's full search power
+- When database search doesn't find what user is looking for
+
+Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is:unread, etc.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Gmail search query (e.g., 'from:john subject:meeting after:2025/01/01')"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum emails to return",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
         }
     },
     {
@@ -822,6 +870,10 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _get_upcoming_events(tool_input.get("days", 7))
         elif tool_name == "get_recent_emails":
             return _get_recent_emails(tool_input)
+        elif tool_name == "get_email_by_id":
+            return _get_email_by_id(tool_input)
+        elif tool_name == "search_emails_live":
+            return _search_emails_live(tool_input)
         elif tool_name == "get_tasks":
             return _get_tasks(tool_input.get("status", "pending"), tool_input.get("limit", 10))
         elif tool_name == "complete_task":
@@ -1083,13 +1135,16 @@ def _get_recent_emails(input: Dict) -> Dict[str, Any]:
     """Get recent emails with optional filters."""
     try:
         days = input.get("days", 7)
+        include_body = input.get("include_body", False)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         
-        # Note: emails table has: subject, sender, recipient, date, snippet, body_text
-        # No 'direction' column exists
-        query = supabase.table("emails").select(
-            "id, subject, sender, recipient, date, snippet"
-        ).gte("date", cutoff)
+        # Select fields based on whether body is requested
+        if include_body:
+            fields = "id, subject, sender, recipient, date, snippet, body_text"
+        else:
+            fields = "id, subject, sender, recipient, date, snippet"
+        
+        query = supabase.table("emails").select(fields).gte("date", cutoff)
         
         if input.get("from_email"):
             query = query.ilike("sender", f"%{input['from_email']}%")
@@ -1103,18 +1158,95 @@ def _get_recent_emails(input: Dict) -> Dict[str, Any]:
         emails = []
         for e in result.data or []:
             email_info = {
+                "id": e.get("id"),
                 "subject": e.get("subject", "(no subject)"),
                 "from": e.get("sender", "Unknown"),
                 "to": e.get("recipient", "Unknown"),
                 "date": e.get("date"),
-                "preview": e.get("snippet", "")[:150] + "..." if e.get("snippet") and len(e.get("snippet", "")) > 150 else e.get("snippet")
             }
+            
+            if include_body and e.get("body_text"):
+                email_info["body"] = e.get("body_text")
+            else:
+                # Show preview/snippet
+                snippet = e.get("snippet", "")
+                email_info["preview"] = snippet[:200] + "..." if len(snippet) > 200 else snippet
+            
             emails.append(email_info)
         
         return {"emails": emails, "count": len(emails)}
     except Exception as e:
         logger.error(f"Error getting emails: {e}")
         return {"error": str(e), "emails": []}
+
+
+def _get_email_by_id(input: Dict) -> Dict[str, Any]:
+    """Get full email details by ID."""
+    try:
+        email_id = input.get("email_id")
+        if not email_id:
+            return {"error": "email_id is required"}
+        
+        result = supabase.table("emails").select(
+            "id, subject, sender, recipient, date, snippet, body_text, body_html, thread_id, label_ids"
+        ).eq("id", email_id).execute()
+        
+        if not result.data:
+            return {"error": f"Email not found with ID: {email_id}"}
+        
+        e = result.data[0]
+        return {
+            "id": e.get("id"),
+            "subject": e.get("subject", "(no subject)"),
+            "from": e.get("sender", "Unknown"),
+            "to": e.get("recipient", "Unknown"),
+            "date": e.get("date"),
+            "body": e.get("body_text") or e.get("snippet", ""),
+            "labels": e.get("label_ids", []),
+            "thread_id": e.get("thread_id")
+        }
+    except Exception as e:
+        logger.error(f"Error getting email by ID: {e}")
+        return {"error": str(e)}
+
+
+def _search_emails_live(input: Dict) -> Dict[str, Any]:
+    """Search Gmail in real-time via the sync service."""
+    import httpx
+    import os
+    
+    query = input.get("query", "")
+    max_results = input.get("max_results", 10)
+    
+    if not query:
+        return {"error": "Search query is required"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                f"{sync_service_url}/gmail/search",
+                params={"q": query, "max_results": max_results}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "emails": data.get("emails", []),
+                    "count": len(data.get("emails", [])),
+                    "query": query,
+                    "source": "live_gmail"
+                }
+            else:
+                logger.error(f"Gmail search failed: {response.status_code} - {response.text[:200]}")
+                return {"error": f"Gmail search failed: {response.text[:200]}"}
+                
+    except httpx.TimeoutException:
+        return {"error": "Gmail search timed out - please try again"}
+    except Exception as e:
+        logger.error(f"Error searching Gmail: {e}")
+        return {"error": str(e)}
 
 
 def _get_tasks(status: str = "pending", limit: int = 10) -> Dict[str, Any]:
