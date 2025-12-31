@@ -844,8 +844,6 @@ Use when user wants to discard a draft.""",
             "required": ["draft_id"]
         }
     }
-        }
-    }
 ]
 
 
