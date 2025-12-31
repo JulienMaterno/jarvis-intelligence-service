@@ -603,21 +603,20 @@ IMPORTANT: Always confirm the details with the user before creating.""",
         }
     },
     # =========================================================================
-    # EMAIL SENDING - Compose and send emails via Gmail
+    # EMAIL DRAFTS - Create drafts that sync with Gmail, send only on confirm
     # =========================================================================
     {
-        "name": "draft_email",
-        "description": """Prepare an email draft for user confirmation before sending.
-ALWAYS use this before send_email to get user approval.
+        "name": "create_email_draft",
+        "description": """Create an email draft that saves to Gmail Drafts folder.
+The draft will be visible in the user's Gmail immediately.
 
 Use when user asks to:
-- Send an email to someone
-- Write an email
-- Reply to an email
-- Email [person]
+- Write/compose an email
+- Draft an email to someone
+- Prepare an email for review
+- Email [person] (always create draft first)
 
-This tool prepares the email and shows it to the user for confirmation.
-The user must explicitly confirm before calling send_email.""",
+After creating, show the user the draft details and ask if they want to send it.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -637,47 +636,83 @@ The user must explicitly confirm before calling send_email.""",
                     "type": "string",
                     "description": "Email body content"
                 },
-                "context": {
+                "cc": {
                     "type": "string",
-                    "description": "Context about why user wants to send this email (helps craft better content)"
+                    "description": "CC recipients (comma-separated emails)"
+                },
+                "reply_to_message_id": {
+                    "type": "string",
+                    "description": "Gmail message ID if replying to an existing thread"
                 }
             },
             "required": ["subject", "body"]
         }
     },
     {
-        "name": "send_email",
-        "description": """Send an email that was previously drafted and confirmed by the user.
-ONLY use this AFTER:
-1. draft_email was called
-2. User explicitly confirmed they want to send it
-
-NEVER call this directly without user confirmation.""",
+        "name": "list_email_drafts",
+        "description": """List all email drafts from the user's Gmail Drafts folder.
+Use this to see pending drafts that haven't been sent yet.
+Works both for drafts created by Jarvis and drafts created manually in Gmail.""",
         "input_schema": {
             "type": "object",
             "properties": {
-                "to": {
-                    "type": "string",
-                    "description": "Recipient email address"
-                },
-                "subject": {
-                    "type": "string",
-                    "description": "Email subject line"
-                },
-                "body": {
-                    "type": "string",
-                    "description": "Email body content"
-                },
-                "cc": {
-                    "type": "string",
-                    "description": "CC recipients (comma-separated)"
-                },
-                "reply_to_message_id": {
-                    "type": "string",
-                    "description": "Gmail message ID if replying to an email thread"
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum drafts to return",
+                    "default": 10
                 }
             },
-            "required": ["to", "subject", "body"]
+            "required": []
+        }
+    },
+    {
+        "name": "get_email_draft",
+        "description": """Get the full content of a specific email draft.
+Use this to show the user what a draft contains before sending.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "string",
+                    "description": "The Gmail draft ID"
+                }
+            },
+            "required": ["draft_id"]
+        }
+    },
+    {
+        "name": "send_email_draft",
+        "description": """Send an existing draft from Gmail.
+ONLY use this AFTER user explicitly confirms they want to send.
+This removes the draft from Drafts folder and sends it.
+
+CRITICAL: Never call without explicit user confirmation like 'yes send it' or 'send'.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "string",
+                    "description": "The Gmail draft ID to send"
+                }
+            },
+            "required": ["draft_id"]
+        }
+    },
+    {
+        "name": "delete_email_draft",
+        "description": """Delete a draft from Gmail permanently.
+Use when user wants to discard a draft.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "string",
+                    "description": "The Gmail draft ID to delete"
+                }
+            },
+            "required": ["draft_id"]
+        }
+    }
         }
     }
 ]
@@ -745,11 +780,17 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         # Calendar creation
         elif tool_name == "create_calendar_event":
             return _create_calendar_event(tool_input)
-        # Email sending
-        elif tool_name == "draft_email":
-            return _draft_email(tool_input)
-        elif tool_name == "send_email":
-            return _send_email(tool_input)
+        # Email drafts
+        elif tool_name == "create_email_draft":
+            return _create_email_draft(tool_input)
+        elif tool_name == "list_email_drafts":
+            return _list_email_drafts(tool_input)
+        elif tool_name == "get_email_draft":
+            return _get_email_draft(tool_input)
+        elif tool_name == "send_email_draft":
+            return _send_email_draft(tool_input)
+        elif tool_name == "delete_email_draft":
+            return _delete_email_draft(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1959,17 +2000,21 @@ def _create_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def _draft_email(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Prepare an email draft for user confirmation."""
+def _create_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Create an email draft in Gmail."""
+    import httpx
+    import os
+    
     to = params.get("to")
     to_name = params.get("to_name")
     subject = params.get("subject", "")
     body = params.get("body", "")
+    cc = params.get("cc")
+    reply_to_message_id = params.get("reply_to_message_id")
     
     # If no email but name provided, try to look it up
     if not to and to_name:
         try:
-            # Search contacts for email
             result = supabase.table("contacts").select(
                 "id, first_name, last_name, email"
             ).or_(
@@ -1983,7 +2028,6 @@ def _draft_email(params: Dict[str, Any]) -> Dict[str, Any]:
                     to = contact["email"]
                     to_name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
                 elif len(contacts_with_email) > 1:
-                    # Multiple matches - return them for user to choose
                     return {
                         "needs_clarification": True,
                         "message": f"Found multiple contacts matching '{to_name}':",
@@ -2013,40 +2057,15 @@ def _draft_email(params: Dict[str, Any]) -> Dict[str, Any]:
             "instruction": "Please specify who to send this email to."
         }
     
-    # Return the draft for user confirmation
-    return {
-        "draft_ready": True,
-        "message": "📧 **Email Draft Ready for Review**",
-        "email": {
-            "to": to,
-            "to_name": to_name,
-            "subject": subject,
-            "body": body
-        },
-        "instruction": "Please review and confirm to send, or ask for changes."
-    }
-
-
-def _send_email(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Send an email via the sync service Gmail API."""
-    import httpx
-    import os
-    
-    to = params.get("to")
-    subject = params.get("subject")
-    body = params.get("body")
-    cc = params.get("cc")
-    reply_to_message_id = params.get("reply_to_message_id")
-    
-    if not to or not subject or not body:
-        return {"error": "Missing required fields: to, subject, body"}
+    if not subject or not body:
+        return {"error": "Missing required fields: subject, body"}
     
     sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
     
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                f"{sync_service_url}/gmail/send",
+                f"{sync_service_url}/gmail/drafts",
                 json={
                     "to": to,
                     "subject": subject,
@@ -2061,22 +2080,162 @@ def _send_email(params: Dict[str, Any]) -> Dict[str, Any]:
                 result = response.json()
                 return {
                     "success": True,
-                    "message": f"✅ Email sent successfully to {to}!",
-                    "details": {
+                    "draft_id": result.get("draft_id"),
+                    "message": "📧 **Draft created and saved to Gmail!**",
+                    "draft": {
                         "to": to,
+                        "to_name": to_name,
                         "subject": subject,
-                        "message_id": result.get("message_id"),
-                        "thread_id": result.get("thread_id")
-                    }
+                        "body": body[:200] + "..." if len(body) > 200 else body
+                    },
+                    "instruction": "The draft is now in your Gmail Drafts folder. Say 'send it' to send, or 'delete it' to discard."
                 }
             else:
                 error_detail = response.text[:200]
-                logger.error(f"Gmail send error: {response.status_code} - {error_detail}")
-                return {"error": f"Failed to send email: {error_detail}"}
+                logger.error(f"Draft creation error: {response.status_code} - {error_detail}")
+                return {"error": f"Failed to create draft: {error_detail}"}
                 
     except httpx.TimeoutException:
-        logger.error("Timeout calling sync service for email send")
+        logger.error("Timeout calling sync service for draft creation")
         return {"error": "Email service timeout - please try again"}
     except Exception as e:
-        logger.error(f"Error sending email: {e}")
+        logger.error(f"Error creating draft: {e}")
+        return {"error": str(e)}
+
+
+def _list_email_drafts(params: Dict[str, Any]) -> Dict[str, Any]:
+    """List all email drafts from Gmail."""
+    import httpx
+    import os
+    
+    limit = params.get("limit", 10)
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(
+                f"{sync_service_url}/gmail/drafts",
+                params={"limit": limit}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                drafts = result.get("drafts", [])
+                
+                if not drafts:
+                    return {"message": "No drafts found in your Gmail."}
+                
+                formatted_drafts = []
+                for d in drafts:
+                    formatted_drafts.append({
+                        "draft_id": d.get("draft_id"),
+                        "to": d.get("to", "No recipient"),
+                        "subject": d.get("subject", "(No subject)"),
+                        "preview": d.get("snippet", "")[:80]
+                    })
+                
+                return {
+                    "count": len(formatted_drafts),
+                    "drafts": formatted_drafts,
+                    "message": f"Found {len(formatted_drafts)} draft(s) in Gmail"
+                }
+            else:
+                return {"error": f"Failed to list drafts: {response.text[:200]}"}
+                
+    except Exception as e:
+        logger.error(f"Error listing drafts: {e}")
+        return {"error": str(e)}
+
+
+def _get_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get full content of a specific draft."""
+    import httpx
+    import os
+    
+    draft_id = params.get("draft_id")
+    if not draft_id:
+        return {"error": "Missing draft_id"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(f"{sync_service_url}/gmail/drafts/{draft_id}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                draft = result.get("draft", {})
+                
+                return {
+                    "draft_id": draft.get("draft_id"),
+                    "to": draft.get("to"),
+                    "cc": draft.get("cc"),
+                    "subject": draft.get("subject"),
+                    "body": draft.get("body_text") or draft.get("body_html", ""),
+                    "message": "📧 Draft details retrieved"
+                }
+            else:
+                return {"error": f"Failed to get draft: {response.text[:200]}"}
+                
+    except Exception as e:
+        logger.error(f"Error getting draft: {e}")
+        return {"error": str(e)}
+
+
+def _send_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Send an existing draft from Gmail."""
+    import httpx
+    import os
+    
+    draft_id = params.get("draft_id")
+    if not draft_id:
+        return {"error": "Missing draft_id"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(f"{sync_service_url}/gmail/drafts/{draft_id}/send")
+            
+            if response.status_code == 200:
+                result = response.json()
+                return {
+                    "success": True,
+                    "message": "✅ Email sent successfully!",
+                    "message_id": result.get("message_id"),
+                    "thread_id": result.get("thread_id")
+                }
+            else:
+                return {"error": f"Failed to send draft: {response.text[:200]}"}
+                
+    except Exception as e:
+        logger.error(f"Error sending draft: {e}")
+        return {"error": str(e)}
+
+
+def _delete_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete a draft from Gmail."""
+    import httpx
+    import os
+    
+    draft_id = params.get("draft_id")
+    if not draft_id:
+        return {"error": "Missing draft_id"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.delete(f"{sync_service_url}/gmail/drafts/{draft_id}")
+            
+            if response.status_code == 200:
+                return {
+                    "success": True,
+                    "message": "🗑️ Draft deleted successfully"
+                }
+            else:
+                return {"error": f"Failed to delete draft: {response.text[:200]}"}
+                
+    except Exception as e:
+        logger.error(f"Error deleting draft: {e}")
         return {"error": str(e)}
