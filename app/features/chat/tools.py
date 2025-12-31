@@ -603,6 +603,89 @@ IMPORTANT: Always confirm the details with the user before creating.""",
         }
     },
     # =========================================================================
+    # CALENDAR UPDATES - Reschedule existing events
+    # =========================================================================
+    {
+        "name": "update_calendar_event",
+        "description": """Update/reschedule an existing calendar event.
+Use this when user asks to:
+- Reschedule a meeting
+- Move a calendar event to a different time
+- Change meeting details (location, description)
+- Add a reason for rescheduling
+
+First use query_database to find the event_id from calendar_events table using the event title or time.
+Then update it with new details.
+
+IMPORTANT: 
+- This notifies all attendees by default
+- Add reschedule reason to description field
+- Only the event organizer can reschedule""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "Google Calendar event ID (query calendar_events.google_event_id to find this)"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "New event title (optional)"
+                },
+                "start_time": {
+                    "type": "string",
+                    "description": "New start time in ISO 8601 format (optional)"
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "New end time in ISO 8601 format (optional)"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Updated description - use this to add reschedule reason like 'Rescheduled due to conflict' (optional)"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "New location (optional)"
+                },
+                "send_updates": {
+                    "type": "string",
+                    "enum": ["all", "externalOnly", "none"],
+                    "description": "Who to notify about the update (default: 'all')"
+                }
+            },
+            "required": ["event_id"]
+        }
+    },
+    {
+        "name": "decline_calendar_event",
+        "description": """Decline a calendar invitation that someone else sent you.
+Use this when user asks to:
+- Decline a meeting invitation
+- Say no to an event
+- Suggest an alternative time for a meeting they were invited to
+
+First use query_database to find the event_id from calendar_events table.
+Optionally include a comment with the decline (e.g., alternative time suggestion).
+
+NOTE: This is for events you're INVITED to, not events you organized.
+To cancel your own event, use update_calendar_event to change the status.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "Google Calendar event ID (query calendar_events.google_event_id to find this)"
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optional message to send with decline (e.g., 'Can we do 3pm instead?')"
+                }
+            },
+            "required": ["event_id"]
+        }
+    },
+    # =========================================================================
     # EMAIL DRAFTS - Create drafts that sync with Gmail, send only on confirm
     # =========================================================================
     {
@@ -780,6 +863,10 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         # Calendar creation
         elif tool_name == "create_calendar_event":
             return _create_calendar_event(tool_input)
+        elif tool_name == "update_calendar_event":
+            return _update_calendar_event(tool_input)
+        elif tool_name == "decline_calendar_event":
+            return _decline_calendar_event(tool_input)
         # Email drafts
         elif tool_name == "create_email_draft":
             return _create_email_draft(tool_input)
@@ -1997,6 +2084,132 @@ def _create_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Calendar service timeout - please try again"}
     except Exception as e:
         logger.error(f"Error creating calendar event: {e}")
+        return {"error": str(e)}
+
+
+def _update_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Update/reschedule an existing calendar event."""
+    import httpx
+    import os
+    
+    event_id = params.get("event_id")
+    title = params.get("title")
+    start_time = params.get("start_time")
+    end_time = params.get("end_time")
+    description = params.get("description")
+    location = params.get("location")
+    send_updates = params.get("send_updates", "all")
+    
+    if not event_id:
+        return {"error": "Missing required field: event_id"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        payload = {"event_id": event_id, "send_updates": send_updates}
+        if title:
+            payload["summary"] = title
+        if start_time:
+            payload["start_time"] = start_time
+        if end_time:
+            payload["end_time"] = end_time
+        if description:
+            payload["description"] = description
+        if location:
+            payload["location"] = location
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                f"{sync_service_url}/calendar/update",
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                event_link = result.get("html_link", "")
+                
+                changes = []
+                if start_time or end_time:
+                    changes.append("time")
+                if description:
+                    changes.append("details")
+                if location:
+                    changes.append("location")
+                
+                change_desc = " and ".join(changes) if changes else "meeting"
+                
+                return {
+                    "success": True,
+                    "event_id": result.get("event_id"),
+                    "message": f"✅ Calendar event rescheduled! Updated {change_desc}. All attendees have been notified.",
+                    "details": {
+                        "title": result.get("summary"),
+                        "start": result.get("start"),
+                        "end": result.get("end"),
+                        "link": event_link
+                    }
+                }
+            else:
+                error_detail = response.text[:200]
+                logger.error(f"Sync service error: {response.status_code} - {error_detail}")
+                return {"error": f"Failed to update calendar event: {error_detail}"}
+                
+    except httpx.TimeoutException:
+        logger.error("Timeout calling sync service for calendar update")
+        return {"error": "Calendar service timeout - please try again"}
+    except Exception as e:
+        logger.error(f"Error updating calendar event: {e}")
+        return {"error": str(e)}
+
+
+def _decline_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Decline a calendar invitation."""
+    import httpx
+    import os
+    
+    event_id = params.get("event_id")
+    comment = params.get("comment")
+    
+    if not event_id:
+        return {"error": "Missing required field: event_id"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        payload = {"event_id": event_id}
+        if comment:
+            payload["comment"] = comment
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                f"{sync_service_url}/calendar/decline",
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                msg = f"✅ Declined the calendar invitation for '{result.get('summary', 'the meeting')}'"
+                if comment:
+                    msg += f" with message: '{comment}'"
+                msg += ". The organizer has been notified."
+                
+                return {
+                    "success": True,
+                    "event_id": result.get("event_id"),
+                    "message": msg,
+                    "response_status": "declined"
+                }
+            else:
+                error_detail = response.text[:200]
+                logger.error(f"Sync service error: {response.status_code} - {error_detail}")
+                return {"error": f"Failed to decline calendar event: {error_detail}"}
+                
+    except httpx.TimeoutException:
+        logger.error("Timeout calling sync service for calendar decline")
+        return {"error": "Calendar service timeout - please try again"}
+    except Exception as e:
+        logger.error(f"Error declining calendar event: {e}")
         return {"error": str(e)}
 
 
