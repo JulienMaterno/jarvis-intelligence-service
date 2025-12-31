@@ -617,7 +617,19 @@ Use this when user asks to:
 - Set up a reminder event
 - Add something to their calendar
 
-IMPORTANT: Always confirm the details with the user before creating.""",
+TIME RULES (CRITICAL):
+1. ALWAYS call get_current_time FIRST to get the user's current date/time and timezone
+2. Use the USER'S TIMEZONE from get_current_time for all calculations (NOT UTC)
+3. SNAP times to 30-minute intervals: :00 or :30 only
+   - "in an hour" at 1:43pm → start at 2:30pm or 3:00pm (next half-hour after 2:43)
+   - "at 3" → 3:00pm
+   - "in 30 minutes" at 2:10pm → start at 2:30pm
+4. DEFAULT DURATION: 30 minutes unless user specifies
+   - "meeting at 3pm" → 3:00pm - 3:30pm
+   - "1 hour meeting" → specified start - 1 hour later
+   - "meeting from 2-4" → 2:00pm - 4:00pm
+
+NOTE: The sync service will apply the user's timezone. Just provide clean ISO times.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -627,11 +639,11 @@ IMPORTANT: Always confirm the details with the user before creating.""",
                 },
                 "start_time": {
                     "type": "string",
-                    "description": "Start time in ISO 8601 format (e.g., '2025-01-20T14:00:00')"
+                    "description": "Start time in ISO 8601 format. MUST be snapped to :00 or :30 (e.g., '2025-01-20T14:00:00' or '2025-01-20T14:30:00')"
                 },
                 "end_time": {
                     "type": "string",
-                    "description": "End time in ISO 8601 format (e.g., '2025-01-20T15:00:00')"
+                    "description": "End time in ISO 8601 format. Default 30min after start. MUST be snapped to :00 or :30"
                 },
                 "description": {
                     "type": "string",

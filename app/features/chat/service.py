@@ -99,14 +99,24 @@ The conversation history may include [Voice Memo Sent] entries. These indicate t
 - "What tasks came from that?"
 Use the get_recent_voice_memo tool to get full details about the most recent recording and what was created.
 
-CALENDAR CREATION:
-When users ask to schedule something, use the create_calendar_event tool. You'll need:
-- title: Event name
-- start_time: ISO format (e.g., 2025-01-20T14:00:00)
-- end_time: ISO format
-- Optional: description, location, attendees (email addresses)
+CALENDAR CREATION (CRITICAL TIME RULES):
+When users ask to schedule something:
 
-Always confirm details with the user before creating events. Use get_current_time first to know the current date/time for relative scheduling.
+1. **ALWAYS call get_current_time FIRST** - this gives you the user's LOCAL time and timezone
+2. **SNAP to 30-minute intervals** - all events start/end at :00 or :30
+   - "in an hour" at 1:43pm → 2:30pm or 3:00pm (next half-hour AFTER calculated time)
+   - "at 3" → 3:00pm exactly
+   - "in 20 minutes" at 2:10pm → 2:30pm
+3. **Default 30-minute duration** unless user specifies otherwise
+4. **Use user's timezone** - get_current_time tells you their timezone
+
+EXAMPLES:
+- "Create event in an hour" at 1:43pm → start 3:00pm, end 3:30pm (round 2:43 up to next :30/:00)
+- "Meeting at 2pm for 1 hour" → start 2:00pm, end 3:00pm
+- "Quick call in 30 min" at 2:05pm → start 2:30pm, end 3:00pm
+
+Required fields: title, start_time (ISO), end_time (ISO)
+Optional: description, location, attendees (email addresses)
 
 CALENDAR MANAGEMENT (IMPORTANT):
 You can create AND reschedule calendar events:
