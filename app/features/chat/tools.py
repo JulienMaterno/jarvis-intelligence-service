@@ -601,6 +601,84 @@ IMPORTANT: Always confirm the details with the user before creating.""",
             },
             "required": ["title", "start_time", "end_time"]
         }
+    },
+    # =========================================================================
+    # EMAIL SENDING - Compose and send emails via Gmail
+    # =========================================================================
+    {
+        "name": "draft_email",
+        "description": """Prepare an email draft for user confirmation before sending.
+ALWAYS use this before send_email to get user approval.
+
+Use when user asks to:
+- Send an email to someone
+- Write an email
+- Reply to an email
+- Email [person]
+
+This tool prepares the email and shows it to the user for confirmation.
+The user must explicitly confirm before calling send_email.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address"
+                },
+                "to_name": {
+                    "type": "string",
+                    "description": "Recipient name (used to look up email if 'to' not provided)"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject line"
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Email body content"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Context about why user wants to send this email (helps craft better content)"
+                }
+            },
+            "required": ["subject", "body"]
+        }
+    },
+    {
+        "name": "send_email",
+        "description": """Send an email that was previously drafted and confirmed by the user.
+ONLY use this AFTER:
+1. draft_email was called
+2. User explicitly confirmed they want to send it
+
+NEVER call this directly without user confirmation.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Recipient email address"
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject line"
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Email body content"
+                },
+                "cc": {
+                    "type": "string",
+                    "description": "CC recipients (comma-separated)"
+                },
+                "reply_to_message_id": {
+                    "type": "string",
+                    "description": "Gmail message ID if replying to an email thread"
+                }
+            },
+            "required": ["to", "subject", "body"]
+        }
     }
 ]
 
@@ -667,6 +745,11 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         # Calendar creation
         elif tool_name == "create_calendar_event":
             return _create_calendar_event(tool_input)
+        # Email sending
+        elif tool_name == "draft_email":
+            return _draft_email(tool_input)
+        elif tool_name == "send_email":
+            return _send_email(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1873,4 +1956,127 @@ def _create_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Calendar service timeout - please try again"}
     except Exception as e:
         logger.error(f"Error creating calendar event: {e}")
+        return {"error": str(e)}
+
+
+def _draft_email(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Prepare an email draft for user confirmation."""
+    to = params.get("to")
+    to_name = params.get("to_name")
+    subject = params.get("subject", "")
+    body = params.get("body", "")
+    
+    # If no email but name provided, try to look it up
+    if not to and to_name:
+        try:
+            # Search contacts for email
+            result = supabase.table("contacts").select(
+                "id, first_name, last_name, email"
+            ).or_(
+                f"first_name.ilike.%{to_name}%,last_name.ilike.%{to_name}%"
+            ).limit(5).execute()
+            
+            if result.data:
+                contacts_with_email = [c for c in result.data if c.get("email")]
+                if len(contacts_with_email) == 1:
+                    contact = contacts_with_email[0]
+                    to = contact["email"]
+                    to_name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+                elif len(contacts_with_email) > 1:
+                    # Multiple matches - return them for user to choose
+                    return {
+                        "needs_clarification": True,
+                        "message": f"Found multiple contacts matching '{to_name}':",
+                        "contacts": [
+                            {
+                                "name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+                                "email": c.get("email")
+                            }
+                            for c in contacts_with_email
+                        ],
+                        "instruction": "Please specify which email address to use."
+                    }
+                else:
+                    return {
+                        "needs_clarification": True,
+                        "message": f"Could not find email for '{to_name}'.",
+                        "instruction": "Please provide the email address directly."
+                    }
+        except Exception as e:
+            logger.error(f"Error looking up contact email: {e}")
+            return {"error": f"Could not look up contact: {str(e)}"}
+    
+    if not to:
+        return {
+            "needs_clarification": True,
+            "message": "No recipient email address provided.",
+            "instruction": "Please specify who to send this email to."
+        }
+    
+    # Return the draft for user confirmation
+    return {
+        "draft_ready": True,
+        "message": "📧 **Email Draft Ready for Review**",
+        "email": {
+            "to": to,
+            "to_name": to_name,
+            "subject": subject,
+            "body": body
+        },
+        "instruction": "Please review and confirm to send, or ask for changes."
+    }
+
+
+def _send_email(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Send an email via the sync service Gmail API."""
+    import httpx
+    import os
+    
+    to = params.get("to")
+    subject = params.get("subject")
+    body = params.get("body")
+    cc = params.get("cc")
+    reply_to_message_id = params.get("reply_to_message_id")
+    
+    if not to or not subject or not body:
+        return {"error": "Missing required fields: to, subject, body"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                f"{sync_service_url}/gmail/send",
+                json={
+                    "to": to,
+                    "subject": subject,
+                    "body": body,
+                    "cc": cc,
+                    "reply_to_message_id": reply_to_message_id,
+                    "is_html": False
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return {
+                    "success": True,
+                    "message": f"✅ Email sent successfully to {to}!",
+                    "details": {
+                        "to": to,
+                        "subject": subject,
+                        "message_id": result.get("message_id"),
+                        "thread_id": result.get("thread_id")
+                    }
+                }
+            else:
+                error_detail = response.text[:200]
+                logger.error(f"Gmail send error: {response.status_code} - {error_detail}")
+                return {"error": f"Failed to send email: {error_detail}"}
+                
+    except httpx.TimeoutException:
+        logger.error("Timeout calling sync service for email send")
+        return {"error": "Email service timeout - please try again"}
+    except Exception as e:
+        logger.error(f"Error sending email: {e}")
         return {"error": str(e)}
