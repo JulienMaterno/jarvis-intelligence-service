@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -28,15 +29,7 @@ async def link_contact_to_meeting(meeting_id: str, request: LinkContactRequest):
     try:
         logger.info("Linking meeting %s to contact %s", meeting_id, request.contact_id)
 
-        result = (
-            db.client.table("meetings")
-            .update({"contact_id": request.contact_id})
-            .eq("id", meeting_id)
-            .execute()
-        )
-        if not result.data:
-            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
-
+        # First get the contact details
         contact = (
             db.client.table("contacts")
             .select("first_name, last_name, company")
@@ -44,10 +37,27 @@ async def link_contact_to_meeting(meeting_id: str, request: LinkContactRequest):
             .single()
             .execute()
         )
+        
+        if not contact.data:
+            raise HTTPException(status_code=404, detail=f"Contact {request.contact_id} not found")
 
         contact_name = _build_contact_name(
             contact.data.get("first_name"), contact.data.get("last_name")
         )
+
+        # Update BOTH contact_id AND contact_name - contact_name is needed for Notion sync!
+        result = (
+            db.client.table("meetings")
+            .update({
+                "contact_id": request.contact_id,
+                "contact_name": contact_name,  # Critical for Notion sync
+                "updated_at": datetime.now(timezone.utc).isoformat()  # Trigger sync
+            })
+            .eq("id", meeting_id)
+            .execute()
+        )
+        if not result.data:
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
 
         return {
             "status": "success",

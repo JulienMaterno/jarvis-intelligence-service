@@ -33,6 +33,8 @@ Available tables:
 - calendar_events: Calendar (summary, start_time, end_time, location, attendees)
 - emails: Email records (subject, sender, recipient, date, snippet)
 - transcripts: Voice transcripts (full_text, source_file, created_at)
+- books: Reading list (title, author, status, rating, current_page, total_pages, summary, notes)
+- highlights: Book highlights (book_title, content, note, chapter, page_number, is_favorite)
 
 IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text search.""",
         "input_schema": {
@@ -435,6 +437,170 @@ This updates their stored location for all future time-related operations.""",
             "properties": {},
             "required": []
         }
+    },
+    # =========================================================================
+    # BOOKS & HIGHLIGHTS - Reading data access
+    # =========================================================================
+    {
+        "name": "get_books",
+        "description": """Get books from the reading list. Filter by status, author, or search.
+Use this when user asks about:
+- Books they're reading or have read
+- Reading progress
+- Book recommendations from their list
+- What they finished recently""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["Reading", "Finished", "To Read", "Abandoned", "all"],
+                    "description": "Filter by reading status",
+                    "default": "all"
+                },
+                "author": {
+                    "type": "string",
+                    "description": "Filter by author name (partial match)"
+                },
+                "search": {
+                    "type": "string",
+                    "description": "Search in title, author, notes"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results",
+                    "default": 10
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_highlights",
+        "description": """Get book highlights and annotations.
+Use this when user asks about:
+- Their book highlights or favorite quotes
+- Notes from a specific book
+- Ideas or insights they saved while reading
+- What they underlined/marked in books""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "book_title": {
+                    "type": "string",
+                    "description": "Filter by book title (partial match)"
+                },
+                "search": {
+                    "type": "string",
+                    "description": "Search in highlight content or notes"
+                },
+                "favorites_only": {
+                    "type": "boolean",
+                    "description": "Only return favorite/starred highlights",
+                    "default": False
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Get highlights from last N days",
+                    "default": 90
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results",
+                    "default": 20
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "search_reading_notes",
+        "description": """Search across all books and highlights for ideas, quotes, or topics.
+Great for finding insights across multiple books on a topic.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search term to find in books, highlights, and notes"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 15
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    # =========================================================================
+    # RECENT VOICE MEMO CONTEXT - For follow-up questions
+    # =========================================================================
+    {
+        "name": "get_recent_voice_memo",
+        "description": """Get the most recently processed voice memo and what was created from it.
+Use this when user asks things like:
+- 'What did I just say?'
+- 'Can you summarize what I just recorded?'
+- 'What did you create from that?'
+- 'Show me the meeting/journal/tasks you just made'
+- Questions about their last recording""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "include_transcript": {
+                    "type": "boolean",
+                    "description": "Include full transcript text",
+                    "default": True
+                }
+            },
+            "required": []
+        }
+    },
+    # =========================================================================
+    # CALENDAR CREATION - Create events in Google Calendar
+    # =========================================================================
+    {
+        "name": "create_calendar_event",
+        "description": """Create a new event in the user's Google Calendar.
+Use this when user asks to:
+- Schedule a meeting
+- Create a calendar event
+- Block time for something
+- Set up a reminder event
+- Add something to their calendar
+
+IMPORTANT: Always confirm the details with the user before creating.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Event title/summary"
+                },
+                "start_time": {
+                    "type": "string",
+                    "description": "Start time in ISO 8601 format (e.g., '2025-01-20T14:00:00')"
+                },
+                "end_time": {
+                    "type": "string",
+                    "description": "End time in ISO 8601 format (e.g., '2025-01-20T15:00:00')"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Event description/notes (optional)"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Event location (optional)"
+                },
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of attendee email addresses (optional)"
+                }
+            },
+            "required": ["title", "start_time", "end_time"]
+        }
     }
 ]
 
@@ -488,6 +654,19 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _get_user_location()
         elif tool_name == "get_current_time":
             return _get_current_time()
+        # Books & Highlights
+        elif tool_name == "get_books":
+            return _get_books(tool_input)
+        elif tool_name == "get_highlights":
+            return _get_highlights(tool_input)
+        elif tool_name == "search_reading_notes":
+            return _search_reading_notes(tool_input)
+        # Recent voice memo context
+        elif tool_name == "get_recent_voice_memo":
+            return _get_recent_voice_memo(tool_input)
+        # Calendar creation
+        elif tool_name == "create_calendar_event":
+            return _create_calendar_event(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -695,8 +874,10 @@ def _get_recent_emails(input: Dict) -> Dict[str, Any]:
         days = input.get("days", 7)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         
+        # Note: emails table has: subject, sender, recipient, date, snippet, body_text
+        # No 'direction' column exists
         query = supabase.table("emails").select(
-            "subject, sender, recipient, date, snippet, direction"
+            "id, subject, sender, recipient, date, snippet"
         ).gte("date", cutoff)
         
         if input.get("from_email"):
@@ -707,9 +888,22 @@ def _get_recent_emails(input: Dict) -> Dict[str, Any]:
         
         result = query.order("date", desc=True).limit(input.get("limit", 10)).execute()
         
-        return {"emails": result.data or [], "count": len(result.data or [])}
+        # Format emails for readability
+        emails = []
+        for e in result.data or []:
+            email_info = {
+                "subject": e.get("subject", "(no subject)"),
+                "from": e.get("sender", "Unknown"),
+                "to": e.get("recipient", "Unknown"),
+                "date": e.get("date"),
+                "preview": e.get("snippet", "")[:150] + "..." if e.get("snippet") and len(e.get("snippet", "")) > 150 else e.get("snippet")
+            }
+            emails.append(email_info)
+        
+        return {"emails": emails, "count": len(emails)}
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"Error getting emails: {e}")
+        return {"error": str(e), "emails": []}
 
 
 def _get_tasks(status: str = "pending", limit: int = 10) -> Dict[str, Any]:
@@ -1309,3 +1503,374 @@ def _get_current_time() -> Dict[str, Any]:
             "iso": now.isoformat(),
             "error": str(e)
         }
+
+
+# =============================================================================
+# BOOKS & HIGHLIGHTS TOOLS
+# =============================================================================
+
+def _get_books(input: Dict) -> Dict[str, Any]:
+    """Get books from reading list."""
+    try:
+        status = input.get("status", "all")
+        author = input.get("author", "")
+        search = input.get("search", "")
+        limit = input.get("limit", 10)
+        
+        query = supabase.table("books").select(
+            "id, title, author, status, rating, current_page, total_pages, "
+            "progress_percent, started_at, finished_at, summary, notes, tags"
+        ).is_("deleted_at", "null")
+        
+        if status and status != "all":
+            query = query.eq("status", status)
+        
+        if author:
+            query = query.ilike("author", f"%{author}%")
+        
+        if search:
+            # Search in title, author, notes
+            query = query.or_(f"title.ilike.%{search}%,author.ilike.%{search}%,notes.ilike.%{search}%")
+        
+        result = query.order("updated_at", desc=True).limit(limit).execute()
+        
+        books = []
+        for b in result.data or []:
+            book_info = {
+                "id": b["id"],
+                "title": b["title"],
+                "author": b.get("author", "Unknown"),
+                "status": b.get("status", "Unknown"),
+            }
+            
+            # Add progress for books being read
+            if b.get("current_page") and b.get("total_pages"):
+                book_info["progress"] = f"{b['current_page']}/{b['total_pages']} ({b.get('progress_percent', 0)}%)"
+            
+            if b.get("rating"):
+                book_info["rating"] = f"{'⭐' * b['rating']}"
+            
+            if b.get("started_at"):
+                book_info["started"] = b["started_at"]
+            
+            if b.get("finished_at"):
+                book_info["finished"] = b["finished_at"]
+            
+            if b.get("summary"):
+                book_info["summary"] = b["summary"][:200] + "..." if len(b.get("summary", "")) > 200 else b.get("summary")
+            
+            if b.get("tags"):
+                book_info["tags"] = b["tags"]
+            
+            books.append(book_info)
+        
+        return {
+            "books": books,
+            "count": len(books),
+            "filter": {"status": status, "author": author or None, "search": search or None}
+        }
+    except Exception as e:
+        logger.error(f"Error getting books: {e}")
+        return {"error": str(e), "books": []}
+
+
+def _get_highlights(input: Dict) -> Dict[str, Any]:
+    """Get book highlights and annotations."""
+    try:
+        book_title = input.get("book_title", "")
+        search = input.get("search", "")
+        favorites_only = input.get("favorites_only", False)
+        days = input.get("days", 90)
+        limit = input.get("limit", 20)
+        
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        
+        query = supabase.table("highlights").select(
+            "id, book_title, content, note, page_number, chapter, "
+            "highlight_type, tags, is_favorite, highlighted_at, created_at"
+        ).is_("deleted_at", "null").gte("created_at", cutoff)
+        
+        if book_title:
+            query = query.ilike("book_title", f"%{book_title}%")
+        
+        if search:
+            query = query.or_(f"content.ilike.%{search}%,note.ilike.%{search}%")
+        
+        if favorites_only:
+            query = query.eq("is_favorite", True)
+        
+        result = query.order("created_at", desc=True).limit(limit).execute()
+        
+        highlights = []
+        for h in result.data or []:
+            highlight_info = {
+                "book": h.get("book_title", "Unknown"),
+                "content": h["content"][:300] + "..." if len(h.get("content", "")) > 300 else h.get("content"),
+            }
+            
+            if h.get("note"):
+                highlight_info["my_note"] = h["note"]
+            
+            if h.get("chapter"):
+                highlight_info["chapter"] = h["chapter"]
+            elif h.get("page_number"):
+                highlight_info["page"] = h["page_number"]
+            
+            if h.get("is_favorite"):
+                highlight_info["favorite"] = True
+            
+            if h.get("tags"):
+                highlight_info["tags"] = h["tags"]
+            
+            highlights.append(highlight_info)
+        
+        return {
+            "highlights": highlights,
+            "count": len(highlights),
+            "filter": {"book": book_title or None, "search": search or None, "favorites_only": favorites_only}
+        }
+    except Exception as e:
+        logger.error(f"Error getting highlights: {e}")
+        return {"error": str(e), "highlights": []}
+
+
+def _search_reading_notes(input: Dict) -> Dict[str, Any]:
+    """Search across books and highlights."""
+    try:
+        query_text = input.get("query", "")
+        limit = input.get("limit", 15)
+        
+        if not query_text:
+            return {"error": "Query is required"}
+        
+        results = {"books": [], "highlights": []}
+        
+        # Search books
+        books_result = supabase.table("books").select(
+            "id, title, author, status, summary, notes"
+        ).is_("deleted_at", "null").or_(
+            f"title.ilike.%{query_text}%,author.ilike.%{query_text}%,"
+            f"summary.ilike.%{query_text}%,notes.ilike.%{query_text}%"
+        ).limit(5).execute()
+        
+        for b in books_result.data or []:
+            results["books"].append({
+                "title": b["title"],
+                "author": b.get("author"),
+                "status": b.get("status"),
+                "summary_snippet": (b.get("summary") or "")[:150] + "..." if b.get("summary") else None
+            })
+        
+        # Search highlights
+        highlights_result = supabase.table("highlights").select(
+            "id, book_title, content, note, chapter"
+        ).is_("deleted_at", "null").or_(
+            f"content.ilike.%{query_text}%,note.ilike.%{query_text}%"
+        ).limit(limit - 5).execute()
+        
+        for h in highlights_result.data or []:
+            results["highlights"].append({
+                "book": h.get("book_title"),
+                "content": h["content"][:200] + "..." if len(h.get("content", "")) > 200 else h.get("content"),
+                "note": h.get("note"),
+                "chapter": h.get("chapter")
+            })
+        
+        return {
+            "query": query_text,
+            "results": results,
+            "total_found": len(results["books"]) + len(results["highlights"])
+        }
+    except Exception as e:
+        logger.error(f"Error searching reading notes: {e}")
+        return {"error": str(e)}
+
+
+# =============================================================================
+# RECENT VOICE MEMO CONTEXT
+# =============================================================================
+
+def _get_recent_voice_memo(input: Dict) -> Dict[str, Any]:
+    """Get the most recently processed voice memo and what was created from it."""
+    try:
+        include_transcript = input.get("include_transcript", True)
+        
+        # Get the most recent transcript
+        transcript_result = supabase.table("transcripts").select(
+            "id, full_text, source_file, created_at, language"
+        ).order("created_at", desc=True).limit(1).execute()
+        
+        if not transcript_result.data:
+            return {"error": "No voice memos found"}
+        
+        transcript = transcript_result.data[0]
+        transcript_id = transcript["id"]
+        
+        result = {
+            "transcript_id": transcript_id,
+            "recorded_at": transcript["created_at"],
+            "source_file": transcript.get("source_file"),
+            "language": transcript.get("language"),
+            "created_items": {}
+        }
+        
+        if include_transcript:
+            full_text = transcript.get("full_text", "")
+            result["transcript"] = full_text[:2000] + "..." if len(full_text) > 2000 else full_text
+            result["transcript_length"] = len(full_text)
+        
+        # Find meetings created from this transcript
+        meetings = supabase.table("meetings").select(
+            "id, title, summary, contact_name, date"
+        ).eq("source_transcript_id", transcript_id).execute()
+        
+        if meetings.data:
+            result["created_items"]["meetings"] = [
+                {
+                    "id": m["id"],
+                    "title": m["title"],
+                    "summary": m.get("summary", "")[:200] + "..." if m.get("summary") and len(m.get("summary", "")) > 200 else m.get("summary"),
+                    "contact": m.get("contact_name"),
+                    "date": m.get("date")
+                }
+                for m in meetings.data
+            ]
+        
+        # Find journals (check by date - journals from same day)
+        transcript_date = transcript["created_at"][:10]  # YYYY-MM-DD
+        journals = supabase.table("journals").select(
+            "id, date, title, content, mood"
+        ).eq("date", transcript_date).limit(1).execute()
+        
+        if journals.data:
+            j = journals.data[0]
+            result["created_items"]["journal"] = {
+                "id": j["id"],
+                "date": j["date"],
+                "title": j.get("title"),
+                "content_preview": j.get("content", "")[:300] + "..." if j.get("content") and len(j.get("content", "")) > 300 else j.get("content"),
+                "mood": j.get("mood")
+            }
+        
+        # Find reflections created from this transcript
+        reflections = supabase.table("reflections").select(
+            "id, title, topic_key, content, tags"
+        ).eq("source_transcript_id", transcript_id).execute()
+        
+        if reflections.data:
+            result["created_items"]["reflections"] = [
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "topic": r.get("topic_key"),
+                    "content_preview": r.get("content", "")[:200] + "..." if r.get("content") and len(r.get("content", "")) > 200 else r.get("content"),
+                    "tags": r.get("tags")
+                }
+                for r in reflections.data
+            ]
+        
+        # Find tasks linked to these items
+        origin_ids = []
+        if meetings.data:
+            origin_ids.extend([m["id"] for m in meetings.data])
+        if reflections.data:
+            origin_ids.extend([r["id"] for r in reflections.data])
+        if journals.data:
+            origin_ids.extend([j["id"] for j in journals.data])
+        
+        if origin_ids:
+            tasks = supabase.table("tasks").select(
+                "id, title, status, priority, due_date, origin_type"
+            ).in_("origin_id", origin_ids).execute()
+            
+            if tasks.data:
+                result["created_items"]["tasks"] = [
+                    {
+                        "id": t["id"],
+                        "title": t["title"],
+                        "status": t.get("status"),
+                        "priority": t.get("priority"),
+                        "due_date": t.get("due_date"),
+                        "from": t.get("origin_type")
+                    }
+                    for t in tasks.data
+                ]
+        
+        # Summary
+        item_counts = []
+        if result["created_items"].get("meetings"):
+            item_counts.append(f"{len(result['created_items']['meetings'])} meeting(s)")
+        if result["created_items"].get("journal"):
+            item_counts.append("1 journal entry")
+        if result["created_items"].get("reflections"):
+            item_counts.append(f"{len(result['created_items']['reflections'])} reflection(s)")
+        if result["created_items"].get("tasks"):
+            item_counts.append(f"{len(result['created_items']['tasks'])} task(s)")
+        
+        result["summary"] = f"From your last voice memo, I created: {', '.join(item_counts)}" if item_counts else "No structured items were created from this voice memo"
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error getting recent voice memo: {e}")
+        return {"error": str(e)}
+
+
+def _create_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a calendar event via the sync service."""
+    import httpx
+    import os
+    
+    title = params.get("title")
+    start_time = params.get("start_time")
+    end_time = params.get("end_time")
+    description = params.get("description")
+    location = params.get("location")
+    attendees = params.get("attendees", [])
+    
+    if not title or not start_time or not end_time:
+        return {"error": "Missing required fields: title, start_time, end_time"}
+    
+    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    try:
+        # Call the sync service to create the event
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                f"{sync_service_url}/calendar/create",
+                json={
+                    "summary": title,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "description": description,
+                    "location": location,
+                    "attendees": attendees
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                event_link = result.get("html_link", "")
+                return {
+                    "success": True,
+                    "event_id": result.get("event_id"),
+                    "message": f"✅ Calendar event '{title}' created successfully!",
+                    "details": {
+                        "title": title,
+                        "start": start_time,
+                        "end": end_time,
+                        "location": location,
+                        "attendees": attendees,
+                        "link": event_link
+                    }
+                }
+            else:
+                error_detail = response.text[:200]
+                logger.error(f"Sync service error: {response.status_code} - {error_detail}")
+                return {"error": f"Failed to create calendar event: {error_detail}"}
+                
+    except httpx.TimeoutException:
+        logger.error("Timeout calling sync service for calendar creation")
+        return {"error": "Calendar service timeout - please try again"}
+    except Exception as e:
+        logger.error(f"Error creating calendar event: {e}")
+        return {"error": str(e)}
