@@ -349,19 +349,104 @@ class BeeperService:
                 .execute()
             
             # Also tell beeper-bridge (optional, for UI sync)
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                import urllib.parse
-                encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
-                
-                await client.post(
-                    f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/archive"
-                )
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    import urllib.parse
+                    encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+                    await client.post(f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/archive")
+            except Exception:
+                pass  # Bridge may be offline
             
             return {"status": "archived", "beeper_chat_id": beeper_chat_id}
         
         except Exception as e:
             logger.error(f"Failed to archive chat: {e}")
             raise
+    
+    async def unarchive_chat(self, beeper_chat_id: str) -> Dict[str, Any]:
+        """Unarchive a chat."""
+        try:
+            self.db.table("beeper_chats") \
+                .update({"is_archived": False, "archived_at": None}) \
+                .eq("beeper_chat_id", beeper_chat_id) \
+                .execute()
+            
+            return {"status": "unarchived", "beeper_chat_id": beeper_chat_id}
+        
+        except Exception as e:
+            logger.error(f"Failed to unarchive chat: {e}")
+            raise
+    
+    async def get_unread_messages(self, limit: int = 50) -> Dict[str, Any]:
+        """Get unread messages across all chats."""
+        try:
+            result = self.db.table("beeper_messages") \
+                .select("*, chat:beeper_chats(platform, chat_name, contact_id, contact:contacts(first_name, last_name))") \
+                .eq("is_read", False) \
+                .eq("is_outgoing", False) \
+                .order("timestamp", desc=True) \
+                .limit(limit) \
+                .execute()
+            
+            return {
+                "count": len(result.data),
+                "messages": result.data
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to get unread messages: {e}")
+            raise
+    
+    async def link_chat_to_contact(self, beeper_chat_id: str, contact_id: str) -> Dict[str, Any]:
+        """Link a chat to a contact."""
+        try:
+            # Update the chat
+            self.db.table("beeper_chats") \
+                .update({
+                    "contact_id": contact_id,
+                    "contact_link_method": "manual",
+                    "contact_link_confidence": 1.0
+                }) \
+                .eq("beeper_chat_id", beeper_chat_id) \
+                .execute()
+            
+            # Also update all messages from this chat
+            self.db.table("beeper_messages") \
+                .update({"contact_id": contact_id}) \
+                .eq("beeper_chat_id", beeper_chat_id) \
+                .execute()
+            
+            # Get contact info for response
+            contact = self.db.table("contacts") \
+                .select("id, first_name, last_name, company") \
+                .eq("id", contact_id) \
+                .single() \
+                .execute()
+            
+            return {
+                "status": "linked",
+                "beeper_chat_id": beeper_chat_id,
+                "contact": contact.data
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to link chat to contact: {e}")
+            raise
+    
+    async def trigger_sync(self, full: bool = False) -> Dict[str, Any]:
+        """Trigger a Beeper sync via the sync service."""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{SYNC_SERVICE_URL}/sync/beeper",
+                    params={"full": str(full).lower()}
+                )
+                response.raise_for_status()
+                return response.json()
+        
+        except Exception as e:
+            logger.error(f"Failed to trigger sync: {e}")
+            return {"status": "error", "error": str(e)}
     
     # =========================================================================
     # SEARCH
@@ -401,19 +486,21 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """Search messages in database using full-text search."""
         try:
-            # Use PostgreSQL full-text search
+            # Build query with filters first, then order/limit
             search_query = self.db.table("beeper_messages") \
-                .select("*, chat:beeper_chats(platform, chat_name, contact_id, contact:contacts(first_name, last_name))") \
-                .text_search("content", query) \
-                .order("timestamp", desc=True) \
-                .limit(limit)
+                .select("*, chat:beeper_chats(platform, chat_name, contact_id, contact:contacts(first_name, last_name))")
             
+            # Apply filters
             if platform:
                 search_query = search_query.eq("platform", platform)
             if contact_id:
                 search_query = search_query.eq("contact_id", contact_id)
             
-            result = search_query.execute()
+            # Use ilike for simple text search (more reliable than text_search)
+            search_query = search_query.ilike("content", f"%{query}%")
+            
+            # Order and limit
+            result = search_query.order("timestamp", desc=True).limit(limit).execute()
             
             return {
                 "query": query,
