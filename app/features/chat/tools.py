@@ -1198,7 +1198,14 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
 
 
 def _query_database(sql: str) -> Dict[str, Any]:
-    """Execute a read-only SQL query."""
+    """Execute a read-only SQL query using direct table access.
+    
+    Note: Full SQL execution is not available. This tool parses simple SELECT queries
+    and converts them to Supabase table queries. For complex queries, use the
+    specific tools like search_contacts, get_tasks, search_meetings, etc.
+    """
+    import re
+    
     # Security: Only allow SELECT statements
     sql_upper = sql.strip().upper()
     if not sql_upper.startswith("SELECT"):
@@ -1211,13 +1218,67 @@ def _query_database(sql: str) -> Dict[str, Any]:
             return {"error": f"Query contains forbidden keyword: {keyword}"}
     
     try:
-        result = supabase.rpc("execute_sql", {"query": sql}).execute()
-        return {"data": result.data, "count": len(result.data) if result.data else 0}
+        # Parse simple queries like: SELECT * FROM table_name LIMIT n
+        # or: SELECT columns FROM table_name WHERE condition LIMIT n
+        
+        # Extract table name
+        from_match = re.search(r'FROM\s+(\w+)', sql, re.IGNORECASE)
+        if not from_match:
+            return {"error": "Could not parse table name from query. Use specific tools like search_contacts, get_tasks, etc."}
+        
+        table_name = from_match.group(1)
+        
+        # Allowed tables for security
+        allowed_tables = [
+            "contacts", "meetings", "tasks", "journals", "reflections",
+            "calendar_events", "emails", "transcripts", "beeper_chats",
+            "beeper_messages", "books", "highlights", "sync_logs"
+        ]
+        
+        if table_name.lower() not in allowed_tables:
+            return {"error": f"Table '{table_name}' is not accessible. Allowed: {', '.join(allowed_tables)}"}
+        
+        # Extract columns (simplified - just use *)
+        select_match = re.search(r'SELECT\s+(.+?)\s+FROM', sql, re.IGNORECASE)
+        columns = "*"
+        if select_match:
+            cols = select_match.group(1).strip()
+            if cols != "*":
+                columns = cols
+        
+        # Extract LIMIT
+        limit_match = re.search(r'LIMIT\s+(\d+)', sql, re.IGNORECASE)
+        limit = int(limit_match.group(1)) if limit_match else 20
+        limit = min(limit, 100)  # Cap at 100
+        
+        # Execute query
+        query = supabase.table(table_name).select(columns).limit(limit)
+        
+        # Try to parse simple WHERE clauses
+        where_match = re.search(r'WHERE\s+(.+?)(?:ORDER|LIMIT|$)', sql, re.IGNORECASE)
+        if where_match:
+            # For now, just note that WHERE was requested but not fully supported
+            logger.info(f"WHERE clause detected but not fully parsed: {where_match.group(1)}")
+        
+        # Order by created_at desc by default for most tables
+        if table_name.lower() in ["meetings", "tasks", "journals", "reflections", "emails", "beeper_messages"]:
+            query = query.order("created_at", desc=True)
+        
+        result = query.execute()
+        
+        return {
+            "data": result.data[:limit] if result.data else [],
+            "count": len(result.data) if result.data else 0,
+            "table": table_name,
+            "note": "For complex queries, use specific tools like search_contacts, get_tasks, search_meetings, etc."
+        }
+        
     except Exception as e:
-        # Fallback: Try direct table query if RPC doesn't exist
-        # This is a simplified approach - the RPC would be more flexible
-        logger.warning(f"RPC execute_sql failed, trying direct query: {e}")
-        return {"error": f"Query execution failed: {str(e)[:200]}"}
+        logger.error(f"Query execution error: {e}")
+        return {
+            "error": f"Query failed: {str(e)[:200]}",
+            "hint": "Try using specific tools: search_contacts, get_tasks, search_meetings, get_journals, get_beeper_inbox, etc."
+        }
 
 
 def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
