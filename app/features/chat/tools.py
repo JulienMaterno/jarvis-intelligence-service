@@ -989,8 +989,14 @@ Does NOT delete the chat - just marks it as archived.""",
         "name": "send_beeper_message",
         "description": """Send a message to a Beeper chat (WhatsApp, Telegram, LinkedIn, etc.).
 
-⚠️ IMPORTANT: ALWAYS ask for explicit confirmation before sending.
-Example: "I'll send this message to [name] on [platform]: '[message]'. Shall I send it?"
+⚠️ CRITICAL TWO-STEP PROCESS:
+STEP 1 - Draft and confirm: Show user the message and ask "Shall I send it?"
+STEP 2 - After user confirms: CALL THIS TOOL with user_confirmed=true
+
+When user says "yes", "send it", "go ahead" → YOU MUST CALL THIS TOOL NOW
+
+DO NOT just say "message sent" - you MUST actually call this tool to send the message.
+Without calling this tool, the message will NOT be sent.
 
 Use when user wants to:
 - Reply to a message they received
