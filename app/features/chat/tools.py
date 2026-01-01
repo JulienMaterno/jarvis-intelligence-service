@@ -1075,6 +1075,30 @@ Use when:
             "properties": {},
             "required": []
         }
+    },
+    {
+        "name": "trigger_beeper_sync",
+        "description": """Trigger an immediate sync of Beeper messages to the database.
+
+Messages are normally synced every 15 minutes. Use this tool when:
+- User asks for "latest messages" or "new messages in the last few minutes"
+- User says "refresh messages" or "sync now"
+- Before checking inbox when user needs real-time data
+- After sending a message to ensure it appears in history
+
+Returns sync statistics (new messages count, chats updated, etc.).
+After triggering, use get_beeper_inbox or other tools to see updated data.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "full_sync": {
+                    "type": "boolean",
+                    "description": "If true, resync all messages (slower). Default false = incremental sync (fast).",
+                    "default": False
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -1190,6 +1214,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _unarchive_beeper_chat(tool_input)
         elif tool_name == "get_beeper_status":
             return _get_beeper_status(tool_input)
+        elif tool_name == "trigger_beeper_sync":
+            return _trigger_beeper_sync(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -3503,3 +3529,61 @@ def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
         result["message"] = "⚠️ Bridge running but Beeper Desktop not connected"
     
     return result
+
+
+def _trigger_beeper_sync(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Trigger an immediate sync of Beeper messages to the database."""
+    import httpx
+    import os
+    
+    full_sync = params.get("full_sync", False)
+    
+    SYNC_SERVICE_URL = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    
+    logger.info(f"Triggering Beeper sync (full={full_sync})")
+    
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            # Trigger the sync via the sync service
+            response = client.post(
+                f"{SYNC_SERVICE_URL}/sync/beeper",
+                params={"full": full_sync}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                # Format the response
+                return {
+                    "status": "success",
+                    "message": f"✅ Sync completed! {result.get('new_messages', 0)} new messages, {result.get('chats_updated', 0)} chats updated.",
+                    "details": {
+                        "new_messages": result.get("new_messages", 0),
+                        "chats_updated": result.get("chats_updated", 0),
+                        "contacts_linked": result.get("contacts_linked", 0),
+                        "sync_type": "full" if full_sync else "incremental"
+                    }
+                }
+            else:
+                logger.error(f"Sync service returned {response.status_code}: {response.text}")
+                return {
+                    "status": "error",
+                    "message": f"Sync failed with status {response.status_code}",
+                    "error": response.text[:200]
+                }
+                
+    except httpx.TimeoutException:
+        return {
+            "status": "timeout",
+            "message": "⏱️ Sync is taking longer than expected. It may still complete in the background.",
+            "hint": "Try checking get_beeper_inbox in a moment"
+        }
+    except httpx.ConnectError:
+        return {
+            "status": "error",
+            "message": "❌ Could not connect to sync service",
+            "hint": "The sync service may be temporarily unavailable"
+        }
+    except Exception as e:
+        logger.error(f"Error triggering Beeper sync: {e}")
+        return {"error": str(e)}
