@@ -348,8 +348,8 @@ class ChatService:
                             logger.info(f"   Input: {json.dumps(tool_input, indent=2)[:500]}")
                             tools_used.append(tool_name)
                             
-                            # Execute the tool
-                            result = execute_tool(tool_name, tool_input)
+                            # Execute the tool - pass last user message for send_beeper_message confirmation check
+                            result = execute_tool(tool_name, tool_input, last_user_message=request.message)
                             logger.info(f"   Result: {json.dumps(result, indent=2)[:500]}")
                             
                             tool_results.append({

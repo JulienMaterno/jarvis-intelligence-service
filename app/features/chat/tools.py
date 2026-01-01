@@ -1083,8 +1083,14 @@ Use when:
 # TOOL IMPLEMENTATIONS
 # =============================================================================
 
-def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a tool and return the result."""
+def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: str = "") -> Dict[str, Any]:
+    """Execute a tool and return the result.
+    
+    Args:
+        tool_name: Name of the tool to execute
+        tool_input: Tool parameters
+        last_user_message: The most recent user message (for confirmation checks)
+    """
     try:
         if tool_name == "query_database":
             return _query_database(tool_input.get("sql", ""))
@@ -1173,6 +1179,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _archive_beeper_chat(tool_input)
         elif tool_name == "send_beeper_message":
             logger.info(f"📤 SEND_BEEPER_MESSAGE called with: {tool_input}")
+            # CRITICAL: Verify actual user confirmation from their message
+            tool_input["_last_user_message"] = last_user_message
             result = _send_beeper_message(tool_input)
             logger.info(f"📤 SEND_BEEPER_MESSAGE result: {result}")
             return result
@@ -3192,13 +3200,16 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
     import httpx
     import os
     import urllib.parse
+    import re
     
     beeper_chat_id = params.get("beeper_chat_id")
     content = params.get("content")
     reply_to_event_id = params.get("reply_to_event_id")
     user_confirmed = params.get("user_confirmed", False)
+    last_user_message = params.get("_last_user_message", "")
     
     logger.info(f"_send_beeper_message: chat_id={beeper_chat_id}, confirmed={user_confirmed}, content_len={len(content) if content else 0}")
+    logger.info(f"_send_beeper_message: last_user_message='{last_user_message[:100]}'")
     
     if not beeper_chat_id:
         logger.warning("❌ Send failed: Missing beeper_chat_id")
@@ -3206,9 +3217,29 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
     if not content:
         logger.warning("❌ Send failed: Missing message content")
         return {"error": "Missing message content"}
-    if not user_confirmed:
-        logger.warning(f"❌ Send blocked: user_confirmed={user_confirmed} (must be True)")
-        return {"error": "⚠️ User confirmation required! Please confirm you want to send this message before proceeding."}
+    
+    # CRITICAL: Verify ACTUAL user confirmation from their last message
+    # The user_confirmed flag from Claude is NOT trustworthy - Claude lies about this
+    confirmation_patterns = [
+        r'^yes\b', r'^yeah\b', r'^yep\b', r'^ja\b', r'^yup\b',
+        r'^ok\b', r'^okay\b', r'^sure\b', r'^go\b', r'^send\b',
+        r'\bsend it\b', r'\bgo ahead\b', r'\bdo it\b', r'\bconfirm\b',
+        r'^y$', r'^👍', r'^✅'
+    ]
+    
+    user_msg_lower = last_user_message.lower().strip()
+    is_actually_confirmed = any(re.search(pattern, user_msg_lower) for pattern in confirmation_patterns)
+    
+    logger.info(f"_send_beeper_message: actual_confirmation_check={is_actually_confirmed}")
+    
+    if not is_actually_confirmed:
+        logger.warning(f"❌ BLOCKED: User message '{last_user_message[:50]}' is NOT a confirmation!")
+        return {
+            "error": "⚠️ I need your explicit confirmation before sending. Please reply with 'yes' or 'send it' to confirm.",
+            "draft_ready": True,
+            "recipient": beeper_chat_id,
+            "message_preview": content[:100]
+        }
     
     BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
     logger.info(f"Using bridge URL: {BEEPER_BRIDGE_URL}")
