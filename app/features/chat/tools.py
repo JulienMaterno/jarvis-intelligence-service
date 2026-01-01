@@ -855,6 +855,135 @@ Use when user wants to discard a draft.""",
             },
             "required": ["draft_id"]
         }
+    },
+    # =========================================================================
+    # BEEPER MESSAGING - WhatsApp, Telegram, LinkedIn, etc.
+    # =========================================================================
+    {
+        "name": "get_beeper_inbox",
+        "description": """Get the Beeper inbox - chats that need your attention across WhatsApp, Telegram, LinkedIn, etc.
+
+Uses inbox-zero workflow:
+- 'needs_response': DMs where the other person sent the last message (awaiting your reply)
+- 'other_active': DMs where you sent the last message (ball in their court)
+
+Use this when user asks about:
+- 'Who do I need to reply to?'
+- 'Any unread messages?'
+- 'What messages need my attention?'
+- 'Show my WhatsApp/Telegram/LinkedIn messages'""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "include_groups": {
+                    "type": "boolean",
+                    "description": "Include group chats (usually lower priority)",
+                    "default": False
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max chats per category",
+                    "default": 10
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_beeper_chat_messages",
+        "description": """Get messages from a specific Beeper chat.
+
+Use this to read the conversation history with a specific person.
+First use get_beeper_inbox or search_beeper_messages to find the beeper_chat_id.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "beeper_chat_id": {
+                    "type": "string",
+                    "description": "The chat ID (e.g., '!abc123:beeper.local')"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of messages to retrieve",
+                    "default": 20
+                }
+            },
+            "required": ["beeper_chat_id"]
+        }
+    },
+    {
+        "name": "search_beeper_messages",
+        "description": """Search across all Beeper message history.
+
+Use this to find specific conversations or information mentioned in messages.
+Supports full-text search across WhatsApp, Telegram, LinkedIn, etc.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query"
+                },
+                "platform": {
+                    "type": "string",
+                    "enum": ["whatsapp", "telegram", "linkedin", "signal"],
+                    "description": "Filter by platform (optional)"
+                },
+                "contact_name": {
+                    "type": "string",
+                    "description": "Filter by contact name (optional)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results",
+                    "default": 20
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_beeper_contact_messages",
+        "description": """Get all message history with a specific contact across all platforms.
+
+Use when user asks:
+- 'What did John send me?'
+- 'Show messages with Sarah'
+- 'When did I last talk to [name]?'
+
+First searches contacts to find the contact_id, then gets all messages.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact_name": {
+                    "type": "string",
+                    "description": "Name of the contact to get messages with"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max messages to return",
+                    "default": 30
+                }
+            },
+            "required": ["contact_name"]
+        }
+    },
+    {
+        "name": "archive_beeper_chat",
+        "description": """Archive a Beeper chat (mark as handled in inbox-zero workflow).
+
+Use when user says they've dealt with a message or want to dismiss it from inbox view.
+Does NOT delete the chat - just marks it as archived.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "beeper_chat_id": {
+                    "type": "string",
+                    "description": "The chat ID to archive"
+                }
+            },
+            "required": ["beeper_chat_id"]
+        }
     }
 ]
 
@@ -940,6 +1069,17 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _send_email_draft(tool_input)
         elif tool_name == "delete_email_draft":
             return _delete_email_draft(tool_input)
+        # Beeper messaging
+        elif tool_name == "get_beeper_inbox":
+            return _get_beeper_inbox(tool_input)
+        elif tool_name == "get_beeper_chat_messages":
+            return _get_beeper_chat_messages(tool_input)
+        elif tool_name == "search_beeper_messages":
+            return _search_beeper_messages(tool_input)
+        elif tool_name == "get_beeper_contact_messages":
+            return _get_beeper_contact_messages(tool_input)
+        elif tool_name == "archive_beeper_chat":
+            return _archive_beeper_chat(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -2593,4 +2733,353 @@ def _delete_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
                 
     except Exception as e:
         logger.error(f"Error deleting draft: {e}")
+        return {"error": str(e)}
+
+
+# =============================================================================
+# BEEPER MESSAGING TOOLS
+# =============================================================================
+
+def _get_beeper_inbox(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get Beeper inbox chats that need attention."""
+    include_groups = params.get("include_groups", False)
+    limit = params.get("limit", 10)
+    
+    try:
+        # Get chats that need response (last message from other person)
+        needs_response_query = supabase.table("beeper_chats") \
+            .select("beeper_chat_id, platform, chat_type, chat_name, last_message_at, last_message_preview, unread_count, contact_id, needs_response, contact:contacts(id, first_name, last_name, company)") \
+            .eq("chat_type", "dm") \
+            .eq("is_archived", False) \
+            .eq("needs_response", True) \
+            .order("last_message_at", desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        # Get other active DMs (last message from you)
+        other_active_query = supabase.table("beeper_chats") \
+            .select("beeper_chat_id, platform, chat_type, chat_name, last_message_at, last_message_preview, unread_count, contact_id, needs_response, contact:contacts(id, first_name, last_name, company)") \
+            .eq("chat_type", "dm") \
+            .eq("is_archived", False) \
+            .eq("needs_response", False) \
+            .order("last_message_at", desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        def format_chat(chat):
+            contact = chat.get("contact")
+            contact_name = None
+            if contact:
+                contact_name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+            return {
+                "beeper_chat_id": chat.get("beeper_chat_id"),
+                "platform": chat.get("platform"),
+                "chat_name": chat.get("chat_name"),
+                "contact_name": contact_name,
+                "contact_company": contact.get("company") if contact else None,
+                "last_message_at": chat.get("last_message_at"),
+                "last_message_preview": chat.get("last_message_preview"),
+                "unread_count": chat.get("unread_count", 0)
+            }
+        
+        needs_response = [format_chat(c) for c in needs_response_query.data]
+        other_active = [format_chat(c) for c in other_active_query.data]
+        
+        result = {
+            "needs_response": {
+                "count": len(needs_response),
+                "description": "These people are waiting for your reply",
+                "chats": needs_response
+            },
+            "other_active": {
+                "count": len(other_active),
+                "description": "Ball is in their court - you sent the last message",
+                "chats": other_active
+            }
+        }
+        
+        if include_groups:
+            groups_query = supabase.table("beeper_chats") \
+                .select("beeper_chat_id, platform, chat_type, chat_name, last_message_at, last_message_preview, unread_count") \
+                .in_("chat_type", ["group", "channel"]) \
+                .eq("is_archived", False) \
+                .order("last_message_at", desc=True) \
+                .limit(limit) \
+                .execute()
+            result["groups"] = {
+                "count": len(groups_query.data),
+                "chats": groups_query.data
+            }
+        
+        # Summary message
+        total_needs_response = len(needs_response)
+        platforms = set(c["platform"] for c in needs_response + other_active)
+        
+        if total_needs_response > 0:
+            result["summary"] = f"📬 {total_needs_response} chat(s) need your reply across {', '.join(platforms)}"
+        else:
+            result["summary"] = "✅ Inbox zero! No chats waiting for your reply."
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting Beeper inbox: {e}")
+        return {"error": str(e)}
+
+
+def _get_beeper_chat_messages(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get messages from a specific Beeper chat."""
+    beeper_chat_id = params.get("beeper_chat_id")
+    limit = params.get("limit", 20)
+    
+    if not beeper_chat_id:
+        return {"error": "Missing beeper_chat_id"}
+    
+    try:
+        # Get chat info
+        chat_result = supabase.table("beeper_chats") \
+            .select("beeper_chat_id, platform, chat_name, contact:contacts(id, first_name, last_name, company)") \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .single() \
+            .execute()
+        
+        chat = chat_result.data
+        
+        # Get messages
+        messages_result = supabase.table("beeper_messages") \
+            .select("beeper_event_id, content, content_description, sender_name, is_outgoing, timestamp, message_type, has_media") \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .order("timestamp", desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        messages = []
+        for m in messages_result.data:
+            content = m.get("content")
+            if not content and m.get("content_description"):
+                content = f"[{m.get('content_description')}]"
+            
+            messages.append({
+                "content": content,
+                "sender": "You" if m.get("is_outgoing") else m.get("sender_name", "Them"),
+                "timestamp": m.get("timestamp"),
+                "type": m.get("message_type", "text"),
+                "has_media": m.get("has_media", False)
+            })
+        
+        # Reverse to show oldest first (chronological)
+        messages.reverse()
+        
+        contact = chat.get("contact") if chat else None
+        contact_name = None
+        if contact:
+            contact_name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+        
+        return {
+            "chat": {
+                "platform": chat.get("platform") if chat else "unknown",
+                "chat_name": chat.get("chat_name") if chat else beeper_chat_id,
+                "contact_name": contact_name,
+                "contact_company": contact.get("company") if contact else None
+            },
+            "messages": messages,
+            "count": len(messages)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting chat messages: {e}")
+        return {"error": str(e)}
+
+
+def _search_beeper_messages(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Search across all Beeper messages."""
+    query = params.get("query", "")
+    platform = params.get("platform")
+    contact_name = params.get("contact_name")
+    limit = params.get("limit", 20)
+    
+    if not query:
+        return {"error": "Missing search query"}
+    
+    try:
+        # Build the query
+        search_query = supabase.table("beeper_messages") \
+            .select("beeper_event_id, beeper_chat_id, content, sender_name, is_outgoing, timestamp, platform, contact_id") \
+            .ilike("content", f"%{query}%") \
+            .order("timestamp", desc=True) \
+            .limit(limit)
+        
+        if platform:
+            search_query = search_query.eq("platform", platform)
+        
+        result = search_query.execute()
+        
+        # Get unique chat IDs to fetch chat info
+        chat_ids = list(set(m.get("beeper_chat_id") for m in result.data))
+        
+        # Fetch chat info for context
+        if chat_ids:
+            chats_result = supabase.table("beeper_chats") \
+                .select("beeper_chat_id, chat_name, platform, contact:contacts(first_name, last_name)") \
+                .in_("beeper_chat_id", chat_ids) \
+                .execute()
+            
+            chat_map = {c["beeper_chat_id"]: c for c in chats_result.data}
+        else:
+            chat_map = {}
+        
+        # Format messages with chat context
+        messages = []
+        for m in result.data:
+            chat = chat_map.get(m.get("beeper_chat_id"), {})
+            contact = chat.get("contact")
+            contact_name_str = None
+            if contact:
+                contact_name_str = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+            
+            messages.append({
+                "content": m.get("content"),
+                "sender": "You" if m.get("is_outgoing") else m.get("sender_name", "Them"),
+                "timestamp": m.get("timestamp"),
+                "platform": m.get("platform"),
+                "chat_name": chat.get("chat_name"),
+                "contact_name": contact_name_str,
+                "beeper_chat_id": m.get("beeper_chat_id")
+            })
+        
+        return {
+            "query": query,
+            "count": len(messages),
+            "messages": messages
+        }
+        
+    except Exception as e:
+        logger.error(f"Error searching messages: {e}")
+        return {"error": str(e)}
+
+
+def _get_beeper_contact_messages(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get all messages with a specific contact across all platforms."""
+    contact_name = params.get("contact_name", "")
+    limit = params.get("limit", 30)
+    
+    if not contact_name:
+        return {"error": "Missing contact_name"}
+    
+    try:
+        # First find the contact
+        contact_result = supabase.table("contacts") \
+            .select("id, first_name, last_name, company") \
+            .or_(f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%") \
+            .limit(1) \
+            .execute()
+        
+        if not contact_result.data:
+            # Try searching by chat name if no contact found
+            chat_result = supabase.table("beeper_chats") \
+                .select("beeper_chat_id, chat_name, platform") \
+                .ilike("chat_name", f"%{contact_name}%") \
+                .limit(5) \
+                .execute()
+            
+            if not chat_result.data:
+                return {"error": f"No contact or chat found matching '{contact_name}'"}
+            
+            # Get messages from these chats
+            chat_ids = [c["beeper_chat_id"] for c in chat_result.data]
+            messages_result = supabase.table("beeper_messages") \
+                .select("content, content_description, sender_name, is_outgoing, timestamp, platform, beeper_chat_id") \
+                .in_("beeper_chat_id", chat_ids) \
+                .order("timestamp", desc=True) \
+                .limit(limit) \
+                .execute()
+            
+            messages = []
+            for m in messages_result.data:
+                content = m.get("content")
+                if not content and m.get("content_description"):
+                    content = f"[{m.get('content_description')}]"
+                messages.append({
+                    "content": content,
+                    "sender": "You" if m.get("is_outgoing") else m.get("sender_name", contact_name),
+                    "timestamp": m.get("timestamp"),
+                    "platform": m.get("platform")
+                })
+            
+            messages.reverse()
+            
+            return {
+                "contact_name": contact_name,
+                "found_via": "chat_name",
+                "chats": [c["chat_name"] for c in chat_result.data],
+                "messages": messages,
+                "count": len(messages)
+            }
+        
+        contact = contact_result.data[0]
+        contact_id = contact["id"]
+        contact_full_name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+        
+        # Get messages where contact_id matches
+        messages_result = supabase.table("beeper_messages") \
+            .select("content, content_description, sender_name, is_outgoing, timestamp, platform, beeper_chat_id") \
+            .eq("contact_id", contact_id) \
+            .order("timestamp", desc=True) \
+            .limit(limit) \
+            .execute()
+        
+        messages = []
+        for m in messages_result.data:
+            content = m.get("content")
+            if not content and m.get("content_description"):
+                content = f"[{m.get('content_description')}]"
+            messages.append({
+                "content": content,
+                "sender": "You" if m.get("is_outgoing") else contact_full_name,
+                "timestamp": m.get("timestamp"),
+                "platform": m.get("platform")
+            })
+        
+        messages.reverse()
+        
+        return {
+            "contact_name": contact_full_name,
+            "company": contact.get("company"),
+            "found_via": "contact_id",
+            "messages": messages,
+            "count": len(messages)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting contact messages: {e}")
+        return {"error": str(e)}
+
+
+def _archive_beeper_chat(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Archive a Beeper chat."""
+    beeper_chat_id = params.get("beeper_chat_id")
+    
+    if not beeper_chat_id:
+        return {"error": "Missing beeper_chat_id"}
+    
+    try:
+        result = supabase.table("beeper_chats") \
+            .update({
+                "is_archived": True,
+                "needs_response": False,
+                "archived_at": datetime.now(timezone.utc).isoformat()
+            }) \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .execute()
+        
+        if result.data:
+            return {
+                "success": True,
+                "message": "✅ Chat archived! It won't appear in your inbox until there's a new message."
+            }
+        else:
+            return {"error": "Chat not found"}
+        
+    except Exception as e:
+        logger.error(f"Error archiving chat: {e}")
         return {"error": str(e)}
