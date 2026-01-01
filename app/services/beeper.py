@@ -222,8 +222,9 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """Get messages from database."""
         try:
+            # Get messages (no join on beeper_chats due to no FK)
             query = self.db.table("beeper_messages") \
-                .select("*, chat:beeper_chats(platform, chat_name, contact_id)") \
+                .select("*") \
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .order("timestamp", desc=True) \
                 .limit(limit)
@@ -233,7 +234,7 @@ class BeeperService:
             
             result = query.execute()
             
-            # Get chat info
+            # Get chat info separately (with contact join which does have FK)
             chat_info = self.db.table("beeper_chats") \
                 .select("*, contact:contacts(id, first_name, last_name, company)") \
                 .eq("beeper_chat_id", beeper_chat_id) \
@@ -380,8 +381,9 @@ class BeeperService:
     async def get_unread_messages(self, limit: int = 50) -> Dict[str, Any]:
         """Get unread messages across all chats."""
         try:
+            # Get unread messages (simple query without joins due to no FK)
             result = self.db.table("beeper_messages") \
-                .select("*, chat:beeper_chats(platform, chat_name, contact_id, contact:contacts(first_name, last_name))") \
+                .select("*") \
                 .eq("is_read", False) \
                 .eq("is_outgoing", False) \
                 .order("timestamp", desc=True) \
@@ -484,11 +486,11 @@ class BeeperService:
         contact_id: Optional[str],
         limit: int
     ) -> Dict[str, Any]:
-        """Search messages in database using full-text search."""
+        """Search messages in database using text search."""
         try:
-            # Build query with filters first, then order/limit
+            # Build query with filters (no joins due to no FK relationship)
             search_query = self.db.table("beeper_messages") \
-                .select("*, chat:beeper_chats(platform, chat_name, contact_id, contact:contacts(first_name, last_name))")
+                .select("*")
             
             # Apply filters
             if platform:
@@ -496,7 +498,7 @@ class BeeperService:
             if contact_id:
                 search_query = search_query.eq("contact_id", contact_id)
             
-            # Use ilike for simple text search (more reliable than text_search)
+            # Use ilike for simple text search
             search_query = search_query.ilike("content", f"%{query}%")
             
             # Order and limit
