@@ -295,7 +295,11 @@ class ChatService:
     """Handles conversational AI with tool use."""
     
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        # Disable automatic retries - better to fail fast than consume rate limit budget
+        self.client = anthropic.Anthropic(
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            max_retries=0  # Don't auto-retry on 429 - we handle it ourselves
+        )
     
     def _build_system_prompt(self) -> str:
         """Build system prompt with current date/time/location context."""
@@ -435,7 +439,21 @@ class ChatService:
                 tools_used=tools_used,
                 error="max_tool_calls_reached"
             )
-            
+        
+        except anthropic.RateLimitError as e:
+            # Rate limit - fail fast, don't retry
+            logger.warning(f"Rate limited by Anthropic: {e}")
+            return ChatResponse(
+                response="🔄 I'm a bit overloaded right now. Please wait a moment and try again.",
+                error="rate_limited"
+            )
+        except anthropic.APIStatusError as e:
+            # Other API errors (500s, etc) - fail fast
+            logger.error(f"Anthropic API status error {e.status_code}: {e.message}")
+            return ChatResponse(
+                response="Sorry, I'm having trouble connecting right now. Please try again in a moment.",
+                error=f"api_error_{e.status_code}"
+            )
         except anthropic.APIError as e:
             logger.error(f"Anthropic API error: {e}")
             return ChatResponse(
