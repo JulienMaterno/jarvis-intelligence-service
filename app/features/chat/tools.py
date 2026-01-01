@@ -861,7 +861,7 @@ Use when user wants to discard a draft.""",
     # =========================================================================
     {
         "name": "get_beeper_inbox",
-        "description": """Get the Beeper inbox - chats that need your attention across WhatsApp, Telegram, LinkedIn, etc.
+        "description": """Get the Beeper inbox - chats that need your attention across WhatsApp, LinkedIn, Telegram, etc.
 
 Uses inbox-zero workflow:
 - 'needs_response': DMs where the other person sent the last message (awaiting your reply)
@@ -871,7 +871,7 @@ Use this when user asks about:
 - 'Who do I need to reply to?'
 - 'Any unread messages?'
 - 'What messages need my attention?'
-- 'Show my WhatsApp/Telegram/LinkedIn messages'""",
+- 'Show my WhatsApp/LinkedIn/Telegram messages'""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -916,7 +916,7 @@ First use get_beeper_inbox or search_beeper_messages to find the beeper_chat_id.
         "description": """Search across all Beeper message history.
 
 Use this to find specific conversations or information mentioned in messages.
-Supports full-text search across WhatsApp, Telegram, LinkedIn, etc.""",
+Supports full-text search across WhatsApp, LinkedIn, Telegram, etc.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -926,7 +926,7 @@ Supports full-text search across WhatsApp, Telegram, LinkedIn, etc.""",
                 },
                 "platform": {
                     "type": "string",
-                    "enum": ["whatsapp", "telegram", "linkedin", "signal"],
+                    "enum": ["whatsapp", "linkedin", "telegram"],
                     "description": "Filter by platform (optional)"
                 },
                 "contact_name": {
