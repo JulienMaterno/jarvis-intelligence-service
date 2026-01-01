@@ -24,7 +24,7 @@ from app.features.chat.tools import TOOLS, execute_tool
 logger = logging.getLogger("Jarvis.Chat")
 
 MODEL_ID = os.getenv("CLAUDE_CHAT_MODEL", "claude-sonnet-4-5-20250929")
-MAX_TOOL_CALLS = 5  # Prevent infinite loops
+MAX_TOOL_CALLS = 3  # Reduced from 5 - prevents runaway loops
 
 
 class ChatMessage(BaseModel):
@@ -247,6 +247,14 @@ The user prefers reviewing drafts before sending. Always create drafts first and
 ABOUT THE USER:
 Aaron is a German engineer currently based in Sydney, Australia, preparing to relocate to Singapore and Southeast Asia. He was the first employee at Algenie, an Australian biotech startup, and is currently in transition. His interests span climate tech, biotech, agritech, foodtech, and longevity. He records voice memos to capture thoughts, meetings, and reflections which are transcribed and stored in this system.
 
+⚠️ CRITICAL ANTI-LOOP RULES:
+1. **NEVER send the same message twice** - if you already sent to someone, don't send again
+2. **NEVER call the same tool with same params twice** - cache results mentally
+3. **If a tool fails, try ONCE more then give up** - don't retry infinitely
+4. **Maximum 2-3 tool calls per request** - if you need more, ask user to be more specific
+5. **If you asked for confirmation, WAIT** - don't send in same turn you asked
+6. **If send fails, tell user and STOP** - don't keep retrying the same send
+
 Remember: You have access to a rich personal knowledge base. Use the tools to provide genuinely helpful, personalized responses."""
 
 # Default prompt (used when we can't get dynamic context)
@@ -321,6 +329,9 @@ class ChatService:
             tools_used = []
             tool_call_count = 0
             
+            # Track sent messages in THIS request to prevent duplicates
+            sent_messages_this_request = set()
+            
             while tool_call_count < MAX_TOOL_CALLS:
                 response = self.client.messages.create(
                     model=MODEL_ID,
@@ -348,8 +359,22 @@ class ChatService:
                             logger.info(f"   Input: {json.dumps(tool_input, indent=2)[:500]}")
                             tools_used.append(tool_name)
                             
-                            # Execute the tool - pass last user message for send_beeper_message confirmation check
-                            result = execute_tool(tool_name, tool_input, last_user_message=request.message)
+                            # DUPLICATE CHECK for send_beeper_message
+                            if tool_name == "send_beeper_message":
+                                chat_id = tool_input.get("beeper_chat_id", "")
+                                content_hash = hash(tool_input.get("content", "")[:50])
+                                dedup_key = f"{chat_id}:{content_hash}"
+                                
+                                if dedup_key in sent_messages_this_request:
+                                    logger.warning(f"⚠️ DUPLICATE BLOCKED: Already sent to {chat_id} in this request")
+                                    result = {"error": "Already sent this message in this request. Cannot send duplicate."}
+                                else:
+                                    sent_messages_this_request.add(dedup_key)
+                                    result = execute_tool(tool_name, tool_input, last_user_message=request.message)
+                            else:
+                                # Execute the tool - pass last user message for send_beeper_message confirmation check
+                                result = execute_tool(tool_name, tool_input, last_user_message=request.message)
+                            
                             logger.info(f"   Result: {json.dumps(result, indent=2)[:500]}")
                             
                             tool_results.append({
