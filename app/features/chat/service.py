@@ -344,11 +344,13 @@ class ChatService:
                             tool_input = block.input
                             tool_id = block.id
                             
-                            logger.info(f"Tool call: {tool_name} with input: {json.dumps(tool_input)[:200]}")
+                            logger.info(f"🔧 Tool invoked: {tool_name}")
+                            logger.info(f"   Input: {json.dumps(tool_input, indent=2)[:500]}")
                             tools_used.append(tool_name)
                             
                             # Execute the tool
                             result = execute_tool(tool_name, tool_input)
+                            logger.info(f"   Result: {json.dumps(result, indent=2)[:500]}")
                             
                             tool_results.append({
                                 "type": "tool_result",
@@ -372,6 +374,8 @@ class ChatService:
                     for block in response.content:
                         if hasattr(block, "text"):
                             final_response += block.text
+                    
+                    logger.info(f"💬 Final response (no more tools): {final_response[:200]}")
                     
                     return ChatResponse(
                         response=final_response,

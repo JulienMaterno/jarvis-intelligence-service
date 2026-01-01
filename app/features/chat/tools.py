@@ -1172,7 +1172,10 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         elif tool_name == "archive_beeper_chat":
             return _archive_beeper_chat(tool_input)
         elif tool_name == "send_beeper_message":
-            return _send_beeper_message(tool_input)
+            logger.info(f"📤 SEND_BEEPER_MESSAGE called with: {tool_input}")
+            result = _send_beeper_message(tool_input)
+            logger.info(f"📤 SEND_BEEPER_MESSAGE result: {result}")
+            return result
         elif tool_name == "mark_beeper_read":
             return _mark_beeper_read(tool_input)
         elif tool_name == "unarchive_beeper_chat":
@@ -3195,14 +3198,20 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
     reply_to_event_id = params.get("reply_to_event_id")
     user_confirmed = params.get("user_confirmed", False)
     
+    logger.info(f"_send_beeper_message: chat_id={beeper_chat_id}, confirmed={user_confirmed}, content_len={len(content) if content else 0}")
+    
     if not beeper_chat_id:
+        logger.warning("❌ Send failed: Missing beeper_chat_id")
         return {"error": "Missing beeper_chat_id"}
     if not content:
+        logger.warning("❌ Send failed: Missing message content")
         return {"error": "Missing message content"}
     if not user_confirmed:
+        logger.warning(f"❌ Send blocked: user_confirmed={user_confirmed} (must be True)")
         return {"error": "⚠️ User confirmation required! Please confirm you want to send this message before proceeding."}
     
     BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
+    logger.info(f"Using bridge URL: {BEEPER_BRIDGE_URL}")
     
     try:
         # Get chat info for context
