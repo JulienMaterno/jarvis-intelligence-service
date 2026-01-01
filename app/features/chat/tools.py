@@ -984,6 +984,91 @@ Does NOT delete the chat - just marks it as archived.""",
             },
             "required": ["beeper_chat_id"]
         }
+    },
+    {
+        "name": "send_beeper_message",
+        "description": """Send a message to a Beeper chat (WhatsApp, Telegram, LinkedIn, etc.).
+
+⚠️ IMPORTANT: ALWAYS ask for explicit confirmation before sending.
+Example: "I'll send this message to [name] on [platform]: '[message]'. Shall I send it?"
+
+Use when user wants to:
+- Reply to a message they received
+- Send a new message to a contact
+- Respond to someone in their inbox
+
+NEVER send without user explicitly confirming the message content and recipient.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "beeper_chat_id": {
+                    "type": "string",
+                    "description": "The chat ID to send to (get from get_beeper_inbox or get_beeper_chat_messages)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The message text to send"
+                },
+                "reply_to_event_id": {
+                    "type": "string",
+                    "description": "Optional: Message ID to reply to (for threaded replies)"
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "REQUIRED: Must be true - indicates user has explicitly confirmed sending this message"
+                }
+            },
+            "required": ["beeper_chat_id", "content", "user_confirmed"]
+        }
+    },
+    {
+        "name": "mark_beeper_read",
+        "description": """Mark all messages in a Beeper chat as read.
+
+Use when:
+- User has seen/acknowledged a conversation
+- User wants to clear unread indicators
+- After reading a chat and user doesn't need to respond""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "beeper_chat_id": {
+                    "type": "string",
+                    "description": "The chat ID to mark as read"
+                }
+            },
+            "required": ["beeper_chat_id"]
+        }
+    },
+    {
+        "name": "unarchive_beeper_chat",
+        "description": """Unarchive a Beeper chat (bring it back to inbox).
+
+Use when user wants to revisit an archived conversation.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "beeper_chat_id": {
+                    "type": "string",
+                    "description": "The chat ID to unarchive"
+                }
+            },
+            "required": ["beeper_chat_id"]
+        }
+    },
+    {
+        "name": "get_beeper_status",
+        "description": """Check Beeper connectivity status.
+
+Use when:
+- User asks if Beeper is connected/working
+- Need to verify messaging is available
+- Troubleshooting message delivery""",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
     }
 ]
 
@@ -1080,6 +1165,14 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
             return _get_beeper_contact_messages(tool_input)
         elif tool_name == "archive_beeper_chat":
             return _archive_beeper_chat(tool_input)
+        elif tool_name == "send_beeper_message":
+            return _send_beeper_message(tool_input)
+        elif tool_name == "mark_beeper_read":
+            return _mark_beeper_read(tool_input)
+        elif tool_name == "unarchive_beeper_chat":
+            return _unarchive_beeper_chat(tool_input)
+        elif tool_name == "get_beeper_status":
+            return _get_beeper_status(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -3083,3 +3176,223 @@ def _archive_beeper_chat(params: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error archiving chat: {e}")
         return {"error": str(e)}
+
+
+def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Send a message to a Beeper chat."""
+    import httpx
+    import os
+    import urllib.parse
+    
+    beeper_chat_id = params.get("beeper_chat_id")
+    content = params.get("content")
+    reply_to_event_id = params.get("reply_to_event_id")
+    user_confirmed = params.get("user_confirmed", False)
+    
+    if not beeper_chat_id:
+        return {"error": "Missing beeper_chat_id"}
+    if not content:
+        return {"error": "Missing message content"}
+    if not user_confirmed:
+        return {"error": "⚠️ User confirmation required! Please confirm you want to send this message before proceeding."}
+    
+    BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
+    
+    try:
+        # Get chat info for context
+        chat_result = supabase.table("beeper_chats") \
+            .select("chat_name, platform, contact:contacts(first_name, last_name)") \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .single() \
+            .execute()
+        
+        chat = chat_result.data if chat_result.data else {}
+        contact = chat.get("contact")
+        recipient_name = chat.get("chat_name")
+        if contact:
+            recipient_name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip() or recipient_name
+        
+        platform = chat.get("platform", "unknown")
+        
+        # URL encode the chat ID
+        encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+        
+        # Send via bridge
+        payload = {"text": content}
+        if reply_to_event_id:
+            payload["reply_to"] = reply_to_event_id
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/messages",
+                json=payload
+            )
+            response.raise_for_status()
+            result_data = response.json()
+        
+        # Update needs_response flag (you sent last message)
+        supabase.table("beeper_chats") \
+            .update({
+                "needs_response": False,
+                "last_message_preview": content[:100],
+                "last_message_at": datetime.now(timezone.utc).isoformat()
+            }) \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .execute()
+        
+        logger.info(f"Sent message to {recipient_name} on {platform}")
+        
+        return {
+            "success": True,
+            "message": f"✅ Message sent to {recipient_name} ({platform})",
+            "event_id": result_data.get("event_id"),
+            "recipient": recipient_name,
+            "platform": platform
+        }
+        
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error sending message: {e}")
+        return {"error": f"Failed to send: {str(e)}"}
+    except httpx.ConnectError:
+        return {"error": "❌ Cannot connect to Beeper bridge. Is your laptop online with Beeper running?"}
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        return {"error": str(e)}
+
+
+def _mark_beeper_read(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark all messages in a Beeper chat as read."""
+    import httpx
+    import os
+    import urllib.parse
+    
+    beeper_chat_id = params.get("beeper_chat_id")
+    
+    if not beeper_chat_id:
+        return {"error": "Missing beeper_chat_id"}
+    
+    BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
+    
+    try:
+        # URL encode the chat ID
+        encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+        
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/read")
+            response.raise_for_status()
+        
+        # Update unread count in database
+        supabase.table("beeper_chats") \
+            .update({"unread_count": 0}) \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .execute()
+        
+        return {
+            "success": True,
+            "message": "✅ Chat marked as read"
+        }
+        
+    except httpx.ConnectError:
+        return {"error": "❌ Cannot connect to Beeper bridge. Is your laptop online with Beeper running?"}
+    except Exception as e:
+        logger.error(f"Error marking chat as read: {e}")
+        return {"error": str(e)}
+
+
+def _unarchive_beeper_chat(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Unarchive a Beeper chat."""
+    beeper_chat_id = params.get("beeper_chat_id")
+    
+    if not beeper_chat_id:
+        return {"error": "Missing beeper_chat_id"}
+    
+    try:
+        result = supabase.table("beeper_chats") \
+            .update({
+                "is_archived": False,
+                "archived_at": None
+            }) \
+            .eq("beeper_chat_id", beeper_chat_id) \
+            .execute()
+        
+        if result.data:
+            return {
+                "success": True,
+                "message": "✅ Chat unarchived and back in your inbox"
+            }
+        else:
+            return {"error": "Chat not found"}
+        
+    except Exception as e:
+        logger.error(f"Error unarchiving chat: {e}")
+        return {"error": str(e)}
+
+
+def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get Beeper connectivity status."""
+    import httpx
+    import os
+    
+    BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
+    
+    result = {
+        "status": "unknown",
+        "bridge_url": BEEPER_BRIDGE_URL,
+        "db_stats": {},
+        "platforms": []
+    }
+    
+    # Get database stats
+    try:
+        chats_count = supabase.table("beeper_chats") \
+            .select("id", count="exact") \
+            .execute()
+        messages_count = supabase.table("beeper_messages") \
+            .select("id", count="exact") \
+            .execute()
+        needs_response = supabase.table("beeper_chats") \
+            .select("id", count="exact") \
+            .eq("needs_response", True) \
+            .eq("is_archived", False) \
+            .execute()
+        
+        result["db_stats"] = {
+            "total_chats": chats_count.count or 0,
+            "total_messages": messages_count.count or 0,
+            "needs_response": needs_response.count or 0
+        }
+    except Exception as e:
+        logger.warning(f"Failed to get DB stats: {e}")
+    
+    # Check bridge connectivity
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(f"{BEEPER_BRIDGE_URL}/health")
+            if resp.status_code == 200:
+                bridge_data = resp.json()
+                result["status"] = "connected" if bridge_data.get("beeper_connected") else "bridge_only"
+                result["bridge_status"] = bridge_data.get("status")
+                
+                # Get accounts/platforms
+                accounts = bridge_data.get("accounts")
+                if accounts:
+                    result["platforms"] = [a.get("platform") for a in accounts if a.get("platform")]
+            else:
+                result["status"] = "error"
+    except httpx.ConnectError:
+        result["status"] = "offline"
+        result["message"] = "❌ Bridge not reachable. Is your laptop online with the bridge running?"
+    except httpx.TimeoutException:
+        result["status"] = "timeout"
+        result["message"] = "⏱️ Bridge connection timed out"
+    except Exception as e:
+        logger.warning(f"Failed to check bridge: {e}")
+        result["status"] = "error"
+    
+    # Summary message
+    if result["status"] == "connected":
+        result["message"] = f"✅ Beeper connected! {result['db_stats'].get('needs_response', 0)} chats need your response."
+    elif result["status"] == "bridge_only":
+        result["message"] = "⚠️ Bridge running but Beeper Desktop not connected"
+    
+    return result
