@@ -2937,6 +2937,21 @@ def _delete_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
 # BEEPER MESSAGING TOOLS
 # =============================================================================
 
+import os
+
+# Beeper Bridge configuration
+BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
+BEEPER_BRIDGE_API_KEY = os.getenv("BEEPER_BRIDGE_API_KEY", "")  # API key for secure bridge access
+
+
+def _get_beeper_http_headers() -> Dict[str, str]:
+    """Get HTTP headers for Beeper bridge requests (includes API key if configured)."""
+    headers = {}
+    if BEEPER_BRIDGE_API_KEY:
+        headers["X-API-Key"] = BEEPER_BRIDGE_API_KEY
+    return headers
+
+
 def _get_beeper_inbox(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get Beeper inbox chats that need attention."""
     include_groups = params.get("include_groups", False)
@@ -3330,6 +3345,7 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
     
     BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
     logger.info(f"Using bridge URL: {BEEPER_BRIDGE_URL}")
+    beeper_headers = _get_beeper_http_headers()
     
     try:
         # Get chat info for context
@@ -3355,7 +3371,7 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
         if reply_to_event_id:
             payload["reply_to"] = reply_to_event_id
         
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, headers=beeper_headers) as client:
             response = client.post(
                 f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/messages",
                 json=payload
@@ -3404,13 +3420,13 @@ def _mark_beeper_read(params: Dict[str, Any]) -> Dict[str, Any]:
     if not beeper_chat_id:
         return {"error": "Missing beeper_chat_id"}
     
-    BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-project.com")
+    beeper_headers = _get_beeper_http_headers()
     
     try:
         # URL encode the chat ID
         encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
         
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, headers=beeper_headers) as client:
             response = client.post(f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/read")
             response.raise_for_status()
         
