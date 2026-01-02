@@ -31,9 +31,13 @@ from app.features.briefing.meeting_briefing import (
     MeetingBriefing,
 )
 from app.shared.constants import TELEGRAM_BOT_URL
+import os
 
 router = APIRouter(tags=["Briefing"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Briefing")
+
+# Default chat ID for briefing notifications
+DEFAULT_TELEGRAM_CHAT_ID = os.getenv("DEFAULT_TELEGRAM_CHAT_ID")
 
 # Minutes before meeting to send briefing
 BRIEFING_LEAD_TIME_MINUTES = 15
@@ -107,14 +111,26 @@ async def send_telegram_notification(message: str, chat_id: Optional[int] = None
         logger.warning("TELEGRAM_BOT_URL not configured, skipping notification")
         return False
     
+    # Use provided chat_id or fall back to default
+    target_chat_id = chat_id
+    if not target_chat_id and DEFAULT_TELEGRAM_CHAT_ID:
+        try:
+            target_chat_id = int(DEFAULT_TELEGRAM_CHAT_ID)
+        except ValueError:
+            logger.error(f"Invalid DEFAULT_TELEGRAM_CHAT_ID: {DEFAULT_TELEGRAM_CHAT_ID}")
+            return False
+    
+    if not target_chat_id:
+        logger.warning("No chat_id provided and no DEFAULT_TELEGRAM_CHAT_ID configured")
+        return False
+    
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             payload = {
+                "chat_id": target_chat_id,
                 "text": message,
                 "parse_mode": "Markdown"
             }
-            if chat_id:
-                payload["chat_id"] = chat_id
             
             response = await client.post(
                 f"{TELEGRAM_BOT_URL}/send_message",
@@ -122,10 +138,10 @@ async def send_telegram_notification(message: str, chat_id: Optional[int] = None
             )
             
             if response.status_code == 200:
-                logger.info("Telegram notification sent successfully")
+                logger.info(f"Telegram notification sent successfully to chat {target_chat_id}")
                 return True
             else:
-                logger.warning(f"Telegram notification failed: {response.status_code}")
+                logger.warning(f"Telegram notification failed: {response.status_code} - {response.text}")
                 return False
                 
     except Exception as e:
