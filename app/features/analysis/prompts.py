@@ -232,43 +232,32 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - "task_planning" if mainly about organizing tasks
    - "other" if none apply
 
-3. **AGGRESSIVE TASK EXTRACTION** - Extract tasks liberally! Look for:
+3. **SMART TASK EXTRACTION** - Only extract REAL action items the user needs to do:
    
-   ✅ GOOD tasks (create tasks for ALL of these):
+   ✅ CREATE tasks for these (clear action required):
    - "I need to get new cash" → task: "Get new cash"
    - "Buy ear plugs before the flight" → task: "Buy ear plugs"
    - "Text Alinta about dinner" → task: "Text Alinta about dinner"
    - "Respond to Will's email" → task: "Respond to Will's email"
    - "Book dentist appointment" → task: "Book dentist appointment"
-   - "Need to work through this" → task: "Work through [topic being discussed]"
-   - "Should probably look into that" → task: "Look into [topic]"
-   - "Gotta figure out how to..." → task: "Figure out [thing]"
-   - "Have to get that sorted" → task: "Sort out [thing]"
-   - "Maybe I should..." (if actionable) → task
-   - "Would be good to..." (if actionable) → task
-   - "Should reach out to [person]" → task: "Reach out to [person]"
-   - "Need to follow up on..." → task: "Follow up on [thing]"
-   - "Meant to do..." → task
-   - "Still haven't done..." → task
+   - "Send that proposal by Friday" → task with due date
    
-   ❌ NOT tasks (just context, events, or reminders for conversation):
-   - "Next time I talk to John I should ask about his project" → This is MEETING FOLLOW-UP context, put in "follow_up_conversation" field
-   - "When I see her again I want to mention X" → MEETING FOLLOW-UP, not a task
-   - "Flying to Bali tomorrow" → This is an EVENT, not a task
-   - "Meeting with Sarah at 3pm" → This is an EVENT, not a task (unless you need to prepare something)
-   - Pure observations without action intent
+   ❌ DO NOT create tasks for:
+   - Vague intentions: "Maybe I should...", "Would be nice to...", "I wonder if..."
+   - Observations: "I noticed that...", "It seems like..."
+   - Things to discuss later: "Ask John about X next time" → put in follow_up_conversation
+   - Events/appointments: "Meeting at 3pm", "Flight tomorrow" → NOT tasks
+   - Passive thoughts: "Need to think about...", "Should consider..."
+   - Things already done: "I did X today"
+   
+   **KEY PRINCIPLE**: If it's not something that would go on a to-do list, don't create a task.
+   Quality over quantity - 2-3 real tasks are better than 10 vague ones.
 
-   KEY DISTINCTION:
-   - "Ask John about his vacation" with no specific timing = put in meeting's follow_up_conversation
-   - "Send John an email asking about vacation" = THIS is a task (specific action: send email)
-   - "Need to work through this presentation" = THIS is a task (implies work needed)
-
-4. **ONE MEETING PER CONVERSATION/PERSON** - CRITICAL:
-   - Even if you discuss 10 topics with someone, create ONE meeting entry
-   - Use the topics_discussed array to capture different subjects
-   - Do NOT split a single conversation into multiple meetings
-   - A 2-hour coffee chat = 1 meeting with many topics_discussed entries
+4. **MEETINGS** - One transcript typically = one meeting:
+   - Create ONE meeting entry for the conversation
    - person_name should be THE OTHER PERSON (not Aaron/the user)
+   - Use topics_discussed array to capture different subjects covered
+   - Use follow_up_conversation for things to discuss NEXT TIME
 
 5. **JOURNALS** - Create a journal if the recording is about the day:
    - One journal per day (use the date)

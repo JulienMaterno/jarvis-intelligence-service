@@ -15,10 +15,6 @@ from app.features.analysis.prompts import build_multi_analysis_prompt
 
 logger = logging.getLogger("Jarvis.Intelligence.LLM")
 
-# Token limits (approximate - Claude uses ~4 chars per token for English)
-MAX_TRANSCRIPT_CHARS = 180000  # ~45K tokens for transcript, leaving room for prompt/response
-CHUNK_SIZE = 60000  # ~15K tokens per chunk for very long transcripts
-
 
 class ClaudeMultiAnalyzer:
     """Analyze transcripts for meetings, journals, reflections, tasks, and CRM."""
@@ -64,23 +60,11 @@ class ClaudeMultiAnalyzer:
             if not recording_date:
                 recording_date = datetime.now().date().isoformat()
 
-            # Calculate stats for adaptive output
+            # Calculate stats for adaptive output (longer transcripts get more detailed summaries)
             transcript_stats = {
                 "char_count": len(transcript),
                 "word_count": len(transcript.split()),
-                "is_long": len(transcript) > 50000,
-                "is_very_long": len(transcript) > 100000,
             }
-            
-            # Handle very long transcripts
-            if len(transcript) > MAX_TRANSCRIPT_CHARS:
-                logger.warning(
-                    "Transcript is very long (%d chars), truncating to %d chars",
-                    len(transcript),
-                    MAX_TRANSCRIPT_CHARS
-                )
-                # Smart truncation: keep beginning and end, summarize middle
-                transcript = self._smart_truncate(transcript, MAX_TRANSCRIPT_CHARS)
 
             prompt = self._build_multi_analysis_prompt(
                 transcript=transcript,
@@ -103,7 +87,6 @@ class ClaudeMultiAnalyzer:
                         recording_date=recording_date,
                     )
                     analysis = self._process_due_dates(analysis, recording_date)
-                    analysis = self._consolidate_meetings(analysis)  # NEW: Merge duplicate meetings
                     analysis = self._ensure_analysis_schema(
                         analysis,
                         transcript=transcript,
@@ -147,112 +130,6 @@ class ClaudeMultiAnalyzer:
         except Exception as exc:  # pylint: disable=broad-except
             logger.error("Unexpected error analyzing transcript: %s", exc, exc_info=True)
             return self._default_analysis(transcript, filename, recording_date or datetime.now().date().isoformat())
-
-    def _smart_truncate(self, transcript: str, max_chars: int) -> str:
-        """
-        Intelligently truncate very long transcripts while preserving key content.
-        Keeps beginning (context setup) and end (conclusions/tasks) with middle summarized.
-        """
-        if len(transcript) <= max_chars:
-            return transcript
-        
-        # Keep 40% from start, 40% from end, truncate middle
-        keep_each = int(max_chars * 0.4)
-        start_part = transcript[:keep_each]
-        end_part = transcript[-keep_each:]
-        
-        middle_note = f"\n\n[... TRANSCRIPT TRUNCATED - {len(transcript) - (2 * keep_each)} characters omitted from middle for processing ...]\n\n"
-        
-        return start_part + middle_note + end_part
-
-    def _consolidate_meetings(self, analysis: Dict) -> Dict:
-        """
-        Merge meetings with the same person into a single meeting entry.
-        This handles cases where the LLM incorrectly splits one conversation into multiple meetings.
-        """
-        meetings = analysis.get("meetings", [])
-        if len(meetings) <= 1:
-            return analysis
-        
-        # Group by person_name (case-insensitive)
-        person_meetings: Dict[str, List[Dict]] = {}
-        for meeting in meetings:
-            person = (meeting.get("person_name") or "Unknown").lower().strip()
-            if person not in person_meetings:
-                person_meetings[person] = []
-            person_meetings[person].append(meeting)
-        
-        # Consolidate meetings for same person
-        consolidated = []
-        for person_key, person_meeting_list in person_meetings.items():
-            if len(person_meeting_list) == 1:
-                consolidated.append(person_meeting_list[0])
-            else:
-                # Merge multiple meetings into one
-                merged = self._merge_meetings(person_meeting_list)
-                consolidated.append(merged)
-                logger.info(
-                    "Consolidated %d meetings with '%s' into one",
-                    len(person_meeting_list),
-                    person_key
-                )
-        
-        analysis["meetings"] = consolidated
-        return analysis
-
-    def _merge_meetings(self, meetings: List[Dict]) -> Dict:
-        """Merge multiple meeting records into a single comprehensive one."""
-        if not meetings:
-            return {}
-        
-        base = meetings[0].copy()
-        
-        # Collect all topics from all meetings
-        all_topics = []
-        all_people = set()
-        all_follow_ups = []
-        summaries = []
-        
-        for m in meetings:
-            # Collect topics
-            topics = m.get("topics_discussed", [])
-            if isinstance(topics, list):
-                all_topics.extend(topics)
-            
-            # Collect people mentioned
-            people = m.get("people_mentioned", [])
-            if isinstance(people, list):
-                all_people.update(people)
-            
-            # Collect follow-ups
-            follow_ups = m.get("follow_up_conversation", [])
-            if isinstance(follow_ups, list):
-                all_follow_ups.extend(follow_ups)
-            
-            # Collect summaries
-            summary = m.get("summary", "")
-            if summary:
-                summaries.append(summary)
-        
-        # Use first meeting's title and person_name (they should be same person)
-        # Merge summaries
-        if len(summaries) > 1:
-            base["summary"] = " ".join(summaries)
-        
-        # Deduplicate topics by name
-        seen_topics = set()
-        unique_topics = []
-        for topic in all_topics:
-            topic_name = topic.get("topic", "") if isinstance(topic, dict) else str(topic)
-            if topic_name.lower() not in seen_topics:
-                seen_topics.add(topic_name.lower())
-                unique_topics.append(topic)
-        
-        base["topics_discussed"] = unique_topics
-        base["people_mentioned"] = list(all_people)
-        base["follow_up_conversation"] = all_follow_ups
-        
-        return base
 
     def _build_multi_analysis_prompt(
         self,
