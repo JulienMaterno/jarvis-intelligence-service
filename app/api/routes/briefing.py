@@ -58,6 +58,8 @@ class BriefingResponse(BaseModel):
     previous_meetings_count: int = 0
     recent_emails_count: int = 0
     previous_events_count: int = 0
+    beeper_messages_count: int = 0
+    messaging_platforms: Optional[List[str]] = None
     briefing_text: str
     notification_sent: bool = False
 
@@ -197,6 +199,8 @@ async def check_upcoming_briefings(
                         previous_meetings_count=briefing.previous_meetings_count,
                         recent_emails_count=briefing.recent_emails_count,
                         previous_events_count=briefing.previous_events_count,
+                        beeper_messages_count=briefing.beeper_messages_count,
+                        messaging_platforms=briefing.messaging_platforms,
                         briefing_text=briefing.briefing_text,
                         notification_sent=notification_sent
                     ))
@@ -262,6 +266,8 @@ async def trigger_briefing(request: TriggerBriefingRequest):
             previous_meetings_count=briefing.previous_meetings_count,
             recent_emails_count=briefing.recent_emails_count,
             previous_events_count=briefing.previous_events_count,
+            beeper_messages_count=briefing.beeper_messages_count,
+            messaging_platforms=briefing.messaging_platforms,
             briefing_text=briefing.briefing_text,
             notification_sent=notification_sent
         )
@@ -330,6 +336,8 @@ async def generate_contact_briefing(
             previous_meetings_count=briefing.previous_meetings_count,
             recent_emails_count=briefing.recent_emails_count,
             previous_events_count=briefing.previous_events_count,
+            beeper_messages_count=briefing.beeper_messages_count,
+            messaging_platforms=briefing.messaging_platforms,
             briefing_text=briefing.briefing_text,
             notification_sent=notification_sent
         )
@@ -391,6 +399,8 @@ async def get_next_meeting_briefing(send_notification: bool = False):
             previous_meetings_count=briefing.previous_meetings_count,
             recent_emails_count=briefing.recent_emails_count,
             previous_events_count=briefing.previous_events_count,
+            beeper_messages_count=briefing.beeper_messages_count,
+            messaging_platforms=briefing.messaging_platforms,
             briefing_text=briefing.briefing_text,
             notification_sent=notification_sent
         )
