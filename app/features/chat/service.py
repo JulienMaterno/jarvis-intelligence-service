@@ -23,9 +23,9 @@ from app.features.chat.tools import TOOLS, execute_tool
 
 logger = logging.getLogger("Jarvis.Chat")
 
-# Use Haiku 4.5 for chat (cost-effective for text conversations)
+# Use Haiku 3.5 for chat (cost-effective for text conversations)
 # Voice memo processing and journaling use Sonnet via llm.py (quality matters more there)
-MODEL_ID = os.getenv("CLAUDE_CHAT_MODEL", "claude-haiku-4-5-20250929")
+MODEL_ID = os.getenv("CLAUDE_CHAT_MODEL", "claude-3-5-haiku-20241022")
 MAX_TOOL_CALLS = 3  # Reduced from 5 - prevents runaway loops
 
 
