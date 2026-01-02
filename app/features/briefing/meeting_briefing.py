@@ -315,12 +315,26 @@ CONTACT INFORMATION:
         for task in open_tasks[:5]:
             open_items += f"- {task.get('title', 'Untitled task')}\n"
     
+    # Format attendees - they're dicts with email/displayName
+    attendees = event.get('attendees', []) or []
+    if attendees:
+        attendee_names = []
+        for a in attendees:
+            if isinstance(a, dict):
+                name = a.get('displayName') or a.get('email', 'Unknown')
+                attendee_names.append(name)
+            else:
+                attendee_names.append(str(a))
+        attendees_str = ', '.join(attendee_names) if attendee_names else 'Unknown'
+    else:
+        attendees_str = 'Unknown'
+    
     prompt = f"""You are a helpful personal assistant preparing a meeting briefing.
 
 UPCOMING MEETING:
 - Title: {event.get('summary', event.get('title', 'Meeting'))}
 - Time: {event.get('start_time', 'Unknown')}
-- Attendees: {', '.join(event.get('attendees', []) or ['Unknown'])}
+- Attendees: {attendees_str}
 
 {contact_info}
 
