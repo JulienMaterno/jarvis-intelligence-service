@@ -1169,7 +1169,7 @@ class SupabaseMultiDatabase:
         try:
             result = self.client.table("calendar_events").select("*").eq(
                 "contact_id", contact_id
-            ).is_("deleted_at", "null").order(
+            ).order(
                 "start_time", desc=True
             ).limit(limit).execute()
             
@@ -1190,7 +1190,7 @@ class SupabaseMultiDatabase:
             
             result = self.client.table("calendar_events").select("*").gte(
                 "start_time", now
-            ).is_("deleted_at", "null").neq(
+            ).neq(
                 "status", "cancelled"
             ).order(
                 "start_time", desc=False

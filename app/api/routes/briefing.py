@@ -340,8 +340,6 @@ async def get_next_meeting_briefing(send_notification: bool = False):
         now = datetime.now(timezone.utc).isoformat()
         event_result = db.client.table("calendar_events").select("*").gte(
             "start_time", now
-        ).is_(
-            "deleted_at", "null"
         ).neq(
             "status", "cancelled"
         ).order(
@@ -423,8 +421,6 @@ async def schedule_hourly_briefings():
             "start_time", window_start.isoformat()
         ).lte(
             "start_time", window_end.isoformat()
-        ).is_(
-            "deleted_at", "null"
         ).neq(
             "status", "cancelled"
         ).order(
