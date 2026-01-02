@@ -44,6 +44,8 @@ class MeetingBriefing:
     attendees: List[str]
     recent_emails_count: int = 0
     previous_events_count: int = 0
+    beeper_messages_count: int = 0
+    messaging_platforms: List[str] = None
 
 
 def get_upcoming_events_for_briefing(
@@ -79,6 +81,58 @@ def get_upcoming_events_for_briefing(
         return result.data or []
     except Exception as e:
         logger.error(f"Error fetching upcoming events: {e}")
+        return []
+
+
+def get_beeper_messages_for_contact(db, contact_id: str, limit: int = 20) -> List[Dict]:
+    """
+    Get recent Beeper messages (WhatsApp, LinkedIn, etc.) with a contact.
+    
+    Args:
+        db: Database client
+        contact_id: Contact UUID
+        limit: Maximum number of messages to return
+    
+    Returns: List of recent Beeper messages with platform info
+    """
+    try:
+        # Get messages linked to this contact
+        result = db.client.table("beeper_messages").select(
+            "content, platform, is_outgoing, timestamp, sender_name, message_type"
+        ).eq(
+            "contact_id", contact_id
+        ).order(
+            "timestamp", desc=True
+        ).limit(limit).execute()
+        
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Error fetching Beeper messages for contact {contact_id}: {e}")
+        return []
+
+
+def get_beeper_chats_for_contact(db, contact_id: str) -> List[Dict]:
+    """
+    Get Beeper chat info for a contact (shows which platforms they're on).
+    
+    Args:
+        db: Database client
+        contact_id: Contact UUID
+    
+    Returns: List of Beeper chats with this contact
+    """
+    try:
+        result = db.client.table("beeper_chats").select(
+            "platform, chat_name, last_message_at, last_message_preview, last_message_is_outgoing, needs_response"
+        ).eq(
+            "contact_id", contact_id
+        ).order(
+            "last_message_at", desc=True
+        ).execute()
+        
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Error fetching Beeper chats for contact {contact_id}: {e}")
         return []
 
 
@@ -187,7 +241,7 @@ def get_contact_context(db, contact_id: str) -> Dict[str, Any]:
     Get comprehensive context about a contact for briefing.
     
     Returns:
-        Dict with contact info, previous meetings, emails, calendar events, and open items
+        Dict with contact info, previous meetings, emails, calendar events, Beeper messages, and open items
     """
     context = {
         "contact": None,
@@ -196,7 +250,9 @@ def get_contact_context(db, contact_id: str) -> Dict[str, Any]:
         "open_tasks": [],
         "notes": [],
         "recent_emails": [],
-        "previous_events": []
+        "previous_events": [],
+        "beeper_messages": [],
+        "beeper_chats": []
     }
     
     try:
@@ -244,6 +300,10 @@ def get_contact_context(db, contact_id: str) -> Dict[str, Any]:
         # Get previous calendar events with this contact
         context["previous_events"] = get_calendar_events_for_contact(db, contact_id, contact_email, limit=10)
         
+        # Get recent Beeper messages (WhatsApp, LinkedIn, etc.)
+        context["beeper_messages"] = get_beeper_messages_for_contact(db, contact_id, limit=20)
+        context["beeper_chats"] = get_beeper_chats_for_contact(db, contact_id)
+        
         return context
         
     except Exception as e:
@@ -265,6 +325,8 @@ def generate_briefing_with_llm(
     open_tasks = contact_context.get("open_tasks", [])
     recent_emails = contact_context.get("recent_emails", [])
     previous_events = contact_context.get("previous_events", [])
+    beeper_messages = contact_context.get("beeper_messages", [])
+    beeper_chats = contact_context.get("beeper_chats", [])
     
     # Build context for the LLM
     contact_info = ""
@@ -297,6 +359,27 @@ CONTACT INFORMATION:
             snippet = e.get('snippet', e.get('body_preview', ''))[:200]
             direction = "FROM" if contact.get('email', '').lower() in sender.lower() else "TO"
             email_history += f"{i}. [{date}] {direction} them - {subject}\n   Preview: {snippet}...\n\n"
+    
+    # Beeper messages (WhatsApp, LinkedIn, etc.)
+    messaging_history = ""
+    if beeper_messages:
+        messaging_history = "RECENT MESSAGES (WhatsApp/LinkedIn/etc.):\n"
+        for i, msg in enumerate(beeper_messages[:10], 1):
+            ts = msg.get('timestamp', 'Unknown')[:16] if msg.get('timestamp') else 'Unknown'
+            platform = msg.get('platform', 'unknown').upper()
+            direction = "YOU" if msg.get('is_outgoing') else "THEM"
+            content = msg.get('content', '[media]')[:200] if msg.get('content') else '[media/voice]'
+            messaging_history += f"{i}. [{ts}] [{platform}] {direction}: {content}\n"
+    
+    # Add which platforms they're on
+    if beeper_chats:
+        platforms = list(set(chat.get('platform', '').lower() for chat in beeper_chats if chat.get('platform')))
+        if platforms:
+            messaging_history += f"\nActive on: {', '.join(platforms)}\n"
+        # Check if any chat needs response
+        pending = [chat for chat in beeper_chats if chat.get('needs_response')]
+        if pending:
+            messaging_history += f"⚠️ Pending response on: {', '.join(p.get('platform', '') for p in pending)}\n"
     
     # Calendar event history
     event_history = ""
@@ -342,18 +425,21 @@ UPCOMING MEETING:
 
 {email_history}
 
+{messaging_history}
+
 {event_history}
 
 {open_items}
 
 Generate a brief, actionable meeting briefing. Include:
 1. A quick reminder of your relationship with this person (if any history)
-2. What you discussed in your last meeting or recent emails (if applicable)
-3. Recent communication patterns (emails, past calendar events)
+2. What you discussed in your last meeting, recent emails, or recent WhatsApp/LinkedIn messages
+3. Recent communication patterns across all channels (emails, messages, calendar events)
 4. 2-3 suggested conversation topics or questions to ask
 5. Any follow-ups you should mention
+6. If there are pending messages to respond to, mention it
 
-Keep it concise and practical. Use bullet points. No more than 250 words.
+Keep it concise and practical. Use bullet points. No more than 300 words.
 If there's no history with this person, focus on suggested ice-breakers based on any available info."""
 
     try:
@@ -482,6 +568,11 @@ async def generate_meeting_briefing(
     last_meeting_date = last_meeting.get("date") if last_meeting else None
     last_meeting_summary = last_meeting.get("summary") if last_meeting else None
     
+    # Get Beeper/messaging info
+    beeper_messages = contact_context.get("beeper_messages", [])
+    beeper_chats = contact_context.get("beeper_chats", [])
+    messaging_platforms = list(set(chat.get('platform', '') for chat in beeper_chats if chat.get('platform')))
+    
     return MeetingBriefing(
         event_id=event_id,
         event_title=event_title,
@@ -497,7 +588,9 @@ async def generate_meeting_briefing(
         briefing_text=briefing_text,
         attendees=attendees,
         recent_emails_count=len(contact_context.get("recent_emails", [])),
-        previous_events_count=len(contact_context.get("previous_events", []))
+        previous_events_count=len(contact_context.get("previous_events", [])),
+        beeper_messages_count=len(beeper_messages),
+        messaging_platforms=messaging_platforms or None
     )
 
 
@@ -512,10 +605,23 @@ def format_briefing_for_telegram(briefing: MeetingBriefing) -> str:
         company_part = f" ({briefing.contact_company})" if briefing.contact_company else ""
         lines.append(f"👤 With: {briefing.contact_name}{company_part}")
     
+    # Show interaction stats
+    stats = []
     if briefing.previous_meetings_count > 0:
-        lines.append(f"📊 Previous meetings: {briefing.previous_meetings_count}")
-        if briefing.last_meeting_date:
-            lines.append(f"📆 Last met: {briefing.last_meeting_date}")
+        stats.append(f"{briefing.previous_meetings_count} meetings")
+    if briefing.recent_emails_count > 0:
+        stats.append(f"{briefing.recent_emails_count} emails")
+    if briefing.beeper_messages_count > 0:
+        stats.append(f"{briefing.beeper_messages_count} messages")
+    if stats:
+        lines.append(f"📊 History: {', '.join(stats)}")
+    
+    if briefing.messaging_platforms:
+        platforms_str = ', '.join(p.title() for p in briefing.messaging_platforms)
+        lines.append(f"💬 Active on: {platforms_str}")
+    
+    if briefing.last_meeting_date:
+        lines.append(f"📆 Last met: {briefing.last_meeting_date}")
     
     lines.append("")
     lines.append(briefing.briefing_text)
