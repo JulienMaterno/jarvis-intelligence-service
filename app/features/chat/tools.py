@@ -25,7 +25,7 @@ TOOLS = [
 Use this to answer questions about meetings, contacts, tasks, reflections, emails, calendar events, etc.
 
 Available tables:
-- contacts: People in CRM (first_name, last_name, email, company, position, notes, birthday)
+- contacts: People in CRM (first_name, last_name, email, company, job_title, notes, birthday)
 - meetings: Meeting records (title, date, summary, contact_name, topics_discussed, people_mentioned)
 - tasks: Action items (title, description, status, priority, due_date, completed_at)
 - reflections: Personal reflections (title, content, topic_key, tags, date)
@@ -1285,10 +1285,10 @@ def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
     """Search contacts by name, company, etc."""
     try:
         result = supabase.table("contacts").select(
-            "id, first_name, last_name, email, company, position, phone, notes"
+            "id, first_name, last_name, email, company, job_title, phone, notes"
         ).or_(
             f"first_name.ilike.%{query}%,last_name.ilike.%{query}%,company.ilike.%{query}%,email.ilike.%{query}%"
-        ).is_("deleted_at", None).limit(limit).execute()
+        ).is_("deleted_at", "null").limit(limit).execute()
         
         contacts = []
         for c in result.data or []:
@@ -1298,7 +1298,7 @@ def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
                 "name": name,
                 "email": c.get("email"),
                 "company": c.get("company"),
-                "position": c.get("position"),
+                "job_title": c.get("job_title"),
                 "phone": c.get("phone"),
                 "notes": c.get("notes", "")[:200] if c.get("notes") else None
             })
@@ -1314,7 +1314,7 @@ def _get_contact_history(contact_name: str) -> Dict[str, Any]:
         # Find contact
         result = supabase.table("contacts").select("id, first_name, last_name, email, company").or_(
             f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
-        ).is_("deleted_at", None).limit(1).execute()
+        ).is_("deleted_at", "null").limit(1).execute()
         
         if not result.data:
             return {"error": f"Contact '{contact_name}' not found"}
@@ -1392,7 +1392,7 @@ def _create_reflection(input: Dict) -> Dict[str, Any]:
         # Check for existing reflection with same topic_key
         existing = supabase.table("reflections").select("id, title, content").ilike(
             "topic_key", topic_key
-        ).is_("deleted_at", None).limit(1).execute()
+        ).is_("deleted_at", "null").limit(1).execute()
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
         
@@ -1575,7 +1575,7 @@ def _get_tasks(status: str = "pending", limit: int = 10) -> Dict[str, Any]:
     try:
         query = supabase.table("tasks").select(
             "id, title, description, status, priority, due_date, created_at"
-        ).is_("deleted_at", None)
+        ).is_("deleted_at", "null")
         
         if status != "all":
             query = query.eq("status", status)
@@ -1624,7 +1624,7 @@ def _get_reflections(input: Dict) -> Dict[str, Any]:
     try:
         query = supabase.table("reflections").select(
             "id, title, topic_key, tags, date, content"
-        ).is_("deleted_at", None)
+        ).is_("deleted_at", "null")
         
         if input.get("topic_key"):
             query = query.ilike("topic_key", f"%{input['topic_key']}%")
@@ -1787,7 +1787,7 @@ def _update_task(input: Dict) -> Dict[str, Any]:
         else:
             query = supabase.table("tasks").select("id, title").ilike("title", f"%{task_title}%")
         
-        result = query.is_("deleted_at", None).limit(1).execute()
+        result = query.is_("deleted_at", "null").limit(1).execute()
         
         if not result.data:
             return {"error": f"Task not found: {task_title or task_id}"}
@@ -1830,7 +1830,7 @@ def _add_contact_note(input: Dict) -> Dict[str, Any]:
         # Find contact
         result = supabase.table("contacts").select("id, first_name, last_name, notes").or_(
             f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
-        ).is_("deleted_at", None).limit(1).execute()
+        ).is_("deleted_at", "null").limit(1).execute()
         
         if not result.data:
             return {"error": f"Contact '{contact_name}' not found"}
@@ -1898,7 +1898,7 @@ def _summarize_activity(period: str = "today") -> Dict[str, Any]:
         # Get reflections
         reflections = supabase.table("reflections").select(
             "title, topic_key"
-        ).gte("created_at", start_iso).lte("created_at", end_iso).is_("deleted_at", None).execute()
+        ).gte("created_at", start_iso).lte("created_at", end_iso).is_("deleted_at", "null").execute()
         
         # Get emails
         emails_received = supabase.table("emails").select(
@@ -1935,7 +1935,7 @@ def _who_to_contact(input: Dict) -> Dict[str, Any]:
         # This is a simplified approach - ideally we'd check meetings, emails, and events
         contacts = supabase.table("contacts").select(
             "id, first_name, last_name, company, email"
-        ).is_("deleted_at", None).execute()
+        ).is_("deleted_at", "null").execute()
         
         inactive_contacts = []
         
@@ -2184,7 +2184,7 @@ def _get_books(input: Dict) -> Dict[str, Any]:
         query = supabase.table("books").select(
             "id, title, author, status, rating, current_page, total_pages, "
             "progress_percent, started_at, finished_at, summary, notes, tags"
-        ).is_("deleted_at", None)
+        ).is_("deleted_at", "null")
         
         if status and status != "all":
             query = query.eq("status", status)
@@ -2252,7 +2252,7 @@ def _get_highlights(input: Dict) -> Dict[str, Any]:
         query = supabase.table("highlights").select(
             "id, book_title, content, note, page_number, chapter, "
             "highlight_type, tags, is_favorite, highlighted_at, created_at"
-        ).is_("deleted_at", None).gte("created_at", cutoff)
+        ).is_("deleted_at", "null").gte("created_at", cutoff)
         
         if book_title:
             query = query.ilike("book_title", f"%{book_title}%")
@@ -2312,7 +2312,7 @@ def _search_reading_notes(input: Dict) -> Dict[str, Any]:
         # Search books
         books_result = supabase.table("books").select(
             "id, title, author, status, summary, notes"
-        ).is_("deleted_at", None).or_(
+        ).is_("deleted_at", "null").or_(
             f"title.ilike.%{query_text}%,author.ilike.%{query_text}%,"
             f"summary.ilike.%{query_text}%,notes.ilike.%{query_text}%"
         ).limit(5).execute()
@@ -2328,7 +2328,7 @@ def _search_reading_notes(input: Dict) -> Dict[str, Any]:
         # Search highlights
         highlights_result = supabase.table("highlights").select(
             "id, book_title, content, note, chapter"
-        ).is_("deleted_at", None).or_(
+        ).is_("deleted_at", "null").or_(
             f"content.ilike.%{query_text}%,note.ilike.%{query_text}%"
         ).limit(limit - 5).execute()
         
