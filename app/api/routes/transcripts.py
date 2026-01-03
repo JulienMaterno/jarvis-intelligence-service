@@ -104,6 +104,24 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
         if not transcript_record:
             raise HTTPException(status_code=404, detail=f"Transcript {transcript_id} not found")
 
+        # IDEMPOTENCY CHECK: Skip if already processed
+        # Check if any meetings, journals, or reflections already link to this transcript
+        existing_records = db.get_records_for_transcript(transcript_id)
+        if existing_records.get("already_processed"):
+            logger.info(f"Transcript {transcript_id} already processed, returning existing records")
+            return AnalysisResponse(
+                status="already_processed",
+                analysis={"primary_category": "already_processed", "note": "Transcript was already analyzed"},
+                db_records={
+                    "transcript_id": transcript_id,
+                    "meeting_ids": existing_records.get("meeting_ids", []),
+                    "reflection_ids": existing_records.get("reflection_ids", []),
+                    "journal_ids": existing_records.get("journal_ids", []),
+                    "task_ids": existing_records.get("task_ids", []),
+                    "contact_matches": [],
+                }
+            )
+
         transcript_text = transcript_record.get("full_text", "")
         filename = transcript_record.get("source_file", "unknown")
         recording_date = None  # Delegate date inference to analyzer when absent

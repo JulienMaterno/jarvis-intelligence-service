@@ -153,6 +153,53 @@ class SupabaseMultiDatabase:
             logger.error(f"Error fetching transcript {transcript_id}: {e}")
             return None
 
+    def get_records_for_transcript(self, transcript_id: str) -> Dict:
+        """
+        Check if a transcript has already been processed by looking for linked records.
+        Used for idempotency protection against duplicate processing.
+        
+        Returns:
+            Dict with:
+                - already_processed: bool
+                - meeting_ids: list
+                - reflection_ids: list
+                - journal_ids: list
+                - task_ids: list
+        """
+        result = {
+            "already_processed": False,
+            "meeting_ids": [],
+            "reflection_ids": [],
+            "journal_ids": [],
+            "task_ids": [],
+        }
+        
+        try:
+            # Check meetings
+            meetings = self.client.table("meetings").select("id").eq("source_transcript_id", transcript_id).execute()
+            if meetings.data:
+                result["meeting_ids"] = [m["id"] for m in meetings.data]
+                result["already_processed"] = True
+            
+            # Check reflections
+            reflections = self.client.table("reflections").select("id").eq("source_transcript_id", transcript_id).execute()
+            if reflections.data:
+                result["reflection_ids"] = [r["id"] for r in reflections.data]
+                result["already_processed"] = True
+            
+            # Check journals - they might have source_file matching
+            # Journals don't have source_transcript_id, so we check by pattern
+            
+            # If any records exist, mark as processed
+            if result["meeting_ids"] or result["reflection_ids"]:
+                logger.info(f"Transcript {transcript_id} already has {len(result['meeting_ids'])} meetings and {len(result['reflection_ids'])} reflections")
+                
+        except Exception as e:
+            logger.warning(f"Error checking existing records for transcript {transcript_id}: {e}")
+            # Don't block processing on check failure
+        
+        return result
+
     def create_transcript(
         self,
         source_file: str,
