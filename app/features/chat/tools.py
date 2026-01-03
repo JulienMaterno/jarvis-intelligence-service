@@ -1075,30 +1075,6 @@ Use when:
             "properties": {},
             "required": []
         }
-    },
-    {
-        "name": "trigger_beeper_sync",
-        "description": """Trigger an immediate sync of Beeper messages to the database.
-
-Messages are normally synced every 15 minutes. Use this tool when:
-- User asks for "latest messages" or "new messages in the last few minutes"
-- User says "refresh messages" or "sync now"
-- Before checking inbox when user needs real-time data
-- After sending a message to ensure it appears in history
-
-Returns sync statistics (new messages count, chats updated, etc.).
-After triggering, use get_beeper_inbox or other tools to see updated data.""",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "full_sync": {
-                    "type": "boolean",
-                    "description": "If true, resync all messages (slower). Default false = incremental sync (fast).",
-                    "default": False
-                }
-            },
-            "required": []
-        }
     }
 ]
 
@@ -1214,8 +1190,6 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _unarchive_beeper_chat(tool_input)
         elif tool_name == "get_beeper_status":
             return _get_beeper_status(tool_input)
-        elif tool_name == "trigger_beeper_sync":
-            return _trigger_beeper_sync(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -3547,82 +3521,3 @@ def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _trigger_beeper_sync(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Trigger an immediate sync of Beeper messages to the database.
-    
-    Note: This gracefully handles the case where the Beeper bridge is offline
-    (laptop not running) since that's a normal scenario.
-    """
-    import httpx
-    import os
-    
-    full_sync = params.get("full_sync", False)
-    
-    SYNC_SERVICE_URL = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
-    
-    logger.info(f"Triggering Beeper sync (full={full_sync})")
-    
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            # Trigger the sync via the sync service
-            response = client.post(
-                f"{SYNC_SERVICE_URL}/sync/beeper",
-                params={"full": full_sync}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                # Check if beeper bridge was offline (graceful handling)
-                if result.get("status") == "skipped" or result.get("bridge_offline"):
-                    return {
-                        "status": "offline",
-                        "message": "📴 Beeper bridge is offline (laptop not running). Messages will sync when it's back online.",
-                        "hint": "The sync service runs every 15 minutes and will catch up automatically."
-                    }
-                
-                # Format the response
-                return {
-                    "status": "success",
-                    "message": f"✅ Sync completed! {result.get('new_messages', 0)} new messages, {result.get('chats_updated', 0)} chats updated.",
-                    "details": {
-                        "new_messages": result.get("new_messages", 0),
-                        "chats_updated": result.get("chats_updated", 0),
-                        "contacts_linked": result.get("contacts_linked", 0),
-                        "sync_type": "full" if full_sync else "incremental"
-                    }
-                }
-            elif response.status_code == 503:
-                # Service unavailable - likely Beeper bridge offline
-                return {
-                    "status": "offline",
-                    "message": "📴 Beeper bridge is offline. Messages will sync automatically when the laptop is running.",
-                    "hint": "This is normal when your laptop is offline or Beeper Desktop isn't running."
-                }
-            else:
-                logger.error(f"Sync service returned {response.status_code}: {response.text}")
-                return {
-                    "status": "error",
-                    "message": f"Sync service returned status {response.status_code}. This might be temporary.",
-                    "hint": "Try again in a moment, or check get_beeper_inbox for cached messages."
-                }
-                
-    except httpx.TimeoutException:
-        return {
-            "status": "timeout",
-            "message": "⏱️ Sync is taking longer than expected. It may still complete in the background.",
-            "hint": "Try checking get_beeper_inbox in a moment"
-        }
-    except httpx.ConnectError:
-        return {
-            "status": "offline", 
-            "message": "📴 Could not connect to sync service. Messages will sync on the next scheduled run.",
-            "hint": "The sync runs automatically every 15 minutes."
-        }
-    except Exception as e:
-        logger.error(f"Error triggering Beeper sync: {e}")
-        return {
-            "status": "error",
-            "message": "Couldn't sync right now. Cached messages are still available.",
-            "hint": "Use get_beeper_inbox to see recent messages from the database."
-        }
