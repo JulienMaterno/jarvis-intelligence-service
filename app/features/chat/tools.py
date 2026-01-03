@@ -3548,7 +3548,11 @@ def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _trigger_beeper_sync(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Trigger an immediate sync of Beeper messages to the database."""
+    """Trigger an immediate sync of Beeper messages to the database.
+    
+    Note: This gracefully handles the case where the Beeper bridge is offline
+    (laptop not running) since that's a normal scenario.
+    """
     import httpx
     import os
     
@@ -3569,6 +3573,14 @@ def _trigger_beeper_sync(params: Dict[str, Any]) -> Dict[str, Any]:
             if response.status_code == 200:
                 result = response.json()
                 
+                # Check if beeper bridge was offline (graceful handling)
+                if result.get("status") == "skipped" or result.get("bridge_offline"):
+                    return {
+                        "status": "offline",
+                        "message": "📴 Beeper bridge is offline (laptop not running). Messages will sync when it's back online.",
+                        "hint": "The sync service runs every 15 minutes and will catch up automatically."
+                    }
+                
                 # Format the response
                 return {
                     "status": "success",
@@ -3580,12 +3592,19 @@ def _trigger_beeper_sync(params: Dict[str, Any]) -> Dict[str, Any]:
                         "sync_type": "full" if full_sync else "incremental"
                     }
                 }
+            elif response.status_code == 503:
+                # Service unavailable - likely Beeper bridge offline
+                return {
+                    "status": "offline",
+                    "message": "📴 Beeper bridge is offline. Messages will sync automatically when the laptop is running.",
+                    "hint": "This is normal when your laptop is offline or Beeper Desktop isn't running."
+                }
             else:
                 logger.error(f"Sync service returned {response.status_code}: {response.text}")
                 return {
                     "status": "error",
-                    "message": f"Sync failed with status {response.status_code}",
-                    "error": response.text[:200]
+                    "message": f"Sync service returned status {response.status_code}. This might be temporary.",
+                    "hint": "Try again in a moment, or check get_beeper_inbox for cached messages."
                 }
                 
     except httpx.TimeoutException:
@@ -3596,10 +3615,14 @@ def _trigger_beeper_sync(params: Dict[str, Any]) -> Dict[str, Any]:
         }
     except httpx.ConnectError:
         return {
-            "status": "error",
-            "message": "❌ Could not connect to sync service",
-            "hint": "The sync service may be temporarily unavailable"
+            "status": "offline", 
+            "message": "📴 Could not connect to sync service. Messages will sync on the next scheduled run.",
+            "hint": "The sync runs automatically every 15 minutes."
         }
     except Exception as e:
         logger.error(f"Error triggering Beeper sync: {e}")
-        return {"error": str(e)}
+        return {
+            "status": "error",
+            "message": "Couldn't sync right now. Cached messages are still available.",
+            "hint": "Use get_beeper_inbox to see recent messages from the database."
+        }
