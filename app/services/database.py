@@ -314,6 +314,7 @@ class SupabaseMultiDatabase:
                 "contact_name": person_name,
                 "source_file": filename,
                 "audio_duration_seconds": int(duration) if duration else None,
+                "last_sync_source": "supabase"  # Mark as created in Supabase - needs sync to Notion
             }
             
             if transcript_id:
@@ -386,8 +387,13 @@ class SupabaseMultiDatabase:
         3. Title contains topic_key keywords
         4. Significant tag overlap
         
+        IMPORTANT: Numbered topics (e.g., "exploring-out-loud-4") only match exact topic_key.
+        This prevents "Exploring Out Loud #4" from appending to "#3".
+        
         Returns: The matching reflection dict or None
         """
+        import re
+        
         if not topic_key:
             return None
             
@@ -401,6 +407,10 @@ class SupabaseMultiDatabase:
             if not topic_words:
                 return None
             
+            # Check if topic_key contains a number (like "exploring-out-loud-4")
+            # If so, ONLY do exact matching - don't fuzzy match to different numbers
+            has_number = bool(re.search(r'\d+', topic_lower))
+            
             # Strategy 1: Search by topic_key field (exact match, case-insensitive)
             result = self.client.table("reflections").select("*").ilike(
                 "topic_key", topic_lower
@@ -409,6 +419,12 @@ class SupabaseMultiDatabase:
             if result.data:
                 logger.info(f"Found reflection by exact topic_key: {topic_key} -> '{result.data[0].get('title')}'")
                 return result.data[0]
+            
+            # If topic_key has a number, STOP HERE - don't do fuzzy matching
+            # This prevents "exploring-out-loud-4" from matching "Exploring Out Loud #3"
+            if has_number:
+                logger.info(f"Topic key '{topic_key}' has number - no fuzzy matching, creating new reflection")
+                return None
             
             # Strategy 2: Search by title containing the topic (space or hyphen version)
             # This catches reflections created before topic_key was set
@@ -528,7 +544,8 @@ class SupabaseMultiDatabase:
                 "sections": updated_sections,
                 "content": updated_content,
                 "tags": updated_tags,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now().isoformat(),
+                "last_sync_source": "supabase"  # Mark that Supabase changed - needs sync to Notion
             }
             
             self.client.table("reflections").update(update_payload).eq("id", reflection_id).execute()
@@ -596,6 +613,7 @@ class SupabaseMultiDatabase:
                 "content": content,
                 "source_file": filename,
                 "audio_duration_seconds": int(duration) if duration else None,
+                "last_sync_source": "supabase"  # Mark as created in Supabase - needs sync to Notion
             }
             
             if topic_key:
@@ -661,7 +679,8 @@ class SupabaseMultiDatabase:
                     "priority": task.get('priority', 'medium').lower(),
                     "due_date": task.get('due_date'),
                     "origin_type": origin_type,
-                    "origin_id": origin_id
+                    "origin_id": origin_id,
+                    "last_sync_source": "supabase"  # Mark as created in Supabase - needs sync to Notion
                 }
                 
                 if contact_id:
