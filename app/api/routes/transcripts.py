@@ -236,6 +236,8 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
                 )
                 db_records["reflection_ids"].append(r_id)
                 db_records["reflection_appended"] = True
+                # Store the actual appended-to reflection title for notifications
+                db_records["appended_to_title"] = existing_reflection["title"]
             else:
                 r_id, _ = db.create_reflection(
                     reflection_data=reflection,
@@ -403,6 +405,8 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                 )
                 db_records["reflection_ids"].append(r_id)
                 db_records["reflection_appended"] = True
+                # Store the actual appended-to reflection title for notifications
+                db_records["appended_to_title"] = existing_reflection["title"]
             else:
                 r_id, _ = db.create_reflection(
                     reflection_data=reflection,

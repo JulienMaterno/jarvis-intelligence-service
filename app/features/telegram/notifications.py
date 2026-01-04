@@ -114,9 +114,13 @@ def build_processing_result_message(
     if db_records.get("reflection_ids"):
         reflections = analysis.get("reflections", [])
         appended = db_records.get("reflection_appended", False)
+        appended_to_title = db_records.get("appended_to_title")  # Actual reflection title we appended to
         for r in reflections:
             title = r.get("title", "Untitled")
-            if appended:
+            if appended and appended_to_title:
+                # Show the actual reflection we appended to, not the AI-generated title
+                created_items.append(f"💭 Appended to: {appended_to_title}")
+            elif appended:
                 created_items.append(f"💭 Appended to: {title}")
             else:
                 created_items.append(f"💭 Reflection: {title}")
