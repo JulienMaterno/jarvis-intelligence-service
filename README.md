@@ -112,6 +112,12 @@ git add -A && git commit -m "Your changes" && git push origin master
 - **[Cloud Architecture](./docs/CLOUD_ARCHITECTURE.md)** - Deployment details
 - **[Ecosystem Architecture](./docs/ECOSYSTEM_ARCHITECTURE.md)** - All services overview
 
+## 📚 Documentation
+
+**Understanding the Architecture**:
+- **[Cloud Architecture Guide](./docs/CLOUD_ARCHITECTURE.md)** - How Google Cloud Build and Cloud Run work for this service
+- **[Ecosystem Architecture](./docs/ECOSYSTEM_ARCHITECTURE.md)** - Complete overview of all 4 Jarvis services and how they interact
+
 ## 🔌 API Endpoints
 
 ### Transcript Processing
