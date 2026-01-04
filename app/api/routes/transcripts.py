@@ -208,37 +208,54 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
             )
 
         for reflection in analysis.get("reflections", []):
-            topic_key = reflection.get("topic_key")
             tags = reflection.get("tags", [])
             title = reflection.get("title", "")
-
-            existing_reflection = None
-            if topic_key:
-                existing_reflection = db.find_similar_reflection(
-                    topic_key=topic_key,
-                    tags=tags,
-                    title=title,
-                )
-
-            if existing_reflection:
-                logger.info(
-                    "Appending to reflection %s (topic %s)",
-                    existing_reflection["title"],
-                    topic_key,
-                )
-                r_id, _ = db.append_to_reflection(
-                    reflection_id=existing_reflection["id"],
-                    new_sections=reflection.get("sections", []),
-                    new_content=reflection.get("content"),
-                    additional_tags=tags,
-                    source_file=filename,
-                    transcript_id=transcript_id,
-                )
-                db_records["reflection_ids"].append(r_id)
-                db_records["reflection_appended"] = True
-                # Store the actual appended-to reflection title for notifications
-                db_records["appended_to_title"] = existing_reflection["title"]
+            
+            # AI-DRIVEN ROUTING: AI decides whether to append via append_to_id
+            append_to_id = reflection.get("append_to_id")
+            
+            if append_to_id:
+                # AI explicitly chose to append to this reflection
+                # Validate the ID exists
+                existing_reflection = db.get_reflection_by_id(append_to_id)
+                
+                if existing_reflection:
+                    logger.info(
+                        "AI-directed append to reflection '%s' (id: %s)",
+                        existing_reflection.get("title", "Untitled"),
+                        append_to_id[:8],
+                    )
+                    r_id, _ = db.append_to_reflection(
+                        reflection_id=append_to_id,
+                        new_sections=reflection.get("sections", []),
+                        new_content=reflection.get("content"),
+                        additional_tags=tags,
+                        source_file=filename,
+                        transcript_id=transcript_id,
+                    )
+                    db_records["reflection_ids"].append(r_id)
+                    db_records["reflection_appended"] = True
+                    db_records["appended_to_title"] = existing_reflection.get("title", "Untitled")
+                else:
+                    # AI gave invalid ID - create new instead
+                    logger.warning(
+                        "AI provided invalid append_to_id '%s', creating new reflection",
+                        append_to_id,
+                    )
+                    r_id, _ = db.create_reflection(
+                        reflection_data=reflection,
+                        transcript=transcript_text,
+                        duration=transcript_record.get("audio_duration_seconds", 0),
+                        filename=filename,
+                        transcript_id=transcript_id,
+                    )
+                    db_records["reflection_ids"].append(r_id)
             else:
+                # AI chose to create new reflection
+                logger.info(
+                    "AI-directed create new reflection: '%s'",
+                    title,
+                )
                 r_id, _ = db.create_reflection(
                     reflection_data=reflection,
                     transcript=transcript_text,
@@ -377,37 +394,51 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
             )
 
         for reflection in analysis.get("reflections", []):
-            topic_key = reflection.get("topic_key")
             tags = reflection.get("tags", [])
             title = reflection.get("title", "")
-
-            existing_reflection = None
-            if topic_key:
-                existing_reflection = db.find_similar_reflection(
-                    topic_key=topic_key,
-                    tags=tags,
-                    title=title,
-                )
-
-            if existing_reflection:
-                logger.info(
-                    "Appending to reflection %s (topic %s)",
-                    existing_reflection["title"],
-                    topic_key,
-                )
-                r_id, _ = db.append_to_reflection(
-                    reflection_id=existing_reflection["id"],
-                    new_sections=reflection.get("sections", []),
-                    new_content=reflection.get("content"),
-                    additional_tags=tags,
-                    source_file=request.filename,
-                    transcript_id=transcript_id,
-                )
-                db_records["reflection_ids"].append(r_id)
-                db_records["reflection_appended"] = True
-                # Store the actual appended-to reflection title for notifications
-                db_records["appended_to_title"] = existing_reflection["title"]
+            
+            # AI-DRIVEN ROUTING: AI decides whether to append via append_to_id
+            append_to_id = reflection.get("append_to_id")
+            
+            if append_to_id:
+                # AI explicitly chose to append to this reflection
+                existing_reflection = db.get_reflection_by_id(append_to_id)
+                
+                if existing_reflection:
+                    logger.info(
+                        "AI-directed append to reflection '%s' (id: %s)",
+                        existing_reflection.get("title", "Untitled"),
+                        append_to_id[:8],
+                    )
+                    r_id, _ = db.append_to_reflection(
+                        reflection_id=append_to_id,
+                        new_sections=reflection.get("sections", []),
+                        new_content=reflection.get("content"),
+                        additional_tags=tags,
+                        source_file=request.filename,
+                        transcript_id=transcript_id,
+                    )
+                    db_records["reflection_ids"].append(r_id)
+                    db_records["reflection_appended"] = True
+                    db_records["appended_to_title"] = existing_reflection.get("title", "Untitled")
+                else:
+                    logger.warning(
+                        "AI provided invalid append_to_id '%s', creating new reflection",
+                        append_to_id,
+                    )
+                    r_id, _ = db.create_reflection(
+                        reflection_data=reflection,
+                        transcript=request.transcript,
+                        duration=request.audio_duration_seconds or 0,
+                        filename=request.filename,
+                        transcript_id=transcript_id,
+                    )
+                    db_records["reflection_ids"].append(r_id)
             else:
+                logger.info(
+                    "AI-directed create new reflection: '%s'",
+                    title,
+                )
                 r_id, _ = db.create_reflection(
                     reflection_data=reflection,
                     transcript=request.transcript,

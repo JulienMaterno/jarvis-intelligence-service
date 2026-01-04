@@ -337,18 +337,16 @@ class SupabaseMultiDatabase:
     
     def get_existing_reflection_topics(self, limit: int = 30) -> List[Dict]:
         """
-        Fetch existing reflection topics for smart routing.
-        Returns list of {topic_key, title} for topics that have topic_key set.
+        Fetch existing reflection topics for AI-driven routing.
+        Returns list of {id, topic_key, title} so AI can decide whether to append.
         
         This is passed to Claude so it can decide whether to append to existing
-        topics or create new ones.
+        reflections (by ID) or create new ones.
         """
         try:
-            # Get reflections with topic_key set, ordered by most recent
+            # Get reflections ordered by most recent, include ID for AI routing
             result = self.client.table("reflections").select(
-                "topic_key, title"
-            ).not_.is_(
-                "topic_key", "null"
+                "id, topic_key, title"
             ).is_(
                 "deleted_at", "null"
             ).order(
@@ -356,30 +354,53 @@ class SupabaseMultiDatabase:
             ).limit(limit).execute()
             
             if result.data:
-                # Deduplicate by topic_key (keep first/most recent)
-                seen = set()
-                unique_topics = []
+                # Return all reflections with their IDs for AI to choose
+                # AI can now directly reference which reflection to append to
+                reflections = []
                 for r in result.data:
-                    tk = r.get('topic_key')
-                    if tk and tk not in seen:
-                        seen.add(tk)
-                        unique_topics.append({
-                            'topic_key': tk,
-                            'title': r.get('title', 'Untitled')
-                        })
-                logger.info(f"Found {len(unique_topics)} existing reflection topics")
-                return unique_topics
+                    reflections.append({
+                        'id': r.get('id'),
+                        'topic_key': r.get('topic_key', 'none'),
+                        'title': r.get('title', 'Untitled')
+                    })
+                logger.info(f"Found {len(reflections)} existing reflections for AI routing")
+                return reflections
             
             return []
             
         except Exception as e:
-            logger.error(f"Error fetching reflection topics: {e}")
+            logger.error(f"Error fetching reflections for routing: {e}")
             return []
+    
+    def get_reflection_by_id(self, reflection_id: str) -> Optional[Dict]:
+        """
+        Fetch a reflection by its ID.
+        Used for AI-driven routing when AI specifies append_to_id.
+        
+        Returns: The reflection dict or None if not found
+        """
+        if not reflection_id:
+            return None
+            
+        try:
+            result = self.client.table("reflections").select(
+                "id, title, topic_key, tags, content, sections"
+            ).eq("id", reflection_id).is_("deleted_at", "null").execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching reflection by id '{reflection_id}': {e}")
+            return None
     
     def find_similar_reflection(self, topic_key: str, tags: List[str] = None, title: str = None) -> Optional[Dict]:
         """
         Find an existing reflection that matches by topic_key, tags, or title similarity.
-        Used for appending to ongoing topics like "Project Jarvis" or "Explore Out Loud Newsletter".
+        
+        NOTE: This is now a FALLBACK method. Primary routing is AI-driven via append_to_id.
+        This method is kept for backward compatibility but should rarely be used.
         
         Priority:
         1. Exact topic_key match (highest confidence)
