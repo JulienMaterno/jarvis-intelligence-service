@@ -456,6 +456,21 @@ async def schedule_hourly_briefings():
         events = events_result.data or []
         logger.info(f"[Hourly Schedule] Found {len(events)} events in next hour")
         
+        # Filter out all-day events (they have midnight UTC as start time)
+        # All-day events from Google Calendar have 'date' instead of 'dateTime',
+        # which gets stored as T00:00:00+00:00 in our database
+        def is_all_day_event(event: dict) -> bool:
+            """Check if event is an all-day event by detecting midnight UTC time."""
+            start_time = event.get("start_time", "")
+            # All-day events have T00:00:00 as their time (date-only from Google)
+            return "T00:00:00" in start_time
+        
+        timed_events = [e for e in events if not is_all_day_event(e)]
+        all_day_count = len(events) - len(timed_events)
+        if all_day_count > 0:
+            logger.info(f"[Hourly Schedule] Skipping {all_day_count} all-day events")
+        events = timed_events
+        
         scheduled_count = 0
         scheduled_times = []
         

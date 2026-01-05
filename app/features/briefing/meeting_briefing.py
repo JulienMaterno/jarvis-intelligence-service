@@ -48,10 +48,22 @@ class MeetingBriefing:
     messaging_platforms: List[str] = None
 
 
+def is_all_day_event(event: Dict) -> bool:
+    """
+    Check if event is an all-day event by detecting midnight UTC time.
+    
+    All-day events from Google Calendar have 'date' instead of 'dateTime',
+    which gets stored as T00:00:00+00:00 in our database.
+    """
+    start_time = event.get("start_time", "")
+    return "T00:00:00" in start_time
+
+
 def get_upcoming_events_for_briefing(
     db,
     minutes_ahead: int = 30,
-    minutes_buffer: int = 5
+    minutes_buffer: int = 5,
+    include_all_day: bool = False
 ) -> List[Dict]:
     """
     Get calendar events starting within the specified time window.
@@ -60,6 +72,7 @@ def get_upcoming_events_for_briefing(
         db: Database client
         minutes_ahead: Look for events starting within this many minutes
         minutes_buffer: Don't include events that already started (buffer)
+        include_all_day: If False (default), filters out all-day events
     
     Returns: List of calendar events needing briefings
     """
@@ -78,7 +91,13 @@ def get_upcoming_events_for_briefing(
             "start_time", desc=False
         ).execute()
         
-        return result.data or []
+        events = result.data or []
+        
+        # Filter out all-day events unless explicitly requested
+        if not include_all_day:
+            events = [e for e in events if not is_all_day_event(e)]
+        
+        return events
     except Exception as e:
         logger.error(f"Error fetching upcoming events: {e}")
         return []
