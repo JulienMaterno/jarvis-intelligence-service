@@ -127,7 +127,9 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
         recording_date = None  # Delegate date inference to analyzer when absent
 
         existing_topics = db.get_existing_reflection_topics()
-        analysis = analyzer.analyze_transcript(
+        
+        # Use async analyzer for non-blocking LLM call
+        analysis = await analyzer.analyze_transcript_async(
             transcript=transcript_text,
             filename=filename,
             recording_date=recording_date,
@@ -326,7 +328,9 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
         )
 
         existing_topics = db.get_existing_reflection_topics()
-        analysis = analyzer.analyze_transcript(
+        
+        # Use async analyzer for non-blocking LLM call
+        analysis = await analyzer.analyze_transcript_async(
             transcript=request.transcript,
             filename=request.filename,
             recording_date=request.recording_date,

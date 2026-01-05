@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from anthropic import Anthropic
+from anthropic import Anthropic, AsyncAnthropic
 
 from app.core.config import settings
 from app.features.analysis.prompts import build_multi_analysis_prompt
@@ -28,7 +29,9 @@ class ClaudeMultiAnalyzer:
     }
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None) -> None:
-        self.client = Anthropic(api_key=api_key or settings.ANTHROPIC_API_KEY)
+        key = api_key or settings.ANTHROPIC_API_KEY
+        self.client = Anthropic(api_key=key)
+        self.async_client = AsyncAnthropic(api_key=key)  # Async client for non-blocking calls
 
         primary_model = model or settings.CLAUDE_MODEL_PRIMARY
         fallback_models: List[str] = []
@@ -41,9 +44,96 @@ class ClaudeMultiAnalyzer:
         self.model = primary_model  # Backwards compatibility for older call sites
 
         logger.info(
-            "Claude Multi-Database analyzer initialized with models: %s",
+            "Claude Multi-Database analyzer initialized with models: %s (async enabled)",
             ", ".join(self.model_candidates),
         )
+
+    async def analyze_transcript_async(
+        self,
+        transcript: str,
+        filename: str,
+        recording_date: Optional[str] = None,
+        existing_topics: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict:
+        """
+        ASYNC version - Analyze transcript without blocking the event loop.
+        Use this from FastAPI endpoints for non-blocking LLM calls.
+        """
+        try:
+            logger.info("Analyzing transcript ASYNC for multi-database routing (length: %d chars)", len(transcript))
+
+            if not recording_date:
+                recording_date = datetime.now().date().isoformat()
+
+            transcript_stats = {
+                "char_count": len(transcript),
+                "word_count": len(transcript.split()),
+            }
+
+            prompt = self._build_multi_analysis_prompt(
+                transcript=transcript,
+                filename=filename,
+                recording_date=recording_date,
+                existing_topics=existing_topics or [],
+                transcript_stats=transcript_stats,
+            )
+
+            last_error: Optional[Exception] = None
+
+            for model_name in self.model_candidates:
+                try:
+                    result_text = await self._invoke_model_async(prompt, model_name)
+                    analysis = json.loads(result_text)
+                    analysis = self._ensure_analysis_schema(
+                        analysis,
+                        transcript=transcript,
+                        filename=filename,
+                        recording_date=recording_date,
+                    )
+                    analysis = self._process_due_dates(analysis, recording_date)
+                    analysis = self._ensure_analysis_schema(
+                        analysis,
+                        transcript=transcript,
+                        filename=filename,
+                        recording_date=recording_date,
+                    )
+
+                    primary = analysis.get("primary_category", "other")
+                    task_count = len(analysis.get("tasks", []))
+                    crm_count = len(analysis.get("crm_updates", []))
+
+                    logger.info(
+                        "Async analysis complete with model %s: category=%s, tasks=%s, crm_updates=%s",
+                        model_name,
+                        primary,
+                        task_count,
+                        crm_count,
+                    )
+                    return analysis
+
+                except json.JSONDecodeError as exc:
+                    snippet = result_text[:500] if "result_text" in locals() else "<empty>"
+                    logger.error(
+                        "Model %s returned unparsable JSON: %s | snippet=%s",
+                        model_name,
+                        exc,
+                        snippet,
+                    )
+                    last_error = exc
+                except Exception as exc:
+                    logger.warning("Model %s failed: %s", model_name, exc)
+                    last_error = exc
+
+            if last_error:
+                logger.error(
+                    "All Claude models failed (async), falling back to default analysis: %s",
+                    last_error,
+                )
+            return self._default_analysis(transcript, filename, recording_date)
+
+        except Exception as exc:
+            logger.error("Unexpected error in async transcript analysis: %s", exc, exc_info=True)
+            return self._default_analysis(transcript, filename, recording_date or datetime.now().date().isoformat())
 
     def analyze_transcript(
         self,
@@ -161,6 +251,39 @@ class ClaudeMultiAnalyzer:
             max_tokens = 4000
 
         response = self.client.messages.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        if not response.content:
+            raise ValueError(f"Model {model_name} returned empty content")
+
+        block = response.content[0]
+        result_text = block.text if hasattr(block, "text") else str(block)
+        result_text = result_text.strip()
+
+        if result_text.startswith("```"):
+            result_text = re.sub(r"^```(?:json)?\n?", "", result_text)
+            result_text = re.sub(r"\n?```$", "", result_text)
+
+        return result_text
+
+    async def _invoke_model_async(self, prompt: str, model_name: str) -> str:
+        """
+        ASYNC version - Send the prompt to Claude without blocking.
+        Uses the async Anthropic client for non-blocking API calls.
+        """
+        # Scale max_tokens based on prompt size
+        prompt_length = len(prompt)
+        if prompt_length > 100000:
+            max_tokens = 8000
+        elif prompt_length > 50000:
+            max_tokens = 6000
+        else:
+            max_tokens = 4000
+
+        response = await self.async_client.messages.create(
             model=model_name,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
