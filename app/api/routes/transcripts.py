@@ -273,6 +273,19 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
                 )
                 db_records["task_ids"].extend(task_ids)
 
+        # Process CRM updates (contact info learned from meetings)
+        crm_updates = analysis.get("crm_updates", [])
+        if crm_updates:
+            try:
+                crm_result = db.apply_crm_updates(crm_updates)
+                if crm_result.get("updated"):
+                    logger.info("Applied CRM updates: %s", crm_result["updated"])
+                    db_records["crm_updates_applied"] = crm_result["updated"]
+                if crm_result.get("not_found"):
+                    logger.info("CRM updates skipped (contacts not found): %s", crm_result["not_found"])
+            except Exception as e:
+                logger.error("Failed to apply CRM updates: %s", e)
+
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis)
@@ -455,6 +468,19 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                     origin_type="reflection",
                 )
                 db_records["task_ids"].extend(task_ids)
+
+        # Process CRM updates (contact info learned from meetings)
+        crm_updates = analysis.get("crm_updates", [])
+        if crm_updates:
+            try:
+                crm_result = db.apply_crm_updates(crm_updates)
+                if crm_result.get("updated"):
+                    logger.info("Applied CRM updates: %s", crm_result["updated"])
+                    db_records["crm_updates_applied"] = crm_result["updated"]
+                if crm_result.get("not_found"):
+                    logger.info("CRM updates skipped (contacts not found): %s", crm_result["not_found"])
+            except Exception as e:
+                logger.error("Failed to apply CRM updates: %s", e)
 
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)

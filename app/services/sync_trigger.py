@@ -5,12 +5,17 @@ Triggers the Sync Service to push newly created data to Notion immediately.
 
 import logging
 import httpx
+import asyncio
 from app.core.config import settings
 
 logger = logging.getLogger('Jarvis.Intelligence.SyncTrigger')
 
 # Sync service base URL
 SYNC_SERVICE_URL = settings.SYNC_SERVICE_URL
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
 
 
 async def trigger_sync(sync_type: str) -> bool:
@@ -41,25 +46,44 @@ async def trigger_sync(sync_type: str) -> bool:
     
     url = f"{SYNC_SERVICE_URL.rstrip('/')}{endpoint}"
     
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            logger.info(f"Triggering sync: {url}")
-            response = await client.post(url)
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"Sync {sync_type} completed: {result}")
-                return True
-            else:
-                logger.error(f"Sync {sync_type} failed: {response.status_code} - {response.text}")
-                return False
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                if attempt == 0:
+                    logger.info(f"Triggering sync: {url}")
+                else:
+                    logger.info(f"Retrying sync {sync_type} (attempt {attempt + 1}/{MAX_RETRIES})")
+                    
+                response = await client.post(url)
                 
-    except httpx.TimeoutException:
-        logger.error(f"Sync {sync_type} timed out")
-        return False
-    except Exception as e:
-        logger.error(f"Error triggering {sync_type} sync: {e}")
-        return False
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"Sync {sync_type} completed: {result}")
+                    return True
+                elif response.status_code >= 500:
+                    # Server error - retry
+                    last_error = f"Server error: {response.status_code}"
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(RETRY_DELAYS[attempt])
+                        continue
+                else:
+                    logger.error(f"Sync {sync_type} failed: {response.status_code} - {response.text}")
+                    return False
+                    
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
+            last_error = str(e)
+            if attempt < MAX_RETRIES - 1:
+                logger.warning(f"Sync {sync_type} attempt {attempt + 1} failed: {e}, retrying...")
+                await asyncio.sleep(RETRY_DELAYS[attempt])
+            else:
+                logger.error(f"Sync {sync_type} failed after {MAX_RETRIES} attempts: {e}")
+        except Exception as e:
+            logger.error(f"Error triggering {sync_type} sync: {e}")
+            return False
+    
+    logger.error(f"Sync {sync_type} failed after {MAX_RETRIES} retries: {last_error}")
+    return False
 
 
 async def trigger_syncs_for_records(db_records: dict) -> dict:

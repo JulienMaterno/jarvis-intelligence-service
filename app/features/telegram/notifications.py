@@ -5,11 +5,20 @@ Sends messages to the user via the Telegram bot.
 
 import logging
 import httpx
+import asyncio
+import os
 from typing import Optional, List, Dict, Any
 
 from app.shared.constants import TELEGRAM_BOT_URL, TELEGRAM_CHAT_ID
 
 logger = logging.getLogger("Jarvis.Intelligence.Telegram")
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+
+# Internal API key for authenticating with Telegram bot
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 async def send_telegram_message(
@@ -39,24 +48,47 @@ async def send_telegram_message(
     
     url = f"{TELEGRAM_BOT_URL.rstrip('/')}/send_message"
     
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json={
-                "chat_id": target_chat_id,
-                "text": text,
-                "parse_mode": parse_mode
-            })
-            
-            if response.status_code == 200:
-                logger.info(f"Telegram message sent to {target_chat_id}")
-                return True
-            else:
-                logger.error(f"Failed to send Telegram message: {response.status_code} - {response.text}")
-                return False
+    # Build headers with API key if configured
+    headers = {}
+    if INTERNAL_API_KEY:
+        headers["X-API-Key"] = INTERNAL_API_KEY
+    
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json={
+                    "chat_id": target_chat_id,
+                    "text": text,
+                    "parse_mode": parse_mode
+                }, headers=headers)
                 
-    except Exception as e:
-        logger.error(f"Error sending Telegram message: {e}")
-        return False
+                if response.status_code == 200:
+                    logger.info(f"Telegram message sent to {target_chat_id}")
+                    return True
+                elif response.status_code >= 500:
+                    # Server error - retry
+                    last_error = f"Server error: {response.status_code}"
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(RETRY_DELAYS[attempt])
+                        continue
+                else:
+                    logger.error(f"Failed to send Telegram message: {response.status_code} - {response.text}")
+                    return False
+                    
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
+            last_error = str(e)
+            if attempt < MAX_RETRIES - 1:
+                logger.warning(f"Telegram send attempt {attempt + 1} failed: {e}, retrying...")
+                await asyncio.sleep(RETRY_DELAYS[attempt])
+            else:
+                logger.error(f"Telegram send failed after {MAX_RETRIES} attempts: {e}")
+        except Exception as e:
+            logger.error(f"Error sending Telegram message: {e}")
+            return False
+    
+    logger.error(f"Failed to send Telegram message after {MAX_RETRIES} retries: {last_error}")
+    return False
 
 
 def build_processing_result_message(

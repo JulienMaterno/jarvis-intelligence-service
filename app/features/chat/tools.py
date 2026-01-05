@@ -2189,7 +2189,7 @@ def _create_meeting(input: Dict) -> Dict[str, Any]:
                     "title": item,
                     "origin_id": meeting["id"],
                     "origin_type": "meeting",
-                    "status": "Not started",
+                    "status": "pending",  # Use lowercase to match database.py
                     "last_sync_source": "supabase"
                 }).execute()
                 if task_result.data:

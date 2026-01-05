@@ -907,6 +907,108 @@ class SupabaseMultiDatabase:
         
         return None, []
     
+    def apply_crm_updates(self, crm_updates: List[Dict]) -> Dict[str, Any]:
+        """
+        Apply CRM updates extracted from meeting analysis.
+        Updates existing contacts with new information learned from meetings.
+        
+        Args:
+            crm_updates: List of dicts with format:
+                {
+                    "person_name": "Full name",
+                    "updates": {
+                        "company": "Company name or null",
+                        "position": "Job title or null",
+                        "location": "City/country or null",
+                        "personal_notes": "Memorable details"
+                    }
+                }
+        
+        Returns:
+            Dict with results: {"updated": [...], "not_found": [...], "errors": [...]}
+        """
+        result = {"updated": [], "not_found": [], "errors": []}
+        
+        if not crm_updates:
+            return result
+        
+        for update in crm_updates:
+            person_name = update.get("person_name", "").strip()
+            updates = update.get("updates", {})
+            
+            if not person_name or not updates:
+                continue
+            
+            try:
+                # Find the contact by name
+                contact, suggestions = self.find_contact_by_name(person_name)
+                
+                if not contact:
+                    result["not_found"].append({
+                        "name": person_name,
+                        "suggestions": [
+                            f"{s.get('first_name', '')} {s.get('last_name', '')}"
+                            for s in suggestions[:3]
+                        ]
+                    })
+                    continue
+                
+                # Build update payload - only include non-null, non-empty values
+                update_payload = {}
+                
+                if updates.get("company"):
+                    # Only update if currently empty or new value is more complete
+                    current_company = contact.get("company", "")
+                    if not current_company or len(updates["company"]) > len(current_company):
+                        update_payload["company"] = updates["company"]
+                
+                if updates.get("position"):
+                    # Map 'position' to 'job_title' field
+                    current_title = contact.get("job_title", "")
+                    if not current_title or len(updates["position"]) > len(current_title):
+                        update_payload["job_title"] = updates["position"]
+                
+                if updates.get("location"):
+                    current_location = contact.get("location", "")
+                    if not current_location:
+                        update_payload["location"] = updates["location"]
+                
+                if updates.get("personal_notes"):
+                    # Append personal notes to existing notes
+                    current_notes = contact.get("notes", "") or ""
+                    new_note = updates["personal_notes"]
+                    if new_note and new_note not in current_notes:
+                        # Add timestamp and append
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%Y-%m-%d")
+                        if current_notes:
+                            update_payload["notes"] = f"{current_notes}\n\n[{timestamp}] {new_note}"
+                        else:
+                            update_payload["notes"] = f"[{timestamp}] {new_note}"
+                
+                if update_payload:
+                    update_payload["updated_at"] = "now()"
+                    
+                    self.client.table("contacts").update(update_payload).eq(
+                        "id", contact["id"]
+                    ).execute()
+                    
+                    result["updated"].append({
+                        "name": person_name,
+                        "contact_id": contact["id"],
+                        "fields_updated": list(update_payload.keys())
+                    })
+                    logger.info(f"CRM update applied for {person_name}: {list(update_payload.keys())}")
+                else:
+                    # No new info to add
+                    logger.debug(f"No new CRM info to update for {person_name}")
+                
+            except Exception as e:
+                logger.error(f"Error applying CRM update for {person_name}: {e}")
+                result["errors"].append({"name": person_name, "error": str(e)})
+        
+        return result
+    
     def update_contact_interaction_stats(self, contact_id: str) -> None:
         """
         Update contact interaction statistics.
