@@ -568,8 +568,8 @@ async def generate_meeting_briefing(
                     contact_company = contact_result.data.get("company")
                     contact_context = get_contact_context(db, contact_id)
                     break
-            except:
-                continue
+            except Exception:
+                continue  # Contact not found or DB error
     
     # Generate briefing text
     briefing_text = generate_briefing_with_llm(llm, event, contact_context)

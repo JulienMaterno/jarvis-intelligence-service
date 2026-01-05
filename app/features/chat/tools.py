@@ -2145,7 +2145,7 @@ def _create_meeting(input: Dict) -> Dict[str, Any]:
         else:
             try:
                 meeting_date = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
-            except:
+            except (ValueError, AttributeError):
                 meeting_date = datetime.now(timezone.utc)
         
         # Find contact if name provided
