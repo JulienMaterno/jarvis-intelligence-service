@@ -407,6 +407,148 @@ Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is
         }
     },
     {
+        "name": "create_contact",
+        "description": "Create a new contact in the CRM. Use this when the user mentions meeting someone new or wants to add a contact.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "first_name": {
+                    "type": "string",
+                    "description": "First name"
+                },
+                "last_name": {
+                    "type": "string",
+                    "description": "Last name"
+                },
+                "email": {
+                    "type": "string",
+                    "description": "Email address"
+                },
+                "phone": {
+                    "type": "string",
+                    "description": "Phone number"
+                },
+                "company": {
+                    "type": "string",
+                    "description": "Company name"
+                },
+                "job_title": {
+                    "type": "string",
+                    "description": "Job title"
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Initial notes about this contact"
+                }
+            },
+            "required": ["first_name"]
+        }
+    },
+    {
+        "name": "update_contact",
+        "description": "Update an existing contact's information (email, company, phone, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "contact_name": {
+                    "type": "string",
+                    "description": "Name of contact to update"
+                },
+                "contact_id": {
+                    "type": "string",
+                    "description": "Or contact ID directly"
+                },
+                "email": {
+                    "type": "string",
+                    "description": "New email"
+                },
+                "phone": {
+                    "type": "string",
+                    "description": "New phone"
+                },
+                "company": {
+                    "type": "string",
+                    "description": "New company"
+                },
+                "job_title": {
+                    "type": "string",
+                    "description": "New job title"
+                },
+                "birthday": {
+                    "type": "string",
+                    "description": "Birthday (YYYY-MM-DD)"
+                },
+                "linkedin_url": {
+                    "type": "string",
+                    "description": "LinkedIn URL"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location/city"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "create_meeting",
+        "description": "Log a meeting or conversation. Use this when the user says they met with someone or had a call.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Meeting title (e.g., 'Coffee with John')"
+                },
+                "contact_name": {
+                    "type": "string",
+                    "description": "Name of person met with (will auto-link to contact if found)"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Summary of what was discussed"
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Date of meeting (YYYY-MM-DD or 'today', 'yesterday')"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Where the meeting took place"
+                },
+                "topics_discussed": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of topics discussed"
+                },
+                "follow_up_items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Follow-up actions or tasks"
+                }
+            },
+            "required": ["title"]
+        }
+    },
+    {
+        "name": "delete_task",
+        "description": "Delete a task. Use this when the user wants to remove a task that's no longer needed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_title": {
+                    "type": "string",
+                    "description": "Task title to find (partial match)"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Or task ID directly"
+                }
+            },
+            "required": []
+        }
+    },
+    {
         "name": "summarize_activity",
         "description": "Get a summary of recent activity: meetings, tasks completed, reflections, etc.",
         "input_schema": {
@@ -1127,6 +1269,15 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _update_task(tool_input)
         elif tool_name == "add_contact_note":
             return _add_contact_note(tool_input)
+        # New tools for full CRUD
+        elif tool_name == "create_contact":
+            return _create_contact(tool_input)
+        elif tool_name == "update_contact":
+            return _update_contact(tool_input)
+        elif tool_name == "create_meeting":
+            return _create_meeting(tool_input)
+        elif tool_name == "delete_task":
+            return _delete_task(tool_input)
         elif tool_name == "summarize_activity":
             return _summarize_activity(tool_input.get("period", "today"))
         elif tool_name == "who_to_contact":
@@ -1850,6 +2001,248 @@ def _add_contact_note(input: Dict) -> Dict[str, Any]:
         name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
         logger.info(f"Added note to contact via chat: {name}")
         return {"success": True, "contact": name, "note_added": note}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _create_contact(input: Dict) -> Dict[str, Any]:
+    """Create a new contact in the CRM."""
+    try:
+        first_name = input.get("first_name", "").strip()
+        if not first_name:
+            return {"error": "First name is required"}
+        
+        last_name = input.get("last_name", "").strip()
+        email = input.get("email", "").strip() or None
+        phone = input.get("phone", "").strip() or None
+        company = input.get("company", "").strip() or None
+        job_title = input.get("job_title", "").strip() or None
+        notes = input.get("notes", "").strip() or None
+        
+        # Check if contact already exists
+        if email:
+            existing = supabase.table("contacts").select("id, first_name, last_name").eq("email", email).execute()
+            if existing.data:
+                name = f"{existing.data[0].get('first_name', '')} {existing.data[0].get('last_name', '')}".strip()
+                return {"error": f"Contact with email {email} already exists: {name}"}
+        
+        # Create the contact
+        contact_data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email,
+            "phone": phone,
+            "company": company,
+            "job_title": job_title,
+            "notes": notes,
+            "last_sync_source": "supabase"
+        }
+        
+        result = supabase.table("contacts").insert(contact_data).execute()
+        
+        if result.data:
+            contact = result.data[0]
+            name = f"{first_name} {last_name}".strip()
+            logger.info(f"Created contact via chat: {name}")
+            return {
+                "success": True,
+                "contact_id": contact["id"],
+                "name": name,
+                "email": email,
+                "company": company,
+                "message": f"Created contact: {name}"
+            }
+        return {"error": "Failed to create contact"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _update_contact(input: Dict) -> Dict[str, Any]:
+    """Update an existing contact's information."""
+    try:
+        contact_name = input.get("contact_name", "").strip()
+        contact_id = input.get("contact_id", "").strip()
+        
+        # Find the contact
+        contact = None
+        if contact_id:
+            result = supabase.table("contacts").select("*").eq("id", contact_id).execute()
+            if result.data:
+                contact = result.data[0]
+        elif contact_name:
+            # Search by name
+            parts = contact_name.lower().split()
+            if len(parts) >= 2:
+                result = supabase.table("contacts").select("*").ilike(
+                    "first_name", f"%{parts[0]}%"
+                ).ilike("last_name", f"%{parts[-1]}%").execute()
+            else:
+                result = supabase.table("contacts").select("*").or_(
+                    f"first_name.ilike.%{parts[0]}%,last_name.ilike.%{parts[0]}%"
+                ).execute()
+            if result.data:
+                contact = result.data[0]
+        
+        if not contact:
+            return {"error": "Contact not found"}
+        
+        # Build update data
+        update_data = {}
+        if input.get("email"):
+            update_data["email"] = input["email"].strip()
+        if input.get("phone"):
+            update_data["phone"] = input["phone"].strip()
+        if input.get("company"):
+            update_data["company"] = input["company"].strip()
+        if input.get("job_title"):
+            update_data["job_title"] = input["job_title"].strip()
+        if input.get("birthday"):
+            update_data["birthday"] = input["birthday"].strip()
+        if input.get("linkedin_url"):
+            update_data["linkedin_url"] = input["linkedin_url"].strip()
+        if input.get("location"):
+            update_data["location"] = input["location"].strip()
+        
+        if not update_data:
+            return {"error": "No fields to update provided"}
+        
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        update_data["last_sync_source"] = "supabase"
+        
+        supabase.table("contacts").update(update_data).eq("id", contact["id"]).execute()
+        
+        name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+        logger.info(f"Updated contact via chat: {name}, fields: {list(update_data.keys())}")
+        return {
+            "success": True,
+            "contact": name,
+            "fields_updated": list(update_data.keys()),
+            "message": f"Updated {name}: {', '.join(update_data.keys())}"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _create_meeting(input: Dict) -> Dict[str, Any]:
+    """Log a meeting or conversation."""
+    try:
+        title = input.get("title", "").strip()
+        if not title:
+            return {"error": "Meeting title is required"}
+        
+        contact_name = input.get("contact_name", "").strip()
+        summary = input.get("summary", "").strip() or None
+        location = input.get("location", "").strip() or None
+        topics_discussed = input.get("topics_discussed", [])
+        follow_up_items = input.get("follow_up_items", [])
+        
+        # Parse date
+        date_str = input.get("date", "today").strip().lower()
+        if date_str == "today":
+            meeting_date = datetime.now(timezone.utc)
+        elif date_str == "yesterday":
+            meeting_date = datetime.now(timezone.utc) - timedelta(days=1)
+        else:
+            try:
+                meeting_date = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
+            except:
+                meeting_date = datetime.now(timezone.utc)
+        
+        # Find contact if name provided
+        contact_id = None
+        if contact_name:
+            parts = contact_name.lower().split()
+            if len(parts) >= 2:
+                result = supabase.table("contacts").select("id").ilike(
+                    "first_name", f"%{parts[0]}%"
+                ).ilike("last_name", f"%{parts[-1]}%").execute()
+            else:
+                result = supabase.table("contacts").select("id").or_(
+                    f"first_name.ilike.%{parts[0]}%,last_name.ilike.%{parts[0]}%"
+                ).execute()
+            if result.data:
+                contact_id = result.data[0]["id"]
+        
+        # Create the meeting
+        meeting_data = {
+            "title": title,
+            "date": meeting_date.isoformat(),
+            "contact_id": contact_id,
+            "contact_name": contact_name if contact_name else None,
+            "summary": summary,
+            "location": location,
+            "topics_discussed": topics_discussed if topics_discussed else None,
+            "follow_up_items": follow_up_items if follow_up_items else None,
+            "last_sync_source": "supabase"
+        }
+        
+        result = supabase.table("meetings").insert(meeting_data).execute()
+        
+        if result.data:
+            meeting = result.data[0]
+            logger.info(f"Created meeting via chat: {title}")
+            
+            # Create follow-up tasks if provided
+            tasks_created = []
+            for item in follow_up_items:
+                task_result = supabase.table("tasks").insert({
+                    "title": item,
+                    "origin_id": meeting["id"],
+                    "origin_type": "meeting",
+                    "status": "Not started",
+                    "last_sync_source": "supabase"
+                }).execute()
+                if task_result.data:
+                    tasks_created.append(item)
+            
+            return {
+                "success": True,
+                "meeting_id": meeting["id"],
+                "title": title,
+                "contact_linked": contact_id is not None,
+                "tasks_created": len(tasks_created),
+                "message": f"Logged meeting: {title}" + (f" with {contact_name}" if contact_name else "")
+            }
+        return {"error": "Failed to create meeting"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _delete_task(input: Dict) -> Dict[str, Any]:
+    """Delete (soft-delete) a task."""
+    try:
+        task_title = input.get("task_title", "").strip()
+        task_id = input.get("task_id", "").strip()
+        
+        # Find the task
+        task = None
+        if task_id:
+            result = supabase.table("tasks").select("*").eq("id", task_id).is_("deleted_at", "null").execute()
+            if result.data:
+                task = result.data[0]
+        elif task_title:
+            result = supabase.table("tasks").select("*").ilike(
+                "title", f"%{task_title}%"
+            ).is_("deleted_at", "null").limit(1).execute()
+            if result.data:
+                task = result.data[0]
+        
+        if not task:
+            return {"error": "Task not found"}
+        
+        # Soft delete the task
+        supabase.table("tasks").update({
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", task["id"]).execute()
+        
+        logger.info(f"Deleted task via chat: {task.get('title')}")
+        return {
+            "success": True,
+            "task_id": task["id"],
+            "title": task.get("title"),
+            "message": f"Deleted task: {task.get('title')}"
+        }
     except Exception as e:
         return {"error": str(e)}
 

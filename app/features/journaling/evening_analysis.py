@@ -35,12 +35,13 @@ MODEL_ID = os.getenv("CLAUDE_JOURNAL_MODEL", "claude-sonnet-4-5-20250929")
 # =============================================================================
 
 class ActivityData(BaseModel):
-    """All activity data from the last 24 hours."""
+    """All activity data from TODAY (user's timezone)."""
     meetings: List[Dict] = Field(default_factory=list)
     calendar_events: List[Dict] = Field(default_factory=list)
     emails: List[Dict] = Field(default_factory=list)
     tasks_completed: List[Dict] = Field(default_factory=list)
     tasks_created: List[Dict] = Field(default_factory=list)
+    tasks_due_today: List[Dict] = Field(default_factory=list)  # Tasks scheduled for today (may have been set earlier)
     reflections: List[Dict] = Field(default_factory=list)
     highlights: List[Dict] = Field(default_factory=list)  # Book highlights
     reading: Optional[Dict] = None  # Reading progress
@@ -106,7 +107,7 @@ def build_activity_context(data: ActivityData) -> str:
         task_lines = [f"- {t.get('title', 'Task')}" for t in data.tasks_completed[:10]]
         sections.append(f"TASKS COMPLETED ({len(data.tasks_completed)}):\n" + "\n".join(task_lines))
     
-    # Tasks Created
+    # Tasks Created Today
     if data.tasks_created:
         task_lines = []
         for t in data.tasks_created[:10]:
@@ -120,6 +121,21 @@ def build_activity_context(data: ActivityData) -> str:
                 line += f" (due: {due})"
             task_lines.append(line)
         sections.append(f"NEW TASKS CREATED ({len(data.tasks_created)}):\n" + "\n".join(task_lines))
+    
+    # Tasks Due Today (may have been scheduled earlier - important for follow-up)
+    if data.tasks_due_today:
+        task_lines = []
+        for t in data.tasks_due_today[:10]:
+            title = t.get("title", "Task")
+            status = t.get("status", "")
+            priority = t.get("priority", "")
+            line = f"- {title}"
+            if status:
+                line += f" [{status}]"
+            if priority:
+                line += f" ({priority})"
+            task_lines.append(line)
+        sections.append(f"TASKS DUE TODAY ({len(data.tasks_due_today)}):\n" + "\n".join(task_lines))
     
     # Reflections
     if data.reflections:
@@ -199,12 +215,13 @@ def build_activity_context(data: ActivityData) -> str:
                 line += f" ({progress}% complete)"
                 reading_lines.append(line)
         
-        recently_finished = data.reading.get("recently_finished", [])
-        if recently_finished:
-            for book in recently_finished[:2]:
+        # Only books finished TODAY (not last 7 days)
+        finished_today = data.reading.get("finished_today", [])
+        if finished_today:
+            for book in finished_today[:2]:
                 title = book.get("title", "Unknown")
                 rating = book.get("rating")
-                line = f"- Finished: {title}"
+                line = f"- Finished today: {title}"
                 if rating:
                     line += f" (rated {rating}/5)"
                 reading_lines.append(line)
