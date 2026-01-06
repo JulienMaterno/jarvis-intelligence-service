@@ -193,6 +193,9 @@ class MeetingTranscriptRequest(BaseModel):
     calendar_event: Optional[CalendarEventInfo] = None
     screen_context: Optional[ScreenContextInfo] = None
     manual_title: Optional[str] = None  # Override title if provided
+    user_name: Optional[str] = "Aaron"  # Name of the microphone user (the host)
+    speaker_labels: Optional[Dict[str, str]] = None  # Map of speaker IDs to names if diarization available
+    user_notes: Optional[List[str]] = None  # Notes added by user during the meeting via /note command
 
 class MeetingTranscriptResponse(BaseModel):
     """Response after processing meeting transcript."""

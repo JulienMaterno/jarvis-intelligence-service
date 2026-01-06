@@ -545,6 +545,11 @@ async def process_meeting_transcript(
         # Build enhanced context for the analyzer
         context_parts = []
         
+        # CRITICAL: Identify the microphone user (Aaron) as the speaker
+        user_name = request.user_name or "Aaron"
+        context_parts.append(f"SPEAKER IDENTIFICATION: The person speaking into the microphone is {user_name}. They are the host/user. The OTHER person in the meeting is the one they met WITH.")
+        context_parts.append(f"Meeting Duration: {request.duration_minutes} minutes")
+        
         if request.calendar_event:
             cal = request.calendar_event
             if cal.title:
@@ -559,6 +564,22 @@ async def process_meeting_transcript(
                 context_parts.append(f"Window Titles: {', '.join(sc.window_titles)}")
             if sc.visible_text_sample:
                 context_parts.append(f"Screen Text: {sc.visible_text_sample[:500]}")
+        
+        # Include user notes if provided (from /note command during meeting)
+        if request.user_notes:
+            context_parts.append("USER NOTES (added by the user during the meeting - treat as authoritative context):")
+            for i, note in enumerate(request.user_notes, 1):
+                context_parts.append(f"  Note {i}: {note}")
+        
+        # Summary length guidance based on meeting duration
+        if request.duration_minutes >= 60:
+            context_parts.append("SUMMARY LENGTH: This is a LONG meeting (60+ min). Provide comprehensive summary (10-15 sentences).")
+        elif request.duration_minutes >= 30:
+            context_parts.append("SUMMARY LENGTH: This is a medium meeting (30-60 min). Provide detailed summary (6-10 sentences).")
+        elif request.duration_minutes >= 15:
+            context_parts.append("SUMMARY LENGTH: This is a shorter meeting (15-30 min). Provide concise summary (4-6 sentences).")
+        else:
+            context_parts.append("SUMMARY LENGTH: This is a brief meeting (<15 min). Provide brief summary (2-4 sentences).")
         
         # Prepend context to transcript for better analysis
         enhanced_transcript = request.transcript
@@ -630,12 +651,18 @@ async def process_meeting_transcript(
             if request.manual_title:
                 meeting["title"] = request.manual_title
             
+            # Extract calendar event ID for linking
+            calendar_event_id = None
+            if request.calendar_event and request.calendar_event.google_event_id:
+                calendar_event_id = request.calendar_event.google_event_id
+            
             m_id, _, contact_match_info = db.create_meeting(
                 meeting_data=meeting,
                 transcript=request.transcript,
                 duration=request.duration_minutes * 60,
                 filename=filename,
                 transcript_id=transcript_id,
+                calendar_event_id=calendar_event_id,
             )
             db_records["meeting_ids"].append(m_id)
             

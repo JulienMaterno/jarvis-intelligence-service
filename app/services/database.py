@@ -249,11 +249,12 @@ class SupabaseMultiDatabase:
         transcript: str,
         duration: float,
         filename: str,
-        transcript_id: str = None
+        transcript_id: str = None,
+        calendar_event_id: str = None
     ) -> Tuple[str, str]:
         """
         Create meeting entry in Supabase.
-        Returns: Tuple of (meeting_id, "supabase://meetings/{id}")
+        Returns: Tuple of (meeting_id, "supabase://meetings/{id}", contact_match_info)
         """
         try:
             title = meeting_data.get('title', 'Untitled Meeting')
@@ -319,6 +320,10 @@ class SupabaseMultiDatabase:
             
             if transcript_id:
                 payload["transcript_id"] = transcript_id
+            
+            # Link to calendar event if provided
+            if calendar_event_id:
+                payload["calendar_event_id"] = calendar_event_id
             
             result = self.client.table("meetings").insert(payload).execute()
             meeting_id = result.data[0]["id"]
