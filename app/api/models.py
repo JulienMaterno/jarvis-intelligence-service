@@ -158,3 +158,47 @@ class JournalPromptResponse(BaseModel):
         description="Summary of the people referenced in today's activity stream.",
     )
     message: str
+
+
+# =========================================================================
+# MEETING TRANSCRIPT MODELS (Screenpipe Bridge)
+# =========================================================================
+
+class CalendarEventInfo(BaseModel):
+    """Calendar event metadata from Screenpipe bridge."""
+    google_event_id: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    attendees: Optional[List[Dict[str, Any]]] = None
+    organizer: Optional[str] = None
+    html_link: Optional[str] = None
+
+class ScreenContextInfo(BaseModel):
+    """Screen context captured during meeting."""
+    window_titles: Optional[List[str]] = None
+    visible_text_sample: Optional[str] = None
+    apps: Optional[List[str]] = None
+
+class MeetingTranscriptRequest(BaseModel):
+    """Request from Screenpipe bridge with meeting transcript."""
+    transcript: str
+    start_time: str  # ISO timestamp
+    end_time: str    # ISO timestamp
+    duration_minutes: int
+    source_app: str  # e.g., "Zoom", "Google Meet", "WhatsApp"
+    source_type: str = "screenpipe_meeting"
+    calendar_event: Optional[CalendarEventInfo] = None
+    screen_context: Optional[ScreenContextInfo] = None
+    manual_title: Optional[str] = None  # Override title if provided
+
+class MeetingTranscriptResponse(BaseModel):
+    """Response after processing meeting transcript."""
+    status: str
+    transcript_id: str
+    meeting_id: Optional[str] = None
+    meeting_title: Optional[str] = None
+    tasks_created: int = 0
+    contact_matches: List[Dict[str, Any]] = Field(default_factory=list)

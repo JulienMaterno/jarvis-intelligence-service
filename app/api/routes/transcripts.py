@@ -506,3 +506,200 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
     except Exception as exc:
         logger.exception("Failed to analyze transcript %s", request.filename)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =========================================================================
+# SCREENPIPE MEETING TRANSCRIPT ENDPOINT
+# =========================================================================
+
+from app.api.models import MeetingTranscriptRequest, MeetingTranscriptResponse
+
+
+@router.post("/process/meeting-transcript", response_model=MeetingTranscriptResponse)
+async def process_meeting_transcript(
+    request: MeetingTranscriptRequest, 
+    background_tasks: BackgroundTasks
+) -> MeetingTranscriptResponse:
+    """
+    Process a meeting transcript from Screenpipe bridge.
+    
+    This endpoint receives enriched meeting transcripts with:
+    - Calendar event metadata (title, attendees)
+    - Screen context (OCR text, window titles)
+    - Source app information
+    
+    It analyzes the transcript and creates meeting records.
+    """
+    analyzer, db = get_services()
+
+    try:
+        logger.info(
+            "Processing Screenpipe meeting transcript: app=%s, duration=%d min",
+            request.source_app,
+            request.duration_minutes
+        )
+        
+        # Build filename from metadata for consistency
+        filename = f"screenpipe_{request.source_app}_{request.start_time[:10]}.txt"
+        
+        # Build enhanced context for the analyzer
+        context_parts = []
+        
+        if request.calendar_event:
+            cal = request.calendar_event
+            if cal.title:
+                context_parts.append(f"Calendar Event: {cal.title}")
+            if cal.attendees:
+                attendee_names = [a.get("name") or a.get("email", "") for a in cal.attendees]
+                context_parts.append(f"Attendees: {', '.join(attendee_names)}")
+        
+        if request.screen_context:
+            sc = request.screen_context
+            if sc.window_titles:
+                context_parts.append(f"Window Titles: {', '.join(sc.window_titles)}")
+            if sc.visible_text_sample:
+                context_parts.append(f"Screen Text: {sc.visible_text_sample[:500]}")
+        
+        # Prepend context to transcript for better analysis
+        enhanced_transcript = request.transcript
+        if context_parts:
+            context_header = "MEETING CONTEXT:\n" + "\n".join(context_parts) + "\n\nTRANSCRIPT:\n"
+            enhanced_transcript = context_header + request.transcript
+        
+        # First, save the transcript to database
+        transcript_id = db.create_transcript(
+            source_file=filename,
+            full_text=request.transcript,
+            audio_duration_seconds=request.duration_minutes * 60,
+            language="auto",
+        )
+        logger.info("Saved Screenpipe transcript: %s", transcript_id)
+        
+        # Get existing topics for reflection routing
+        existing_topics = db.get_existing_reflection_topics()
+        
+        # Analyze with Claude (async for non-blocking)
+        analysis = await analyzer.analyze_transcript_async(
+            transcript=enhanced_transcript,
+            filename=filename,
+            recording_date=request.start_time[:10],
+            existing_topics=existing_topics,
+        )
+        
+        db_records = {
+            "transcript_id": transcript_id,
+            "meeting_ids": [],
+            "reflection_ids": [],
+            "journal_ids": [],
+            "task_ids": [],
+            "contact_matches": [],
+        }
+        
+        primary_category = analysis.get("primary_category", "meeting")
+        
+        # For Screenpipe transcripts, we force meeting creation
+        # even if AI categorizes differently (it's a known meeting)
+        meetings = analysis.get("meetings", [])
+        
+        # If no meeting was extracted but we have calendar info, create one
+        if not meetings:
+            meeting_title = (
+                request.manual_title 
+                or (request.calendar_event.title if request.calendar_event else None)
+                or f"{request.source_app} Meeting"
+            )
+            meetings = [{
+                "title": meeting_title,
+                "summary": analysis.get("summary", "Auto-captured meeting"),
+                "date": request.start_time,
+                "topics_discussed": analysis.get("key_topics", []),
+                "action_items": analysis.get("tasks", []),
+            }]
+            
+            # Extract attendee as contact name if available
+            if request.calendar_event and request.calendar_event.attendees:
+                # Find first non-organizer attendee
+                for attendee in request.calendar_event.attendees:
+                    if not attendee.get("organizer"):
+                        meetings[0]["contact_name"] = attendee.get("name") or attendee.get("email", "").split("@")[0]
+                        break
+        
+        # Create meeting records
+        for meeting in meetings:
+            # Override title if manual title provided
+            if request.manual_title:
+                meeting["title"] = request.manual_title
+            
+            m_id, _, contact_match_info = db.create_meeting(
+                meeting_data=meeting,
+                transcript=request.transcript,
+                duration=request.duration_minutes * 60,
+                filename=filename,
+                transcript_id=transcript_id,
+            )
+            db_records["meeting_ids"].append(m_id)
+            
+            if contact_match_info.get("searched_name"):
+                contact_match_info["meeting_id"] = m_id
+                contact_match_info["meeting_title"] = meeting.get("title", "Untitled")
+                db_records["contact_matches"].append(contact_match_info)
+            
+            # Create tasks from meeting action items
+            if meeting.get("action_items"):
+                task_data = [
+                    {"title": item, "description": f"From {request.source_app} meeting"}
+                    for item in meeting["action_items"]
+                    if isinstance(item, str)
+                ]
+                if task_data:
+                    task_ids = db.create_tasks(
+                        tasks_data=task_data,
+                        origin_id=m_id,
+                        origin_type="meeting"
+                    )
+                    db_records["task_ids"].extend(task_ids)
+        
+        # Also create any standalone tasks from analysis
+        if analysis.get("tasks"):
+            origin_id = db_records["meeting_ids"][0] if db_records["meeting_ids"] else None
+            if origin_id:
+                task_ids = db.create_tasks(
+                    tasks_data=analysis["tasks"],
+                    origin_id=origin_id,
+                    origin_type="meeting"
+                )
+                db_records["task_ids"].extend(task_ids)
+        
+        # Schedule background tasks
+        background_tasks.add_task(trigger_syncs_for_records, db_records)
+        background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        
+        # Send meeting feedback notifications
+        if db_records["meeting_ids"]:
+            background_tasks.add_task(
+                _send_meeting_feedback_notifications,
+                db_records["meeting_ids"],
+                meetings,
+                db_records["contact_matches"]
+            )
+        
+        meeting_id = db_records["meeting_ids"][0] if db_records["meeting_ids"] else None
+        meeting_title = meetings[0].get("title") if meetings else None
+        
+        logger.info(
+            "Processed Screenpipe transcript: meeting=%s, tasks=%d",
+            meeting_id, len(db_records["task_ids"])
+        )
+        
+        return MeetingTranscriptResponse(
+            status="success",
+            transcript_id=transcript_id,
+            meeting_id=meeting_id,
+            meeting_title=meeting_title,
+            tasks_created=len(db_records["task_ids"]),
+            contact_matches=db_records["contact_matches"]
+        )
+        
+    except Exception as exc:
+        logger.exception("Failed to process Screenpipe meeting transcript")
+        raise HTTPException(status_code=500, detail=str(exc))
