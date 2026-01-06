@@ -7,3 +7,8 @@ python-dotenv
 httpx
 timezonefinder
 pytz
+
+# Memory layer
+mem0ai
+qdrant-client
+openai  # For embeddings in Mem0

@@ -1,11 +1,12 @@
 """
-Chat Service - Conversational AI with Tool Use.
+Chat Service - Conversational AI with Tool Use and Memory.
 
 This module provides a Claude-powered conversational interface that can:
 1. Answer questions about your data (meetings, contacts, tasks, etc.)
 2. Create new records (tasks, reflections)
 3. Search and retrieve information
 4. Execute actions (complete tasks, etc.)
+5. Remember context across conversations (via Mem0)
 
 Works similarly to Claude Desktop + MCP, but via Telegram.
 """
@@ -20,6 +21,7 @@ import anthropic
 from pydantic import BaseModel, Field
 
 from app.features.chat.tools import TOOLS, execute_tool
+from app.features.memory import get_memory_service
 
 logger = logging.getLogger("Jarvis.Chat")
 
@@ -294,7 +296,7 @@ SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(
 # =============================================================================
 
 class ChatService:
-    """Handles conversational AI with tool use."""
+    """Handles conversational AI with tool use and memory."""
     
     def __init__(self):
         # Disable automatic retries - better to fail fast than consume rate limit budget
@@ -302,9 +304,39 @@ class ChatService:
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             max_retries=0  # Don't auto-retry on 429 - we handle it ourselves
         )
+        # Get memory service
+        self.memory = get_memory_service()
     
-    def _build_system_prompt(self) -> str:
-        """Build system prompt with current date/time/location context."""
+    async def _get_memory_context(self, message: str) -> str:
+        """Get relevant memories for the current message."""
+        try:
+            context = await self.memory.get_context(message, limit=5)
+            if context:
+                return f"\n\nRELEVANT MEMORIES:\n{context}"
+            return ""
+        except Exception as e:
+            logger.warning(f"Could not get memory context: {e}")
+            return ""
+    
+    async def _save_memory_from_conversation(self, user_message: str, assistant_response: str) -> None:
+        """Extract and save memories from the conversation."""
+        try:
+            # Store the conversation for memory extraction
+            messages = [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": assistant_response}
+            ]
+            
+            # Let Mem0 extract what's worth remembering
+            await self.memory.add(
+                f"Conversation: User asked '{user_message[:100]}...' and received answer about it.",
+                metadata={"source": "chat", "timestamp": datetime.now(timezone.utc).isoformat()}
+            )
+        except Exception as e:
+            logger.warning(f"Could not save memory: {e}")
+    
+    def _build_system_prompt(self, memory_context: str = "") -> str:
+        """Build system prompt with current date/time/location context and memory."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -325,17 +357,26 @@ class ChatService:
             current_date = now.strftime("%A, %B %d, %Y") + " (UTC)"
             current_time = now.strftime("%I:%M %p") + " (UTC)"
         
-        return SYSTEM_PROMPT_TEMPLATE.format(
+        base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             current_date=current_date,
             current_time=current_time,
             user_location=f"{location_str} ({timezone_str})"
         )
+        
+        # Append memory context if available
+        if memory_context:
+            base_prompt += memory_context
+        
+        return base_prompt
     
     async def process_message(self, request: ChatRequest) -> ChatResponse:
         """Process a user message and return a response."""
         try:
-            # Build dynamic system prompt with current context
-            system_prompt = self._build_system_prompt()
+            # Get relevant memories for this message
+            memory_context = await self._get_memory_context(request.message)
+            
+            # Build dynamic system prompt with current context and memory
+            system_prompt = self._build_system_prompt(memory_context)
             
             # Build conversation messages
             messages = []
@@ -429,6 +470,12 @@ class ChatService:
                             final_response += block.text
                     
                     logger.info(f"💬 Final response (no more tools): {final_response[:200]}")
+                    
+                    # Save memories from this conversation (background, don't block)
+                    try:
+                        await self._save_memory_from_conversation(request.message, final_response)
+                    except Exception as e:
+                        logger.warning(f"Failed to save conversation memory: {e}")
                     
                     return ChatResponse(
                         response=final_response,

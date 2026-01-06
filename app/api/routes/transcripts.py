@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from app.api.dependencies import get_services
+from app.api.dependencies import get_services, get_memory
 from app.api.models import AnalysisResponse, TranscriptRequest
 from app.services.sync_trigger import trigger_syncs_for_records
 from app.features.telegram import (
@@ -12,6 +12,16 @@ from app.features.telegram import (
 
 router = APIRouter(tags=["Transcripts"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Transcripts")
+
+
+async def _seed_memory_from_analysis(analysis: dict, source_file: str) -> None:
+    """Extract and store memories from transcript analysis."""
+    try:
+        memory = get_memory()
+        await memory.seed_from_transcript_analysis(analysis, source_file)
+        logger.info("Seeded memories from transcript analysis")
+    except Exception as e:
+        logger.warning(f"Failed to seed memories: {e}")
 
 
 async def _send_processing_notification(db_records: dict, analysis: dict) -> None:
@@ -291,6 +301,7 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        background_tasks.add_task(_seed_memory_from_analysis, analysis, filename)
         
         # Send meeting feedback for EACH meeting (even if created with journal)
         if db_records["meeting_ids"]:
@@ -489,6 +500,7 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        background_tasks.add_task(_seed_memory_from_analysis, analysis, request.filename)
         
         # Send meeting feedback for EACH meeting (even if created with journal)
         if db_records["meeting_ids"]:
@@ -700,6 +712,7 @@ async def process_meeting_transcript(
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        background_tasks.add_task(_seed_memory_from_analysis, analysis, "screenpipe_meeting")
         
         # Send meeting feedback notifications
         if db_records["meeting_ids"]:

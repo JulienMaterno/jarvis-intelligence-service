@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 import httpx
 
-from app.api.dependencies import get_database
+from app.api.dependencies import get_database, get_memory
 from app.services.llm import ClaudeMultiAnalyzer
 from app.features.briefing.meeting_briefing import (
     get_upcoming_events_for_briefing,
@@ -172,6 +172,7 @@ async def check_upcoming_briefings(
     """
     db = get_database()
     llm = ClaudeMultiAnalyzer()
+    memory = get_memory()
     
     try:
         # Get upcoming events
@@ -181,7 +182,7 @@ async def check_upcoming_briefings(
         briefings = []
         for event in events:
             try:
-                briefing = await generate_meeting_briefing(db, llm, event)
+                briefing = await generate_meeting_briefing(db, llm, event, memory)
                 if briefing:
                     notification_sent = False
                     
@@ -230,6 +231,7 @@ async def trigger_briefing(request: TriggerBriefingRequest):
     """
     db = get_database()
     llm = ClaudeMultiAnalyzer()
+    memory = get_memory()
     
     try:
         # Fetch the event
@@ -243,7 +245,7 @@ async def trigger_briefing(request: TriggerBriefingRequest):
         event = event_result.data
         
         # Generate briefing
-        briefing = await generate_meeting_briefing(db, llm, event)
+        briefing = await generate_meeting_briefing(db, llm, event, memory)
         
         if not briefing:
             raise HTTPException(status_code=500, detail="Failed to generate briefing")
@@ -292,6 +294,7 @@ async def generate_contact_briefing(
     """
     db = get_database()
     llm = ClaudeMultiAnalyzer()
+    memory = get_memory()
     
     try:
         # Create a pseudo-event for the contact
@@ -316,7 +319,7 @@ async def generate_contact_briefing(
         }
         
         # Generate briefing
-        briefing = await generate_meeting_briefing(db, llm, pseudo_event)
+        briefing = await generate_meeting_briefing(db, llm, pseudo_event, memory)
         
         if not briefing:
             raise HTTPException(status_code=500, detail="Failed to generate briefing")
@@ -358,6 +361,7 @@ async def get_next_meeting_briefing(send_notification: bool = False):
     """
     db = get_database()
     llm = ClaudeMultiAnalyzer()
+    memory = get_memory()
     
     try:
         # Get the next event
@@ -379,7 +383,7 @@ async def get_next_meeting_briefing(send_notification: bool = False):
         event = event_result.data[0]
         
         # Generate briefing
-        briefing = await generate_meeting_briefing(db, llm, event)
+        briefing = await generate_meeting_briefing(db, llm, event, memory)
         
         if not briefing:
             raise HTTPException(status_code=500, detail="Failed to generate briefing")
@@ -434,6 +438,7 @@ async def schedule_hourly_briefings():
     """
     db = get_database()
     llm = ClaudeMultiAnalyzer()
+    memory = get_memory()
     
     try:
         now = datetime.now(timezone.utc)
@@ -491,7 +496,7 @@ async def schedule_hourly_briefings():
             
             try:
                 # Generate briefing now (pre-compute)
-                briefing = await generate_meeting_briefing(db, llm, event)
+                briefing = await generate_meeting_briefing(db, llm, event, memory)
                 
                 if briefing:
                     # Calculate when to send (15 min before meeting)

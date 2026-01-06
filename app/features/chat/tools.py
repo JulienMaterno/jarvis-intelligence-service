@@ -1217,6 +1217,109 @@ Use when:
             "properties": {},
             "required": []
         }
+    },
+    # =========================================================================
+    # MEMORY MANAGEMENT TOOLS
+    # =========================================================================
+    {
+        "name": "remember_fact",
+        "description": """Store a fact about the user in long-term memory.
+
+Use when user says things like:
+- "Remember that I'm vegetarian"
+- "My GitHub is github.com/username"
+- "I was employee #1 at Algenie"
+- "Remember my favorite coffee is flat white"
+
+This stores the information for future conversations.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "The fact to remember (e.g., 'User is vegetarian', 'User's GitHub is github.com/x')"
+                },
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["fact", "preference", "relationship"],
+                    "description": "Type of memory: fact (general info), preference (likes/dislikes), relationship (about people)",
+                    "default": "fact"
+                }
+            },
+            "required": ["fact"]
+        }
+    },
+    {
+        "name": "correct_memory",
+        "description": """Correct something Jarvis remembers incorrectly.
+
+Use when user says things like:
+- "That's wrong, I was actually employee #1"
+- "No, my title is CEO not CTO"
+- "Actually I prefer mornings not evenings"
+
+First search for the incorrect memory, then correct it.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "incorrect_info": {
+                    "type": "string",
+                    "description": "What Jarvis got wrong (for finding the memory)"
+                },
+                "correct_info": {
+                    "type": "string",
+                    "description": "The corrected fact"
+                }
+            },
+            "required": ["incorrect_info", "correct_info"]
+        }
+    },
+    {
+        "name": "search_memories",
+        "description": """Search what Jarvis remembers about a topic.
+
+Use when user asks:
+- "What do you know about me?"
+- "What do you remember about Algenie?"
+- "Do you know my preferences?"
+
+Returns relevant memories from long-term storage.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for in memories"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum memories to return",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "forget_memory",
+        "description": """Delete a specific memory.
+
+Use when user explicitly asks to forget something:
+- "Forget that I like coffee"
+- "Remove that memory about my old job"
+- "Delete what you know about X"
+
+Be careful - only delete when user is explicit about wanting to forget.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What memory to search for and delete"
+                }
+            },
+            "required": ["query"]
+        }
     }
 ]
 
@@ -1341,6 +1444,15 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _unarchive_beeper_chat(tool_input)
         elif tool_name == "get_beeper_status":
             return _get_beeper_status(tool_input)
+        # Memory management tools
+        elif tool_name == "remember_fact":
+            return _remember_fact(tool_input)
+        elif tool_name == "correct_memory":
+            return _correct_memory(tool_input)
+        elif tool_name == "search_memories":
+            return _search_memories(tool_input)
+        elif tool_name == "forget_memory":
+            return _forget_memory(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -3914,3 +4026,218 @@ def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+# =============================================================================
+# MEMORY MANAGEMENT IMPLEMENTATIONS
+# =============================================================================
+
+def _run_async(coro):
+    """Safely run async code from sync context."""
+    import asyncio
+    try:
+        # Try to get the running loop (if in async context)
+        loop = asyncio.get_running_loop()
+        # We're in an async context - use nest_asyncio or create task
+        # For simplicity, create a new thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result(timeout=30)
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run
+        return asyncio.run(coro)
+
+
+def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Store a fact in long-term memory."""
+    from app.features.memory import get_memory_service, MemoryType
+    
+    fact = tool_input.get("fact", "").strip()
+    memory_type_str = tool_input.get("memory_type", "fact").lower()
+    
+    if not fact:
+        return {"error": "No fact provided to remember"}
+    
+    # Map string to enum
+    type_mapping = {
+        "fact": MemoryType.FACT,
+        "preference": MemoryType.PREFERENCE,
+        "relationship": MemoryType.RELATIONSHIP,
+    }
+    memory_type = type_mapping.get(memory_type_str, MemoryType.FACT)
+    
+    try:
+        memory_service = get_memory_service()
+        
+        memory_id = _run_async(
+            memory_service.add(fact, memory_type, metadata={"source": "user_chat"})
+        )
+        
+        if memory_id:
+            return {
+                "status": "remembered",
+                "memory_id": memory_id,
+                "fact": fact,
+                "type": memory_type_str,
+                "message": f"✅ I'll remember that: {fact}"
+            }
+        else:
+            return {"error": "Failed to store memory"}
+            
+    except Exception as e:
+        logger.error(f"Failed to remember fact: {e}")
+        return {"error": f"Failed to remember: {str(e)}"}
+
+
+def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Correct an existing memory."""
+    from app.features.memory import get_memory_service, MemoryType
+    
+    incorrect_info = tool_input.get("incorrect_info", "").strip()
+    correct_info = tool_input.get("correct_info", "").strip()
+    
+    if not incorrect_info or not correct_info:
+        return {"error": "Need both incorrect and correct information"}
+    
+    try:
+        memory_service = get_memory_service()
+        
+        # Search for memories matching the incorrect info
+        memories = _run_async(memory_service.search(incorrect_info, limit=5))
+        
+        if not memories:
+            # No existing memory found, just add the correct one
+            memory_id = _run_async(
+                memory_service.add(
+                    correct_info,
+                    MemoryType.FACT,
+                    metadata={"source": "user_correction", "corrected_from": incorrect_info}
+                )
+            )
+            return {
+                "status": "added",
+                "message": f"✅ I didn't have that stored, but now I'll remember: {correct_info}",
+                "memory_id": memory_id
+            }
+        
+        # Delete old memories matching the incorrect info
+        deleted_count = 0
+        for mem in memories:
+            mem_id = mem.get("id")
+            mem_text = mem.get("memory", "")
+            if mem_id and incorrect_info.lower() in mem_text.lower():
+                _run_async(memory_service.delete(mem_id))
+                deleted_count += 1
+        
+        # Add the correct memory
+        memory_id = _run_async(
+            memory_service.add(
+                correct_info,
+                MemoryType.FACT,
+                metadata={"source": "user_correction", "corrected_from": incorrect_info}
+            )
+        )
+        
+        return {
+            "status": "corrected",
+            "memories_removed": deleted_count,
+            "new_memory_id": memory_id,
+            "message": f"✅ Corrected! I've updated my memory: {correct_info}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to correct memory: {e}")
+        return {"error": f"Failed to correct: {str(e)}"}
+
+
+def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search stored memories."""
+    from app.features.memory import get_memory_service
+    
+    query = tool_input.get("query", "").strip()
+    limit = tool_input.get("limit", 10)
+    
+    if not query:
+        return {"error": "No search query provided"}
+    
+    try:
+        memory_service = get_memory_service()
+        
+        memories = _run_async(memory_service.search(query, limit=limit))
+        
+        if not memories:
+            return {
+                "status": "no_results",
+                "message": f"I don't have any memories about '{query}'",
+                "memories": []
+            }
+        
+        # Format memories for display
+        formatted = []
+        for mem in memories:
+            formatted.append({
+                "id": mem.get("id", ""),
+                "content": mem.get("memory", ""),
+                "type": mem.get("metadata", {}).get("type", "fact"),
+                "source": mem.get("metadata", {}).get("source", "unknown"),
+            })
+        
+        return {
+            "status": "found",
+            "count": len(formatted),
+            "memories": formatted,
+            "message": f"Found {len(formatted)} memories about '{query}'"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to search memories: {e}")
+        return {"error": f"Failed to search: {str(e)}"}
+
+
+def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete a memory."""
+    from app.features.memory import get_memory_service
+    
+    query = tool_input.get("query", "").strip()
+    
+    if not query:
+        return {"error": "No query provided for what to forget"}
+    
+    try:
+        memory_service = get_memory_service()
+        
+        # Search for matching memories
+        memories = _run_async(memory_service.search(query, limit=5))
+        
+        if not memories:
+            return {
+                "status": "nothing_to_forget",
+                "message": f"I don't have any memories about '{query}' to forget"
+            }
+        
+        # Delete matching memories
+        deleted_count = 0
+        deleted_items = []
+        for mem in memories:
+            mem_id = mem.get("id")
+            mem_text = mem.get("memory", "")
+            if mem_id and query.lower() in mem_text.lower():
+                _run_async(memory_service.delete(mem_id))
+                deleted_count += 1
+                deleted_items.append(mem_text[:100])
+        
+        if deleted_count == 0:
+            return {
+                "status": "no_match",
+                "message": f"Found memories but none closely matched '{query}'"
+            }
+        
+        return {
+            "status": "forgotten",
+            "deleted_count": deleted_count,
+            "deleted_items": deleted_items,
+            "message": f"✅ Forgotten! Removed {deleted_count} memory/memories about '{query}'"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to forget memory: {e}")
+        return {"error": f"Failed to forget: {str(e)}"}

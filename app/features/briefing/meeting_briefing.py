@@ -333,10 +333,17 @@ def get_contact_context(db, contact_id: str) -> Dict[str, Any]:
 def generate_briefing_with_llm(
     llm,
     event: Dict,
-    contact_context: Dict[str, Any]
+    contact_context: Dict[str, Any],
+    memory_context: str = ""
 ) -> str:
     """
     Use Claude to generate a personalized meeting briefing.
+    
+    Args:
+        llm: LLM client
+        event: Calendar event dict
+        contact_context: Dict with contact info, meetings, emails, etc.
+        memory_context: Optional AI memory context string
     """
     contact = contact_context.get("contact") or {}
     previous_meetings = contact_context.get("previous_meetings", [])
@@ -440,6 +447,8 @@ UPCOMING MEETING:
 
 {contact_info}
 
+{memory_context}
+
 {meeting_history}
 
 {email_history}
@@ -454,9 +463,10 @@ Generate a brief, actionable meeting briefing. Include:
 1. A quick reminder of your relationship with this person (if any history)
 2. What you discussed in your last meeting, recent emails, or recent WhatsApp/LinkedIn messages
 3. Recent communication patterns across all channels (emails, messages, calendar events)
-4. 2-3 suggested conversation topics or questions to ask
-5. Any follow-ups you should mention
-6. If there are pending messages to respond to, mention it
+4. Any relevant insights from your AI memory about this person or relationship
+5. 2-3 suggested conversation topics or questions to ask
+6. Any follow-ups you should mention
+7. If there are pending messages to respond to, mention it
 
 Keep it concise and practical. Use bullet points. No more than 300 words.
 If there's no history with this person, focus on suggested ice-breakers based on any available info."""
@@ -513,7 +523,8 @@ def generate_fallback_briefing(event: Dict, contact_context: Dict) -> str:
 async def generate_meeting_briefing(
     db,
     llm,
-    event: Dict
+    event: Dict,
+    memory_service=None
 ) -> Optional[MeetingBriefing]:
     """
     Generate a complete meeting briefing for an event.
@@ -522,6 +533,7 @@ async def generate_meeting_briefing(
         db: Database client
         llm: LLM client (ClaudeMultiAnalyzer)
         event: Calendar event dict
+        memory_service: Optional MemoryService for AI memories
     
     Returns: MeetingBriefing object or None if briefing can't be generated
     """
@@ -571,8 +583,30 @@ async def generate_meeting_briefing(
             except Exception:
                 continue  # Contact not found or DB error
     
+    # Get AI memory context if available
+    memory_context = ""
+    if memory_service and contact_name:
+        try:
+            # Search for relevant memories about this person
+            memories = await memory_service.search(f"meeting with {contact_name}")
+            if contact_id:
+                # Also get contact-specific memories
+                contact_memories = await memory_service.get_contact_context(contact_id)
+                memories.extend(contact_memories)
+            
+            if memories:
+                memory_context = "REMEMBERED CONTEXT (from AI memory):\n"
+                seen = set()
+                for mem in memories[:10]:
+                    text = mem.get("memory", "")
+                    if text and text not in seen:
+                        seen.add(text)
+                        memory_context += f"- {text}\n"
+        except Exception as e:
+            logger.warning(f"Error fetching memories for briefing: {e}")
+    
     # Generate briefing text
-    briefing_text = generate_briefing_with_llm(llm, event, contact_context)
+    briefing_text = generate_briefing_with_llm(llm, event, contact_context, memory_context)
     
     # Extract suggested topics and open items
     suggested_topics = []
