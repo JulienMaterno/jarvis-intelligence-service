@@ -136,18 +136,19 @@ async def list_memories(
         if memory_type:
             memories = [
                 m for m in memories 
-                if m.get("metadata", {}).get("type") == memory_type
+                if (m.get("metadata") or {}).get("type") == memory_type
             ]
         
         # Format for response (Mem0 format)
         items = []
         for mem in memories:
+            metadata = mem.get("metadata") or {}
             items.append(MemoryItem(
                 id=mem.get("id", ""),
                 memory=mem.get("memory", mem.get("content", "")),
-                type=mem.get("metadata", {}).get("type", "fact"),
+                type=metadata.get("type", "fact"),
                 metadata=mem.get("metadata"),
-                created_at=mem.get("metadata", {}).get("added_at"),
+                created_at=metadata.get("added_at"),
             ))
         
         return MemoryListResponse(
@@ -985,7 +986,7 @@ async def get_memory_stats():
         type_counts = {}
         source_counts = {}
         for mem in all_memories:
-            metadata = mem.get("metadata", {})
+            metadata = mem.get("metadata") or {}
             mem_type = metadata.get("type", "unknown")
             mem_source = metadata.get("source", "unknown")
             type_counts[mem_type] = type_counts.get(mem_type, 0) + 1
