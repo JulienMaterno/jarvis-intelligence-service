@@ -102,7 +102,8 @@ class MemoryService:
                     # This is the same pooler used by Claude MCP - sharing is fine, Supabase handles multiple connections
                     pooler_host = os.getenv("SUPABASE_POOLER_HOST", "aws-1-ap-southeast-2.pooler.supabase.com")
                     pooler_port = os.getenv("SUPABASE_POOLER_PORT", "5432")
-                    connection_string = f"postgresql://postgres.{project_ref}:{supabase_db_password}@{pooler_host}:{pooler_port}/postgres?sslmode=no-verify"
+                    # Note: psycopg2 uses 'require' not 'no-verify' for SSL
+                    connection_string = f"postgresql://postgres.{project_ref}:{supabase_db_password}@{pooler_host}:{pooler_port}/postgres?sslmode=require"
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
