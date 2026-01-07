@@ -98,12 +98,11 @@ class MemoryService:
                 if match:
                     project_ref = match.group(1)
                     # Use Session Pooler for IPv4 compatibility (Cloud Run is IPv4-only)
-                    # Format: postgresql://postgres.[project_ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-                    # Session mode maintains session state, ideal for Mem0's usage pattern
-                    # Port 6543 = Session mode, Port 5432 = Transaction mode
-                    pooler_host = os.getenv("SUPABASE_POOLER_HOST", "aws-0-ap-southeast-1.pooler.supabase.com")
-                    pooler_port = os.getenv("SUPABASE_POOLER_PORT", "6543")  # Session mode port
-                    connection_string = f"postgresql://postgres.{project_ref}:{supabase_db_password}@{pooler_host}:{pooler_port}/postgres?sslmode=require"
+                    # Format: postgresql://postgres.[project_ref]:[password]@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
+                    # This is the same pooler used by Claude MCP - sharing is fine, Supabase handles multiple connections
+                    pooler_host = os.getenv("SUPABASE_POOLER_HOST", "aws-1-ap-southeast-2.pooler.supabase.com")
+                    pooler_port = os.getenv("SUPABASE_POOLER_PORT", "5432")
+                    connection_string = f"postgresql://postgres.{project_ref}:{supabase_db_password}@{pooler_host}:{pooler_port}/postgres?sslmode=no-verify"
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
