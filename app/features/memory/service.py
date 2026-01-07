@@ -69,12 +69,14 @@ class MemoryService:
         try:
             from mem0 import Memory
             
-            # Configure Mem0 with Anthropic LLM (Claude 4.5 for best quality)
+            # Configure Mem0 with Anthropic LLM
+            # Use Haiku for cost-efficiency (memory extraction happens frequently)
+            # Sonnet is used in chat for higher quality responses
             config = {
                 "llm": {
                     "provider": "anthropic",
                     "config": {
-                        "model": os.getenv("MEM0_LLM_MODEL", "claude-sonnet-4-5-20250929"),
+                        "model": os.getenv("MEM0_LLM_MODEL", "claude-3-5-haiku-20241022"),
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     }
                 },
