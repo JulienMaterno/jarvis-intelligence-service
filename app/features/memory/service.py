@@ -94,16 +94,26 @@ class MemoryService:
             if supabase_url and supabase_db_password:
                 # Extract project ref from Supabase URL (https://xxx.supabase.co -> xxx)
                 import re
+                from urllib.parse import quote
                 match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
                 if match:
                     project_ref = match.group(1)
                     # Use Session Pooler for IPv4 compatibility (Cloud Run is IPv4-only)
                     # Format: postgresql://postgres.[project_ref]:[password]@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
-                    # This is the same pooler used by Claude MCP - sharing is fine, Supabase handles multiple connections
+                    # Username contains a dot, which may need URL-encoding for some drivers
                     pooler_host = os.getenv("SUPABASE_POOLER_HOST", "aws-1-ap-southeast-2.pooler.supabase.com")
                     pooler_port = os.getenv("SUPABASE_POOLER_PORT", "5432")
+                    
+                    # URL-encode the username (postgres.projectref) and password to handle special chars
+                    username = f"postgres.{project_ref}"
+                    encoded_password = quote(supabase_db_password, safe='')
+                    
                     # Note: psycopg2 uses 'require' not 'no-verify' for SSL
-                    connection_string = f"postgresql://postgres.{project_ref}:{supabase_db_password}@{pooler_host}:{pooler_port}/postgres?sslmode=require"
+                    connection_string = f"postgresql://{username}:{encoded_password}@{pooler_host}:{pooler_port}/postgres?sslmode=require"
+                    
+                    # Log sanitized version (hide password)
+                    logger.info(f"pgvector connection: {username}@{pooler_host}:{pooler_port}/postgres")
+                    
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
