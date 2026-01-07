@@ -25,7 +25,7 @@ This service is the **single source of intelligence**. Other services are specia
 ## 🧠 AI Models
 
 - **Primary**: `claude-sonnet-4-5-20250929` (Anthropic)
-- **Fallback**: `claude-3-5-haiku-20241022`
+- **Fallback**: `claude-haiku-4-5-20251001`
 
 ## 📁 Project Structure
 

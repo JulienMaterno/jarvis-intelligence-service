@@ -151,7 +151,7 @@ background_tasks.add_task(trigger_syncs_for_records, db_records)
 ```python
 # In app/services/llm.py
 PRIMARY_MODEL = "claude-sonnet-4-5-20250929"
-FALLBACK_MODEL = "claude-3-5-haiku-20241022"
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 ```
 
 ### Prompt Location

@@ -13,7 +13,7 @@ _ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY') or os.getenv('CLAUDE_API_KEY
 _CLAUDE_MODEL_PRIMARY = os.getenv('CLAUDE_MODEL_PRIMARY') or os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-5-20250929')
 _CLAUDE_MODEL_FALLBACKS = [
     model.strip()
-    for model in os.getenv('CLAUDE_MODEL_FALLBACKS', 'claude-3-5-haiku-20241022').split(',')
+    for model in os.getenv('CLAUDE_MODEL_FALLBACKS', 'claude-haiku-4-5-20251001').split(',')
     if model.strip()
 ]
 _CLAUDE_MODEL_OPTIONS = [_CLAUDE_MODEL_PRIMARY] + [m for m in _CLAUDE_MODEL_FALLBACKS if m and m != _CLAUDE_MODEL_PRIMARY]

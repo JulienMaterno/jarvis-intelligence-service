@@ -145,4 +145,4 @@ async def get_location():
 @router.get("/chat/health")
 async def chat_health():
     """Check if chat service is healthy."""
-    return {"status": "ok", "model": "claude-haiku-4-5-20250929"}
+    return {"status": "ok", "model": "claude-haiku-4-5-20251001"}

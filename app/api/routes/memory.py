@@ -708,7 +708,7 @@ TRANSCRIPT:
     
     try:
         response = llm.client.messages.create(
-            model="claude-3-5-haiku-20241022",  # Use fast model for bulk
+            model="claude-haiku-4-5-20251001",  # Use Haiku 4.5 for bulk
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )

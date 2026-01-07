@@ -70,13 +70,13 @@ class MemoryService:
             from mem0 import Memory
             
             # Configure Mem0 with Anthropic LLM
-            # Use Haiku for cost-efficiency (memory extraction happens frequently)
-            # Sonnet is used in chat for higher quality responses
+            # Use Haiku 4.5 for cost-efficiency (memory extraction happens frequently)
+            # Sonnet 4.5 is used in chat for higher quality responses
             config = {
                 "llm": {
                     "provider": "anthropic",
                     "config": {
-                        "model": os.getenv("MEM0_LLM_MODEL", "claude-3-5-haiku-20241022"),
+                        "model": os.getenv("MEM0_LLM_MODEL", "claude-haiku-4-5-20251001"),
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     }
                 },
@@ -790,7 +790,7 @@ TRANSCRIPT:
 {transcript_text[:6000]}"""
             
             response = llm_client.client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -889,7 +889,7 @@ TEXT:
 {text[:2000]}"""
             
             response = llm.client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
             )
