@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import get_memory, get_database
+from app.features.memory.service import MemoryType
 
 router = APIRouter(tags=["Memory"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Memory")
@@ -129,17 +130,24 @@ async def list_memories(
     memory_service = get_memory()
     
     try:
-        memories = await memory_service.get_all(limit=limit, memory_type=memory_type)
+        memories = await memory_service.get_all(limit=limit)
         
-        # Format for response (Supabase-native format)
+        # Filter by type if specified
+        if memory_type:
+            memories = [
+                m for m in memories 
+                if m.get("metadata", {}).get("type") == memory_type
+            ]
+        
+        # Format for response (Mem0 format)
         items = []
         for mem in memories:
             items.append(MemoryItem(
                 id=mem.get("id", ""),
-                memory=mem.get("memory", ""),
-                type=mem.get("memory_type", "fact"),
-                metadata={"source": mem.get("source"), "category": mem.get("category")},
-                created_at=mem.get("created_at"),
+                memory=mem.get("memory", mem.get("content", "")),
+                type=mem.get("metadata", {}).get("type", "fact"),
+                metadata=mem.get("metadata"),
+                created_at=mem.get("metadata", {}).get("added_at"),
             ))
         
         return MemoryListResponse(
@@ -169,10 +177,20 @@ async def add_memory(request: AddMemoryRequest):
     memory_service = get_memory()
     
     try:
+        # Map string to MemoryType enum
+        type_map = {
+            "fact": MemoryType.FACT,
+            "preference": MemoryType.PREFERENCE,
+            "relationship": MemoryType.RELATIONSHIP,
+            "interaction": MemoryType.INTERACTION,
+            "insight": MemoryType.INSIGHT,
+        }
+        memory_type = type_map.get(request.memory_type.lower(), MemoryType.FACT)
+        
         memory_id = await memory_service.add(
-            memory=request.content,
-            memory_type=request.memory_type.lower(),
-            source="api",
+            content=request.content,
+            memory_type=memory_type,
+            metadata={"source": "api"},
         )
         
         if memory_id:
@@ -961,12 +979,13 @@ async def get_memory_stats():
     try:
         all_memories = await memory_service.get_all(limit=500)
         
-        # Count by type (new Supabase format)
+        # Count by type (Mem0 format - type is in metadata)
         type_counts = {}
         source_counts = {}
         for mem in all_memories:
-            mem_type = mem.get("memory_type", "unknown")
-            mem_source = mem.get("source", "unknown")
+            metadata = mem.get("metadata", {})
+            mem_type = metadata.get("type", "unknown")
+            mem_source = metadata.get("source", "unknown")
             type_counts[mem_type] = type_counts.get(mem_type, 0) + 1
             source_counts[mem_source] = source_counts.get(mem_source, 0) + 1
         

@@ -69,7 +69,7 @@ class MemoryService:
         try:
             from mem0 import Memory
             
-            # Configure Mem0 with Anthropic LLM and Qdrant vector store
+            # Configure Mem0 with Anthropic LLM
             config = {
                 "llm": {
                     "provider": "anthropic",
@@ -79,7 +79,7 @@ class MemoryService:
                     }
                 },
                 "embedder": {
-                    "provider": "openai",  # Mem0 default, works well
+                    "provider": "openai",
                     "config": {
                         "model": "text-embedding-3-small",
                         "api_key": os.getenv("OPENAI_API_KEY"),
@@ -87,22 +87,48 @@ class MemoryService:
                 },
             }
             
-            # Use Qdrant if configured, otherwise in-memory
-            qdrant_url = os.getenv("QDRANT_URL")
-            qdrant_api_key = os.getenv("QDRANT_API_KEY")
+            # Vector store: Prefer Supabase/pgvector, fall back to Qdrant, then in-memory
+            supabase_url = os.getenv("SUPABASE_URL")
+            supabase_db_password = os.getenv("SUPABASE_DB_PASSWORD")
             
-            if qdrant_url:
+            if supabase_url and supabase_db_password:
+                # Extract host from Supabase URL (https://xxx.supabase.co -> db.xxx.supabase.co)
+                # Supabase direct DB connection: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+                import re
+                match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
+                if match:
+                    project_ref = match.group(1)
+                    config["vector_store"] = {
+                        "provider": "pgvector",
+                        "config": {
+                            "dbname": "postgres",
+                            "collection_name": "mem0_memories",
+                            "user": "postgres",
+                            "password": supabase_db_password,
+                            "host": f"db.{project_ref}.supabase.co",
+                            "port": "5432",
+                            "embedding_model_dims": 1536,  # text-embedding-3-small
+                            "hnsw": True,  # Use HNSW index (Supabase supports this)
+                            "diskann": False,  # diskann requires pgvectorscale
+                        }
+                    }
+                    logger.info(f"Mem0 configured with Supabase pgvector (project: {project_ref})")
+                else:
+                    logger.warning(f"Could not parse Supabase URL: {supabase_url}")
+            
+            # Fall back to Qdrant if configured
+            elif os.getenv("QDRANT_URL"):
                 config["vector_store"] = {
                     "provider": "qdrant",
                     "config": {
-                        "url": qdrant_url,
-                        "api_key": qdrant_api_key,
+                        "url": os.getenv("QDRANT_URL"),
+                        "api_key": os.getenv("QDRANT_API_KEY"),
                         "collection_name": "jarvis_memories",
                     }
                 }
-                logger.info(f"Mem0 configured with Qdrant at {qdrant_url}")
+                logger.info(f"Mem0 configured with Qdrant at {os.getenv('QDRANT_URL')}")
             else:
-                logger.info("Mem0 using in-memory vector store (no QDRANT_URL set)")
+                logger.warning("Mem0 using in-memory vector store (no SUPABASE_DB_PASSWORD or QDRANT_URL)")
             
             self._memory = Memory.from_config(config)
             self._initialized = True
@@ -792,6 +818,105 @@ TRANSCRIPT:
             
         except Exception as e:
             logger.error(f"Failed to extract memories from transcript {source_file}: {e}")
+            return 0
+
+    async def extract_from_text(
+        self,
+        text: str,
+        source: str = "chat",
+        source_id: Optional[str] = None,
+    ) -> int:
+        """
+        Extract memories from arbitrary text (chat messages, etc.).
+        
+        This is a lighter-weight version of seed_from_raw_transcript,
+        designed for shorter text snippets like chat conversations.
+        
+        Args:
+            text: The text to extract from
+            source: Source identifier (e.g., "beeper", "chat")
+            source_id: Optional ID for tracking (e.g., chat_id)
+            
+        Returns:
+            Number of memories extracted
+        """
+        if not text or len(text) < 30:
+            return 0
+            
+        try:
+            from app.services.llm import ClaudeMultiAnalyzer
+            llm = ClaudeMultiAnalyzer()
+            
+            prompt = f"""Extract key facts from this conversation that would help personalize future interactions.
+
+Focus on:
+- Facts about people mentioned (names, roles, companies, relationships)
+- User preferences or opinions expressed
+- Important dates, events, or plans
+- Key decisions or commitments made
+
+Return a JSON array of memories. Each should be ONE clear sentence in third person.
+Maximum 5 memories. Only extract truly valuable, specific information.
+
+Example:
+[
+  {{"type": "fact", "content": "John Smith works at Google as a product manager"}},
+  {{"type": "relationship", "content": "Sarah is John's wife who works in healthcare"}}
+]
+
+Return ONLY the JSON array, or empty array [] if nothing valuable to extract.
+
+TEXT:
+{text[:2000]}"""
+            
+            response = llm.client.messages.create(
+                model="claude-3-5-haiku-20241022",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            result_text = response.content[0].text.strip()
+            
+            import json
+            memories = []
+            if result_text.startswith("["):
+                memories = json.loads(result_text)
+            else:
+                start = result_text.find("[")
+                end = result_text.rfind("]") + 1
+                if start >= 0 and end > start:
+                    memories = json.loads(result_text[start:end])
+            
+            type_mapping = {
+                "fact": MemoryType.FACT,
+                "preference": MemoryType.PREFERENCE,
+                "relationship": MemoryType.RELATIONSHIP,
+                "insight": MemoryType.INSIGHT,
+            }
+            
+            count = 0
+            for mem in memories:
+                content = mem.get("content", "")
+                mem_type = mem.get("type", "fact")
+                
+                if content and len(content) > 15:
+                    metadata = {"source": source}
+                    if source_id:
+                        metadata["source_id"] = source_id
+                    
+                    await self.add(
+                        content=content,
+                        memory_type=type_mapping.get(mem_type, MemoryType.FACT),
+                        metadata=metadata,
+                        infer=True,
+                    )
+                    count += 1
+            
+            logger.info(f"Extracted {count} memories from {source}")
+            return count
+            
+        except Exception as e:
+            logger.error(f"Failed to extract memories from text: {e}")
             return 0
 
     def is_available(self) -> bool:

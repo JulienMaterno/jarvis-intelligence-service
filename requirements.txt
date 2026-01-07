@@ -8,11 +8,9 @@ httpx
 timezonefinder
 pytz
 
-# Memory layer - now using Supabase natively, no external deps needed
-# Keeping mem0ai as optional fallback (can remove later)
-# mem0ai
-# qdrant-client
-# openai  # Not needed - using Supabase text search instead
+# Memory layer - Mem0 with Supabase pgvector backend
+mem0ai
+openai  # Required for embeddings (text-embedding-3-small)
 
 # Document processing
 PyPDF2
