@@ -164,7 +164,7 @@ class DocumentExtractor:
     
     @classmethod
     def _extract_docx(cls, file_bytes: bytes, filename: str) -> Tuple[str, Dict[str, Any]]:
-        """Extract text from DOCX."""
+        """Extract text from DOCX including tables."""
         metadata = {"format": "docx", "filename": filename}
         
         try:
@@ -172,9 +172,22 @@ class DocumentExtractor:
             doc = Document(io.BytesIO(file_bytes))
             
             text_parts = []
+            
+            # Extract paragraphs
             for para in doc.paragraphs:
                 if para.text.strip():
                     text_parts.append(para.text)
+            
+            # IMPORTANT: Also extract text from tables (common in CVs)
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = []
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
+                        if cell_text:
+                            row_text.append(cell_text)
+                    if row_text:
+                        text_parts.append(" | ".join(row_text))
             
             text = "\n\n".join(text_parts)
             
