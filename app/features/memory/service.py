@@ -97,9 +97,11 @@ class MemoryService:
                 match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
                 if match:
                     project_ref = match.group(1)
-                    # Use direct connection string format
-                    # Supabase direct: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
-                    connection_string = f"postgresql://postgres:{supabase_db_password}@db.{project_ref}.supabase.co:5432/postgres?sslmode=require"
+                    # Use Session Pooler for IPv4 compatibility (Cloud Run is IPv4-only)
+                    # Format: postgresql://postgres.[project_ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+                    # Session mode maintains session state, ideal for Mem0's usage pattern
+                    pooler_host = os.getenv("SUPABASE_POOLER_HOST", "aws-0-ap-southeast-1.pooler.supabase.com")
+                    connection_string = f"postgresql://postgres.{project_ref}:{supabase_db_password}@{pooler_host}:5432/postgres?sslmode=require"
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
@@ -110,7 +112,7 @@ class MemoryService:
                             "diskann": False,
                         }
                     }
-                    logger.info(f"Mem0 configured with Supabase pgvector (project: {project_ref})")
+                    logger.info(f"Mem0 configured with Supabase pgvector via Session Pooler (project: {project_ref})")
                 else:
                     logger.warning(f"Could not parse Supabase URL: {supabase_url}")
             
