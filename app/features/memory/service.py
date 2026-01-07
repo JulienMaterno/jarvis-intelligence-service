@@ -25,6 +25,40 @@ Memory Types:
 """
 
 import logging
+
+
+# =============================================================================
+# MONKEY-PATCH: Fix Mem0's Anthropic integration
+# Mem0 1.0.1 passes both temperature AND top_p to Claude API, which is now rejected.
+# Claude API error: "temperature and top_p cannot both be specified for this model"
+# This patch removes top_p from the params when using Anthropic/Claude.
+# =============================================================================
+def _patch_mem0_anthropic():
+    """Patch Mem0's Anthropic LLM to not pass both temperature and top_p."""
+    try:
+        from mem0.llms import anthropic as mem0_anthropic
+        
+        # Store original method
+        original_get_common_params = mem0_anthropic.AnthropicLLM._get_common_params
+        
+        def patched_get_common_params(self, **kwargs):
+            """Get common params but exclude top_p for Claude (doesn't allow both)."""
+            params = original_get_common_params(self, **kwargs)
+            # Remove top_p - Claude API doesn't allow both temperature and top_p
+            params.pop("top_p", None)
+            return params
+        
+        # Apply patch
+        mem0_anthropic.AnthropicLLM._get_common_params = patched_get_common_params
+        logging.getLogger("Jarvis.Memory").info("Applied Mem0 Anthropic top_p fix")
+        return True
+    except Exception as e:
+        logging.getLogger("Jarvis.Memory").warning(f"Failed to patch Mem0: {e}")
+        return False
+
+# Apply patch on module load
+_patch_mem0_anthropic()
+# =============================================================================
 import os
 from datetime import datetime, timezone
 from enum import Enum
@@ -72,12 +106,15 @@ class MemoryService:
             # Configure Mem0 with Anthropic LLM
             # Use Haiku 4.5 for cost-efficiency (memory extraction happens frequently)
             # Sonnet 4.5 is used in chat for higher quality responses
+            # Note: Only specify temperature, NOT top_p - Claude API doesn't allow both
             config = {
                 "llm": {
                     "provider": "anthropic",
                     "config": {
                         "model": os.getenv("MEM0_LLM_MODEL", "claude-haiku-4-5-20251001"),
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                        "temperature": 0.1,  # Low for consistent memory extraction
+                        # top_p intentionally omitted - Claude API rejects both together
                     }
                 },
                 "embedder": {
