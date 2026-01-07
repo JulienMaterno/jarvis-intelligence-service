@@ -110,6 +110,7 @@ class MemoryService:
                     
                     # Pass parameters separately to avoid connection string parsing issues
                     # Mem0's pgvector accepts: user, password, host, port, dbname
+                    # Note: Don't pass sslmode - Supabase pooler handles SSL automatically
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
@@ -118,7 +119,6 @@ class MemoryService:
                             "host": pooler_host,
                             "port": int(pooler_port),
                             "dbname": "postgres",
-                            "sslmode": "require",
                             "collection_name": "mem0_memories",
                             "embedding_model_dims": 1536,  # text-embedding-3-small
                             "hnsw": True,
