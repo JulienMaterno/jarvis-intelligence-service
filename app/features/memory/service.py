@@ -92,12 +92,13 @@ class MemoryService:
             supabase_db_password = os.getenv("SUPABASE_DB_PASSWORD")
             
             if supabase_url and supabase_db_password:
-                # Extract host from Supabase URL (https://xxx.supabase.co -> db.xxx.supabase.co)
-                # Supabase direct DB connection: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+                # Extract project ref from Supabase URL (https://xxx.supabase.co -> xxx)
                 import re
                 match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
                 if match:
                     project_ref = match.group(1)
+                    # Use direct connection - Cloud Run has IPv6 support
+                    # Format: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
@@ -107,6 +108,7 @@ class MemoryService:
                             "password": supabase_db_password,
                             "host": f"db.{project_ref}.supabase.co",
                             "port": "5432",
+                            "sslmode": "require",  # Required for Supabase
                             "embedding_model_dims": 1536,  # text-embedding-3-small
                             "hnsw": True,  # Use HNSW index (Supabase supports this)
                             "diskann": False,  # diskann requires pgvectorscale
