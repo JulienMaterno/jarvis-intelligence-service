@@ -150,10 +150,14 @@ class MemoryService:
         except ImportError:
             logger.warning("mem0 not installed, using fallback in-memory storage")
             self._use_fallback = True
+            self._memory = None
             self._initialized = True
         except Exception as e:
-            logger.error(f"Failed to initialize Mem0: {e}, using fallback")
+            import traceback
+            logger.error(f"Failed to initialize Mem0: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self._use_fallback = True
+            self._memory = None
             self._initialized = True
     
     # =========================================================================
