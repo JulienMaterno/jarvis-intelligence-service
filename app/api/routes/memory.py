@@ -18,7 +18,6 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import get_memory, get_database
-from app.features.memory import MemoryType
 
 router = APIRouter(tags=["Memory"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Memory")
@@ -130,24 +129,17 @@ async def list_memories(
     memory_service = get_memory()
     
     try:
-        memories = await memory_service.get_all(limit=limit)
+        memories = await memory_service.get_all(limit=limit, memory_type=memory_type)
         
-        # Filter by type if specified
-        if memory_type:
-            memories = [
-                m for m in memories 
-                if m.get("metadata", {}).get("type") == memory_type
-            ]
-        
-        # Format for response
+        # Format for response (Supabase-native format)
         items = []
         for mem in memories:
             items.append(MemoryItem(
                 id=mem.get("id", ""),
-                memory=mem.get("memory", mem.get("content", "")),
-                type=mem.get("metadata", {}).get("type", "fact"),
-                metadata=mem.get("metadata"),
-                created_at=mem.get("metadata", {}).get("added_at"),
+                memory=mem.get("memory", ""),
+                type=mem.get("memory_type", "fact"),
+                metadata={"source": mem.get("source"), "category": mem.get("category")},
+                created_at=mem.get("created_at"),
             ))
         
         return MemoryListResponse(
@@ -177,20 +169,10 @@ async def add_memory(request: AddMemoryRequest):
     memory_service = get_memory()
     
     try:
-        # Map string type to enum
-        type_mapping = {
-            "fact": MemoryType.FACT,
-            "interaction": MemoryType.INTERACTION,
-            "insight": MemoryType.INSIGHT,
-            "preference": MemoryType.PREFERENCE,
-            "relationship": MemoryType.RELATIONSHIP,
-        }
-        mem_type = type_mapping.get(request.memory_type.lower(), MemoryType.FACT)
-        
         memory_id = await memory_service.add(
-            content=request.content,
-            memory_type=mem_type,
-            metadata=request.metadata,
+            memory=request.content,
+            memory_type=request.memory_type.lower(),
+            source="api",
         )
         
         if memory_id:
@@ -869,6 +851,104 @@ async def seed_all_memories(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/memory/seed/beeper", response_model=SeedingStatusResponse)
+async def seed_from_beeper_messages(
+    background_tasks: BackgroundTasks,
+    hours: int = 24,
+    limit: int = 100,
+):
+    """
+    Extract memories from recent Beeper messages.
+    
+    Uses Claude to analyze conversations and extract:
+    - Facts about contacts mentioned
+    - Preferences expressed
+    - Relationships discussed
+    - Important dates/events mentioned
+    
+    Args:
+        hours: How many hours back to look (default 24)
+        limit: Max messages to process (default 100)
+    """
+    memory_service = get_memory()
+    db = get_database()
+    
+    try:
+        from datetime import timedelta
+        
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        
+        # Fetch recent Beeper messages
+        result = db.client.table("beeper_messages").select(
+            "id, content, is_outgoing, timestamp, beeper_chat_id"
+        ).gte(
+            "timestamp", since.isoformat()
+        ).order(
+            "timestamp", desc=True
+        ).limit(limit).execute()
+        
+        messages = result.data or []
+        
+        if not messages:
+            return SeedingStatusResponse(
+                status="no_messages",
+                memories_added=0,
+                source="beeper",
+                details={"hours_back": hours, "messages_found": 0}
+            )
+        
+        # Group messages by chat for context
+        chats = {}
+        for msg in messages:
+            chat_id = msg.get("beeper_chat_id", "unknown")
+            if chat_id not in chats:
+                chats[chat_id] = []
+            chats[chat_id].append(msg)
+        
+        # Process in background
+        async def _extract():
+            count = 0
+            for chat_id, chat_msgs in chats.items():
+                # Build conversation context
+                conversation = []
+                for m in sorted(chat_msgs, key=lambda x: x.get("timestamp", "")):
+                    speaker = "Aaron" if m.get("is_outgoing") else "Contact"
+                    content = m.get("content", "")
+                    if content:
+                        conversation.append(f"{speaker}: {content}")
+                
+                if not conversation:
+                    continue
+                
+                # Extract memories from this conversation
+                text = "\n".join(conversation)
+                extracted = await memory_service.extract_from_text(
+                    text=text,
+                    source="beeper",
+                    source_id=chat_id
+                )
+                count += extracted
+            
+            logger.info(f"Extracted {count} memories from {len(chats)} Beeper conversations")
+        
+        background_tasks.add_task(_extract)
+        
+        return SeedingStatusResponse(
+            status="started",
+            memories_added=0,  # Background count
+            source="beeper",
+            details={
+                "hours_back": hours,
+                "messages_found": len(messages),
+                "chats_found": len(chats)
+            }
+        )
+        
+    except Exception as e:
+        logger.exception("Failed to seed from Beeper messages")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/memory/stats")
 async def get_memory_stats():
     """
@@ -881,17 +961,20 @@ async def get_memory_stats():
     try:
         all_memories = await memory_service.get_all(limit=500)
         
-        # Count by type
+        # Count by type (new Supabase format)
         type_counts = {}
+        source_counts = {}
         for mem in all_memories:
-            mem_type = mem.get("metadata", {}).get("type", "unknown")
+            mem_type = mem.get("memory_type", "unknown")
+            mem_source = mem.get("source", "unknown")
             type_counts[mem_type] = type_counts.get(mem_type, 0) + 1
+            source_counts[mem_source] = source_counts.get(mem_source, 0) + 1
         
         return {
             "status": "success",
             "total_memories": len(all_memories),
             "by_type": type_counts,
-            "is_available": memory_service.is_available(),
+            "by_source": source_counts,
         }
         
     except Exception as e:

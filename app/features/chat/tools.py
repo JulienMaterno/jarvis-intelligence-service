@@ -4113,7 +4113,7 @@ def _run_async(coro):
 
 def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     """Store a fact in long-term memory."""
-    from app.features.memory import get_memory_service, MemoryType
+    from app.features.memory import get_memory_service
     
     fact = tool_input.get("fact", "").strip()
     memory_type_str = tool_input.get("memory_type", "fact").lower()
@@ -4121,19 +4121,15 @@ def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     if not fact:
         return {"error": "No fact provided to remember"}
     
-    # Map string to enum
-    type_mapping = {
-        "fact": MemoryType.FACT,
-        "preference": MemoryType.PREFERENCE,
-        "relationship": MemoryType.RELATIONSHIP,
-    }
-    memory_type = type_mapping.get(memory_type_str, MemoryType.FACT)
-    
     try:
         memory_service = get_memory_service()
         
         memory_id = _run_async(
-            memory_service.add(fact, memory_type, metadata={"source": "user_chat"})
+            memory_service.add(
+                memory=fact,
+                memory_type=memory_type_str,
+                source="chat"
+            )
         )
         
         if memory_id:
@@ -4154,7 +4150,7 @@ def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
 def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     """Correct an existing memory."""
-    from app.features.memory import get_memory_service, MemoryType
+    from app.features.memory import get_memory_service
     
     incorrect_info = tool_input.get("incorrect_info", "").strip()
     correct_info = tool_input.get("correct_info", "").strip()
@@ -4172,9 +4168,9 @@ def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
             # No existing memory found, just add the correct one
             memory_id = _run_async(
                 memory_service.add(
-                    correct_info,
-                    MemoryType.FACT,
-                    metadata={"source": "user_correction", "corrected_from": incorrect_info}
+                    memory=correct_info,
+                    memory_type="fact",
+                    source="chat"
                 )
             )
             return {
@@ -4195,9 +4191,9 @@ def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         # Add the correct memory
         memory_id = _run_async(
             memory_service.add(
-                correct_info,
-                MemoryType.FACT,
-                metadata={"source": "user_correction", "corrected_from": incorrect_info}
+                memory=correct_info,
+                memory_type="fact",
+                source="chat"
             )
         )
         
@@ -4235,14 +4231,14 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 "memories": []
             }
         
-        # Format memories for display
+        # Format memories for display (new Supabase format)
         formatted = []
         for mem in memories:
             formatted.append({
                 "id": mem.get("id", ""),
                 "content": mem.get("memory", ""),
-                "type": mem.get("metadata", {}).get("type", "fact"),
-                "source": mem.get("metadata", {}).get("source", "unknown"),
+                "type": mem.get("memory_type", "fact"),
+                "source": mem.get("source", "unknown"),
             })
         
         return {
