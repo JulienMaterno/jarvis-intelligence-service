@@ -97,24 +97,25 @@ class MemoryService:
                 match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
                 if match:
                     project_ref = match.group(1)
-                    # Use direct connection - Cloud Run has IPv6 support
-                    # Format: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+                    # Use Supabase Session Pooler for better compatibility
+                    # Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+                    # Session mode (port 5432) supports prepared statements needed by pgvector
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
                             "dbname": "postgres",
                             "collection_name": "mem0_memories",
-                            "user": "postgres",
+                            "user": f"postgres.{project_ref}",  # Pooler format
                             "password": supabase_db_password,
-                            "host": f"db.{project_ref}.supabase.co",
-                            "port": "5432",
-                            "sslmode": "require",  # Required for Supabase
+                            "host": "aws-0-ap-southeast-1.pooler.supabase.com",  # Use pooler
+                            "port": "5432",  # Session mode
+                            "sslmode": "require",
                             "embedding_model_dims": 1536,  # text-embedding-3-small
-                            "hnsw": True,  # Use HNSW index (Supabase supports this)
-                            "diskann": False,  # diskann requires pgvectorscale
+                            "hnsw": True,
+                            "diskann": False,
                         }
                     }
-                    logger.info(f"Mem0 configured with Supabase pgvector (project: {project_ref})")
+                    logger.info(f"Mem0 configured with Supabase pgvector pooler (project: {project_ref})")
                 else:
                     logger.warning(f"Could not parse Supabase URL: {supabase_url}")
             
