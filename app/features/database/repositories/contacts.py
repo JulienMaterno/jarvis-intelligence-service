@@ -117,7 +117,7 @@ class ContactsRepository:
         
         try:
             result = self.client.table("contacts").select(
-                "id, first_name, last_name, company, position"
+                "id, first_name, last_name, company, job_title"
             ).or_(
                 f"first_name.ilike.%{query}%,last_name.ilike.%{query}%"
             ).is_("deleted_at", "null").limit(limit).execute()

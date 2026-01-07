@@ -134,7 +134,7 @@ async def search_contacts(q: str, limit: int = 5):
 
         result = (
             db.client.table("contacts")
-            .select("id, first_name, last_name, company, position")
+            .select("id, first_name, last_name, company, job_title")
             .or_(f"first_name.ilike.%{q}%,last_name.ilike.%{q}%")
             .is_("deleted_at", "null")
             .limit(limit)
@@ -146,7 +146,7 @@ async def search_contacts(q: str, limit: int = 5):
                 "id": c.get("id"),
                 "name": _build_contact_name(c.get("first_name"), c.get("last_name")),
                 "company": c.get("company"),
-                "position": c.get("position"),
+                "position": c.get("job_title"),  # Map DB field to API field
             }
             for c in result.data
         ]
