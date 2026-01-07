@@ -387,12 +387,15 @@ DOCUMENT:
                 "insight": MemoryType.INSIGHT,
             }
             
+            added_count = 0
+            dedupe_count = 0
+            
             for mem in memories:
                 mem_type = mem.get("type", "fact")
                 mem_content = mem.get("content", "")
                 
                 if mem_content and len(mem_content) > 15:
-                    await memory_service.add(
+                    result = await memory_service.add(
                         content=mem_content,
                         memory_type=type_mapping.get(mem_type, MemoryType.FACT),
                         metadata={
@@ -401,10 +404,17 @@ DOCUMENT:
                             "document_type": doc_type
                         }
                     )
-                    count += 1
+                    # Handle new structured result format
+                    if isinstance(result, dict):
+                        if result.get("status") == "success":
+                            added_count += 1
+                        elif result.get("status") == "deduplicated":
+                            dedupe_count += 1
+                    elif result:  # Legacy string ID
+                        added_count += 1
             
-            logger.info(f"Seeded {count} memories from document: {title}")
-            return count
+            logger.info(f"Seeded memories from document '{title}': {added_count} new, {dedupe_count} deduplicated")
+            return added_count
             
         except Exception as e:
             logger.error(f"Failed to seed memories from document {doc_id}: {e}")

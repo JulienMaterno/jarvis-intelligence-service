@@ -4154,28 +4154,68 @@ def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     try:
         memory_service = get_memory_service()
         
-        memory_id = _run_async(
+        # Add memory with metadata
+        result = _run_async(
             memory_service.add(
                 content=fact,
                 memory_type=memory_type,
-                metadata={"source": "chat"}
+                metadata={
+                    "source": "chat",
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }
             )
         )
         
-        if memory_id:
+        # Handle different result types (dict with status or legacy string/None)
+        if isinstance(result, dict):
+            status = result.get("status", "unknown")
+            event = result.get("event", "UNKNOWN")
+            memory_id = result.get("id")
+            
+            if status == "success":
+                return {
+                    "status": "remembered",
+                    "memory_id": memory_id,
+                    "event": event,
+                    "fact": fact,
+                    "type": memory_type_str,
+                    "message": f"✅ Memory saved successfully: '{fact}'"
+                }
+            elif status == "deduplicated":
+                return {
+                    "status": "deduplicated",
+                    "fact": fact,
+                    "type": memory_type_str,
+                    "message": f"ℹ️ Similar memory already exists. Mem0 merged or skipped: '{fact}'"
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "error": f"Memory operation failed with status: {status}",
+                    "fact": fact
+                }
+        elif result:  # Legacy: string memory_id returned
             return {
                 "status": "remembered",
-                "memory_id": memory_id,
+                "memory_id": result,
                 "fact": fact,
                 "type": memory_type_str,
-                "message": f"✅ I'll remember that: {fact}"
+                "message": f"✅ Memory saved: '{fact}'"
             }
         else:
-            return {"error": "Failed to store memory"}
+            return {
+                "status": "failed",
+                "error": "Failed to store memory - no result returned",
+                "fact": fact
+            }
             
     except Exception as e:
         logger.error(f"Failed to remember fact: {e}")
-        return {"error": f"Failed to remember: {str(e)}"}
+        return {
+            "status": "error",
+            "error": f"Failed to remember: {str(e)}",
+            "fact": fact
+        }
 
 
 def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:

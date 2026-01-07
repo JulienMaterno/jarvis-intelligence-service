@@ -220,13 +220,21 @@ class MemoryService:
                 infer=infer,  # Enable Mem0's smart processing
             )
             
+            logger.debug(f"Mem0 add result: {result}")
+            
             if result and "results" in result:
-                mem_id = result["results"][0].get("id") if result["results"] else None
-                event = result["results"][0].get("event", "ADD") if result["results"] else "ADD"
-                logger.info(f"Memory [{event}] [{memory_type.value}]: {content[:50]}...")
-                return mem_id
-                
-            return None
+                if result["results"]:
+                    # Memory was added or updated
+                    mem_id = result["results"][0].get("id")
+                    event = result["results"][0].get("event", "ADD")
+                    logger.info(f"Memory [{event}] [{memory_type.value}]: {content[:50]}...")
+                    return {"id": mem_id, "event": event, "status": "success"}
+                else:
+                    # Empty results = memory was deduplicated/already exists
+                    logger.info(f"Memory deduplicated [{memory_type.value}]: {content[:50]}...")
+                    return {"id": None, "event": "DEDUPLICATED", "status": "deduplicated"}
+            
+            return {"id": None, "event": "FAILED", "status": "failed"}
             
         except Exception as e:
             logger.error(f"Failed to add memory: {e}")
