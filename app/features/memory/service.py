@@ -734,57 +734,58 @@ class MemoryService:
                 llm_client = ClaudeMultiAnalyzer()
             
             # Ask Claude to extract memorable information - comprehensive prompt
-            prompt = f"""Analyze this voice memo transcript and extract ALL key memorable information.
+            # CRITICAL: Distinguish Aaron's info vs info about OTHER people
+            prompt = f"""Analyze this voice memo transcript. The speaker is AARON (the user).
 
-The speaker is Aaron, the user of this AI assistant. Extract information that would help an AI assistant be more helpful and personalized in future conversations.
+Extract information that helps personalize Aaron's AI assistant. Be VERY CAREFUL:
 
-EXTRACT THESE CATEGORIES:
+⚠️ CRITICAL DISTINCTION:
+- Facts ABOUT Aaron → type: "fact" (e.g., "Aaron works at X", "Aaron lives in Y")
+- Facts ABOUT OTHER PEOPLE Aaron mentions → type: "relationship" with their name
+- DO NOT attribute other people's jobs/facts to Aaron!
 
-1. **FACTS** - Concrete information about the user:
-   - Current location, places lived, travel plans
-   - Work history, companies, roles, projects
-   - Education, skills, languages spoken
-   - Health, fitness goals, routines
-   - Financial information (budgets, goals)
+CATEGORIES:
 
-2. **PREFERENCES** - How the user likes things:
-   - Work style, meeting times, communication preferences
-   - Food preferences, dietary restrictions
-   - Travel style, accommodation preferences
-   - Learning style, reading habits
-   - Social preferences
+1. **FACTS** (about Aaron only):
+   - Aaron's location, work, role, projects
+   - Aaron's education, skills, routines
+   - Aaron's health goals, financial info
+   - Start with "Aaron..." or "User..."
 
-3. **RELATIONSHIPS** - People mentioned:
-   - Name, role, company, how they know each other
-   - Nature of relationship (friend, colleague, mentor, etc.)
-   - Recent interactions or plans
+2. **PREFERENCES** (Aaron's preferences):
+   - Work style, communication preferences
+   - Food, travel, lifestyle preferences
+   - Start with "Aaron prefers..." or "User likes..."
 
-4. **INSIGHTS** - Observations and learnings:
-   - Market insights, industry observations
-   - Personal realizations, life lessons
-   - Cultural observations from travel
+3. **RELATIONSHIPS** (info about OTHER people):
+   - "[Person's name] is Aaron's [relationship] who [facts about them]"
+   - "[Person] works at [company] as [role]" - THIS IS ABOUT THEM, NOT AARON!
+   - If Aaron mentions a friend works at Bain → "John works at Bain" NOT "Aaron works at Bain"
 
-5. **GOALS & PLANS** - What user wants to achieve:
-   - Short-term plans (this week, month)
-   - Long-term aspirations
-   - Projects being worked on
+4. **INSIGHTS** (Aaron's observations):
+   - Market/industry insights Aaron has
+   - Realizations, lessons learned
 
-FORMAT: Return a JSON array. Each memory should be:
-- ONE clear sentence
-- Third person: "User..." or "Aaron..."
-- Specific with names, numbers, dates when mentioned
-- Unique information (not repeated)
+WRONG examples (DO NOT DO):
+❌ "Works at Bain & Company" (ambiguous - whose job?)
+❌ "Role is Founder" (ambiguous - who?)
+❌ "Name is Laura" (that's a contact, not useful)
 
-Example:
+CORRECT examples:
+✅ "Aaron is building Jarvis, a personal AI assistant"
+✅ "Maria is Aaron's friend who works at Bain as a consultant"
+✅ "Aaron prefers walkable cities over suburban areas"
+✅ "Aaron met with Felix to discuss his startup idea"
+
+Return JSON array. Max 10 memories. Only extract SPECIFIC, VALUABLE information.
+
 [
-  {{"type": "fact", "content": "User is originally from Germany and studied engineering"}},
-  {{"type": "relationship", "content": "Ed Henderson is a friend from Sydney who is interested in robotics"}},
-  {{"type": "preference", "content": "User prefers living in hacker houses with other startup founders"}},
-  {{"type": "insight", "content": "Indonesian market is complex - like having Nigeria and Singapore in one country"}},
-  {{"type": "fact", "content": "User's current body weight goal is to stay around 80kg"}}
+  {{"type": "fact", "content": "Aaron is based in Ho Chi Minh City for the next month"}},
+  {{"type": "relationship", "content": "Felix is Aaron's friend who co-founded CORTEXO"}},
+  {{"type": "preference", "content": "Aaron prefers morning meetings before 11am"}}
 ]
 
-Return ONLY the JSON array. Extract UP TO 15 unique, valuable memories.
+Return ONLY the JSON array.
 
 TRANSCRIPT:
 {transcript_text[:6000]}"""
@@ -866,24 +867,29 @@ TRANSCRIPT:
             from app.services.llm import ClaudeMultiAnalyzer
             llm = ClaudeMultiAnalyzer()
             
-            prompt = f"""Extract key facts from this conversation that would help personalize future interactions.
+            prompt = f"""Extract key facts from this conversation. Aaron (the user) is one participant.
 
-Focus on:
-- Facts about people mentioned (names, roles, companies, relationships)
-- User preferences or opinions expressed
-- Important dates, events, or plans
-- Key decisions or commitments made
+⚠️ CRITICAL: Distinguish WHO each fact is about:
+- If Aaron says "I work at X" → "Aaron works at X" (type: fact)
+- If contact says "I work at X" → "[Contact name] works at X" (type: relationship)
+- If Aaron mentions "my friend works at X" → "[Friend] works at X" (type: relationship)
 
-Return a JSON array of memories. Each should be ONE clear sentence in third person.
-Maximum 5 memories. Only extract truly valuable, specific information.
+RULES:
+1. Facts ABOUT Aaron → type: "fact", start with "Aaron..."
+2. Facts ABOUT other people → type: "relationship", include their name
+3. Aaron's preferences → type: "preference"
+4. Never create ambiguous memories like "Works at Google" without saying WHO
+
+Return JSON array. Max 5 memories. Only specific, valuable info.
 
 Example:
 [
-  {{"type": "fact", "content": "John Smith works at Google as a product manager"}},
-  {{"type": "relationship", "content": "Sarah is John's wife who works in healthcare"}}
+  {{"type": "fact", "content": "Aaron is planning to visit San Francisco in March"}},
+  {{"type": "relationship", "content": "Sarah works at McKinsey as a senior consultant"}},
+  {{"type": "preference", "content": "Aaron prefers async communication over calls"}}
 ]
 
-Return ONLY the JSON array, or empty array [] if nothing valuable to extract.
+Return ONLY the JSON array, or [] if nothing valuable.
 
 TEXT:
 {text[:2000]}"""
