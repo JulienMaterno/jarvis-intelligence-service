@@ -406,12 +406,14 @@ async def search_memories(request: SearchMemoryRequest):
         # Format for response
         items = []
         for mem in memories:
+            # Handle None metadata safely
+            metadata = mem.get("metadata") or {}
             items.append(MemoryItem(
                 id=mem.get("id", ""),
                 memory=mem.get("memory", mem.get("content", "")),
-                type=mem.get("metadata", {}).get("type", "fact"),
+                type=metadata.get("type", "fact"),
                 metadata=mem.get("metadata"),
-                created_at=mem.get("metadata", {}).get("added_at"),
+                created_at=metadata.get("added_at"),
             ))
         
         return MemoryListResponse(
