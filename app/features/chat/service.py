@@ -319,19 +319,27 @@ class ChatService:
             return ""
     
     async def _save_memory_from_conversation(self, user_message: str, assistant_response: str) -> None:
-        """Extract and save memories from the conversation."""
+        """Extract and save memories from the conversation intelligently."""
         try:
-            # Store the conversation for memory extraction
-            messages = [
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": assistant_response}
+            # Only extract if the user shared something meaningful (not just queries)
+            meaningful_keywords = [
+                "i'm", "i am", "my ", "i work", "i live", "i prefer", "i like", "i don't",
+                "i was", "i met", "i went", "i have", "i need", "i want",
+                "my name", "my job", "my company", "my friend"
             ]
             
-            # Let Mem0 extract what's worth remembering
-            await self.memory.add(
-                f"Conversation: User asked '{user_message[:100]}...' and received answer about it.",
-                metadata={"source": "chat", "timestamp": datetime.now(timezone.utc).isoformat()}
-            )
+            user_lower = user_message.lower()
+            has_meaningful_content = any(kw in user_lower for kw in meaningful_keywords)
+            
+            if has_meaningful_content and len(user_message) > 30:
+                # Extract memories from what user shared (not just questions)
+                combined = f"User said: {user_message}"
+                count = await self.memory.extract_from_text(
+                    text=combined,
+                    source="chat",
+                )
+                if count > 0:
+                    logger.info(f"Extracted {count} memories from chat")
         except Exception as e:
             logger.warning(f"Could not save memory: {e}")
     
