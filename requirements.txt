@@ -12,3 +12,9 @@ pytz
 mem0ai
 qdrant-client
 openai  # For embeddings in Mem0
+
+# Document processing
+PyPDF2
+pdfplumber
+python-docx
+python-multipart  # For file uploads

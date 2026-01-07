@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import beeper, briefing, calendar, chat, contacts, emails, health, journaling, memory, transcripts
+from app.api.routes import beeper, briefing, calendar, chat, contacts, documents, emails, health, journaling, memory, transcripts
 
 
 router = APIRouter()
@@ -10,6 +10,7 @@ router.include_router(journaling.router)
 router.include_router(emails.router)
 router.include_router(calendar.router)
 router.include_router(contacts.router)
+router.include_router(documents.router)
 router.include_router(briefing.router)
 router.include_router(health.router)
 router.include_router(chat.router)

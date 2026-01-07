@@ -1320,6 +1320,65 @@ Be careful - only delete when user is explicit about wanting to forget.""",
             },
             "required": ["query"]
         }
+    },
+    {
+        "name": "search_documents",
+        "description": """Search Aaron's personal documents (CV, profiles, applications, notes).
+
+Use when user asks:
+- "What's in my CV?"
+- "What does my profile say about my experience?"
+- "What's my work history?"
+- "Find my application to X"
+- Any question about stored personal documents
+
+Returns relevant content from stored documents.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for in documents"
+                },
+                "document_type": {
+                    "type": "string",
+                    "description": "Filter by type: cv, profile, application, notes, other",
+                    "enum": ["cv", "profile", "application", "notes", "other"]
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum documents to return",
+                    "default": 3
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_document_content",
+        "description": """Get the full content of a specific document type.
+
+Use when user asks for complete document content:
+- "Show me my full CV"
+- "What's in my LinkedIn profile?"
+- "Read my professional bio"
+
+Returns the full text content.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_type": {
+                    "type": "string",
+                    "description": "Type of document to retrieve",
+                    "enum": ["cv", "profile", "application", "notes"]
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Optional: specific document title"
+                }
+            },
+            "required": ["document_type"]
+        }
     }
 ]
 
@@ -1453,6 +1512,11 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _search_memories(tool_input)
         elif tool_name == "forget_memory":
             return _forget_memory(tool_input)
+        # Document tools
+        elif tool_name == "search_documents":
+            return _run_async(_search_documents(tool_input))
+        elif tool_name == "get_document_content":
+            return _run_async(_get_document_content(tool_input))
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -4241,3 +4305,114 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to forget memory: {e}")
         return {"error": f"Failed to forget: {str(e)}"}
+
+
+# =============================================================================
+# DOCUMENT TOOLS
+# =============================================================================
+
+async def _search_documents(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search personal documents (CV, profiles, applications, notes)."""
+    try:
+        from app.features.documents import get_document_service
+        
+        query = tool_input.get("query", "")
+        doc_type = tool_input.get("document_type")
+        limit = tool_input.get("limit", 3)
+        
+        if not query:
+            return {"error": "Query is required"}
+        
+        doc_service = get_document_service()
+        docs = await doc_service.search_documents(
+            query=query,
+            document_type=doc_type,
+            limit=limit
+        )
+        
+        if not docs:
+            return {
+                "status": "no_results",
+                "message": f"No documents found matching '{query}'"
+            }
+        
+        results = []
+        for doc in docs:
+            content = doc.get("content", "")
+            # Truncate content for response
+            snippet = content[:1000] + "..." if len(content) > 1000 else content
+            results.append({
+                "id": doc.get("id"),
+                "title": doc.get("title"),
+                "type": doc.get("type"),
+                "content_snippet": snippet,
+                "tags": doc.get("tags", [])
+            })
+        
+        return {
+            "status": "found",
+            "count": len(results),
+            "documents": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to search documents: {e}")
+        return {"error": f"Document search failed: {str(e)}"}
+
+
+async def _get_document_content(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get full content of a document by type."""
+    try:
+        from app.features.documents import get_document_service
+        
+        doc_type = tool_input.get("document_type")
+        title = tool_input.get("title")
+        
+        if not doc_type:
+            return {"error": "document_type is required"}
+        
+        doc_service = get_document_service()
+        docs = await doc_service.list_documents(document_type=doc_type, limit=10)
+        
+        if not docs:
+            return {
+                "status": "not_found",
+                "message": f"No {doc_type} documents found"
+            }
+        
+        # If title specified, find exact match
+        if title:
+            matching = [d for d in docs if title.lower() in d.get("title", "").lower()]
+            if not matching:
+                return {
+                    "status": "not_found",
+                    "message": f"No {doc_type} document with title '{title}' found"
+                }
+            doc_id = matching[0]["id"]
+        else:
+            # Get the most recent document of that type
+            doc_id = docs[0]["id"]
+        
+        # Get full document
+        doc = await doc_service.get_document(doc_id)
+        
+        if not doc:
+            return {"error": "Document not found"}
+        
+        return {
+            "status": "found",
+            "document": {
+                "id": doc.get("id"),
+                "title": doc.get("title"),
+                "type": doc.get("type"),
+                "content": doc.get("content", ""),
+                "tags": doc.get("tags", []),
+                "word_count": doc.get("word_count", 0),
+                "created_at": doc.get("created_at")
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get document content: {e}")
+        return {"error": f"Failed to get document: {str(e)}"}
+
