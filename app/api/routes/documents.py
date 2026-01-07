@@ -178,19 +178,23 @@ async def upload_document(
         if not doc_id:
             raise HTTPException(status_code=500, detail="Failed to store document")
         
-        # Seed memories in background
+        # Seed memories - run synchronously for immediate feedback
+        memories_count = 0
         if seed_memories:
-            background_tasks.add_task(
-                doc_service.seed_memories_from_document,
-                doc_id
-            )
+            try:
+                memories_count = await doc_service.seed_memories_from_document(doc_id)
+                logger.info(f"Seeded {memories_count} memories from document {doc_id}")
+            except Exception as e:
+                logger.error(f"Failed to seed memories from document {doc_id}: {e}")
+                # Don't fail the upload, just note the failure
         
         logger.info(f"Uploaded document: {doc_title} ({doc_type}) - {doc_id}")
         
+        memory_msg = f", {memories_count} memories extracted" if seed_memories else ""
         return DocumentResponse(
             status="success",
             document_id=doc_id,
-            message=f"Document '{doc_title}' uploaded ({len(content)} chars extracted)"
+            message=f"Document '{doc_title}' uploaded ({len(content)} chars{memory_msg})"
         )
         
     except HTTPException:
