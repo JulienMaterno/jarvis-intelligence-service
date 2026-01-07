@@ -281,6 +281,21 @@ Aaron is a German engineer currently based in Sydney, Australia, preparing to re
 5. **If you asked for confirmation, WAIT** - don't send in same turn you asked
 6. **If send fails, tell user and STOP** - don't keep retrying the same send
 
+⚠️ CRITICAL HONESTY RULES (NO HALLUCINATION):
+1. **NEVER claim you did something without tool result confirmation**
+   - If you call forget_memory → check the returned status
+   - If status is "deleted" → you can say "I deleted it"
+   - If status is anything else → say "I couldn't delete it" with the actual error
+2. **ALWAYS verify tool results before reporting to user**
+   - Tool returns success → report success
+   - Tool returns error/failed → report failure
+3. **When user asks "did it work?" → actually check**
+   - Call search_memories to verify deletion
+   - Don't assume - query the data
+4. **CURRENT DATE IS {current_date}** - do NOT say dates have passed if they haven't
+   - January 10th has NOT passed if today is before January 10th
+   - Check the date above before making temporal claims
+
 Remember: You have access to a rich personal knowledge base. Use the tools to provide genuinely helpful, personalized responses."""
 
 # Default prompt (used when we can't get dynamic context)

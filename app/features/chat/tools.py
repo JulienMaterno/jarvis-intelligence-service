@@ -1282,14 +1282,27 @@ Use when user asks:
 - "What do you know about me?"
 - "What do you remember about Algenie?"
 - "Do you know my preferences?"
+- "List all fact/preference/insight memories"
 
-Returns relevant memories from long-term storage.""",
+Returns memories with metadata including:
+- id: Unique memory ID (for deletion)
+- content: The actual memory text
+- type: fact, preference, insight, relationship, interaction
+- source: Origin (voice memo filename, chat, api, beeper, etc.)
+- created_at: When the memory was created
+
+You can filter by type using the 'type' parameter.""",
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
                     "description": "What to search for in memories"
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["fact", "preference", "insight", "relationship", "interaction"],
+                    "description": "Filter by memory type"
                 },
                 "limit": {
                     "type": "integer",
@@ -1302,23 +1315,30 @@ Returns relevant memories from long-term storage.""",
     },
     {
         "name": "forget_memory",
-        "description": """Delete a specific memory.
+        "description": """Delete a specific memory by ID or search query.
+
+PREFERRED: Use memory_id when you have it (from search_memories results).
+ALTERNATIVE: Use query to search and delete matching memories.
 
 Use when user explicitly asks to forget something:
 - "Forget that I like coffee"
 - "Remove that memory about my old job"
-- "Delete what you know about X"
+- "Delete memory ID xyz"
 
-Be careful - only delete when user is explicit about wanting to forget.""",
+IMPORTANT: After calling this, VERIFY the deletion worked by checking the returned status.
+Do NOT tell the user you deleted something unless status is "deleted".""",
         "input_schema": {
             "type": "object",
             "properties": {
+                "memory_id": {
+                    "type": "string",
+                    "description": "Specific memory ID to delete (preferred)"
+                },
                 "query": {
                     "type": "string",
-                    "description": "What memory to search for and delete"
+                    "description": "Search query to find and delete matching memories"
                 }
-            },
-            "required": ["query"]
+            }
         }
     },
     {
@@ -4159,14 +4179,14 @@ def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Correct an existing memory."""
+    """Correct an existing memory by deleting old and adding new."""
     from app.features.memory import get_memory_service, MemoryType
     
     incorrect_info = tool_input.get("incorrect_info", "").strip()
     correct_info = tool_input.get("correct_info", "").strip()
     
     if not incorrect_info or not correct_info:
-        return {"error": "Need both incorrect and correct information"}
+        return {"error": "Need both incorrect_info and correct_info"}
     
     try:
         memory_service = get_memory_service()
@@ -4180,38 +4200,43 @@ def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 memory_service.add(
                     content=correct_info,
                     memory_type=MemoryType.FACT,
-                    metadata={"source": "chat", "corrected_from": incorrect_info}
+                    metadata={"source": "chat_correction", "corrected_from": incorrect_info}
                 )
             )
             return {
-                "status": "added",
-                "message": f"✅ I didn't have that stored, but now I'll remember: {correct_info}",
-                "memory_id": memory_id
+                "status": "added_new",
+                "message": f"No existing memory found with '{incorrect_info}'. Created new memory: '{correct_info}'",
+                "new_memory_id": memory_id
             }
         
         # Delete old memories matching the incorrect info
         deleted_count = 0
+        deleted_items = []
         for mem in memories:
             mem_id = mem.get("id")
-            mem_text = mem.get("memory", "")
+            mem_text = mem.get("memory", "") or mem.get("data", "")
             if mem_id and incorrect_info.lower() in mem_text.lower():
-                _run_async(memory_service.delete(mem_id))
-                deleted_count += 1
+                success = _run_async(memory_service.delete(mem_id))
+                if success:
+                    deleted_count += 1
+                    deleted_items.append({"id": mem_id, "content": mem_text[:80]})
         
         # Add the correct memory
-        memory_id = _run_async(
+        new_id = _run_async(
             memory_service.add(
                 content=correct_info,
                 memory_type=MemoryType.FACT,
-                metadata={"source": "chat", "corrected_from": incorrect_info}
+                metadata={"source": "chat_correction", "corrected_from": incorrect_info}
             )
         )
         
         return {
             "status": "corrected",
-            "memories_removed": deleted_count,
-            "new_memory_id": memory_id,
-            "message": f"✅ Corrected! I've updated my memory: {correct_info}"
+            "deleted_count": deleted_count,
+            "deleted_items": deleted_items,
+            "new_memory_id": new_id,
+            "new_content": correct_info,
+            "message": f"✅ Corrected! Deleted {deleted_count} old memory/memories and added: '{correct_info}'"
         }
         
     except Exception as e:
@@ -4225,6 +4250,7 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     
     query = tool_input.get("query", "").strip()
     limit = tool_input.get("limit", 10)
+    memory_type = tool_input.get("type")  # Optional type filter
     
     if not query:
         return {"error": "No search query provided"}
@@ -4241,15 +4267,28 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 "memories": []
             }
         
-        # Format memories for display (Mem0 format)
+        # Format memories with FULL metadata for display
         formatted = []
         for mem in memories:
+            metadata = mem.get("metadata", {})
+            # Also check payload directly for Mem0 format
+            payload = mem.get("payload", {})
+            
+            mem_type = metadata.get("type") or payload.get("type") or "fact"
+            source = metadata.get("source") or payload.get("source") or "unknown"
+            created_at = metadata.get("created_at") or payload.get("created_at") or metadata.get("added_at") or payload.get("added_at")
+            
             formatted.append({
                 "id": mem.get("id", ""),
-                "content": mem.get("memory", ""),
-                "type": mem.get("metadata", {}).get("type", "fact"),
-                "source": mem.get("metadata", {}).get("source", "unknown"),
+                "content": mem.get("memory", "") or mem.get("data", "") or payload.get("data", ""),
+                "type": mem_type,
+                "source": source,
+                "created_at": created_at,
             })
+        
+        # Optionally filter by type if specified
+        if memory_type:
+            formatted = [m for m in formatted if m["type"] == memory_type]
         
         return {
             "status": "found",
@@ -4264,48 +4303,74 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Delete a memory."""
+    """Delete a memory by ID or search query."""
     from app.features.memory import get_memory_service
     
+    memory_id = tool_input.get("memory_id", "").strip()
     query = tool_input.get("query", "").strip()
     
-    if not query:
-        return {"error": "No query provided for what to forget"}
+    if not memory_id and not query:
+        return {"error": "Provide either memory_id or query to specify what to forget"}
     
     try:
         memory_service = get_memory_service()
         
-        # Search for matching memories
-        memories = _run_async(memory_service.search(query, limit=5))
+        # If specific ID provided, delete directly
+        if memory_id:
+            success = _run_async(memory_service.delete(memory_id))
+            if success:
+                return {
+                    "status": "deleted",
+                    "deleted_id": memory_id,
+                    "message": f"✅ Deleted memory with ID: {memory_id}"
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "message": f"❌ Could not delete memory {memory_id} - may not exist"
+                }
+        
+        # Otherwise search and delete matching memories
+        memories = _run_async(memory_service.search(query, limit=10))
         
         if not memories:
             return {
-                "status": "nothing_to_forget",
-                "message": f"I don't have any memories about '{query}' to forget"
+                "status": "nothing_found",
+                "message": f"No memories found matching '{query}'"
             }
         
-        # Delete matching memories
-        deleted_count = 0
+        # Show what was found and delete matches
         deleted_items = []
+        failed_items = []
+        
         for mem in memories:
             mem_id = mem.get("id")
-            mem_text = mem.get("memory", "")
+            mem_text = mem.get("memory", "") or mem.get("data", "")
+            
+            # Only delete if query appears in the memory text (case-insensitive)
             if mem_id and query.lower() in mem_text.lower():
-                _run_async(memory_service.delete(mem_id))
-                deleted_count += 1
-                deleted_items.append(mem_text[:100])
+                success = _run_async(memory_service.delete(mem_id))
+                if success:
+                    deleted_items.append({
+                        "id": mem_id,
+                        "content": mem_text[:100]
+                    })
+                else:
+                    failed_items.append(mem_id)
         
-        if deleted_count == 0:
+        if not deleted_items and not failed_items:
             return {
                 "status": "no_match",
-                "message": f"Found memories but none closely matched '{query}'"
+                "found_count": len(memories),
+                "message": f"Found {len(memories)} memories but none closely matched '{query}'. Use search_memories to see them and delete by ID."
             }
         
         return {
-            "status": "forgotten",
-            "deleted_count": deleted_count,
+            "status": "deleted" if deleted_items else "failed",
+            "deleted_count": len(deleted_items),
             "deleted_items": deleted_items,
-            "message": f"✅ Forgotten! Removed {deleted_count} memory/memories about '{query}'"
+            "failed_count": len(failed_items),
+            "message": f"✅ Deleted {len(deleted_items)} memory/memories" if deleted_items else "❌ Failed to delete"
         }
         
     except Exception as e:
