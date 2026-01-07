@@ -69,12 +69,12 @@ class MemoryService:
         try:
             from mem0 import Memory
             
-            # Configure Mem0 with Anthropic LLM
+            # Configure Mem0 with Anthropic LLM (Claude 4.5 for best quality)
             config = {
                 "llm": {
                     "provider": "anthropic",
                     "config": {
-                        "model": os.getenv("MEM0_LLM_MODEL", "claude-3-5-haiku-20241022"),
+                        "model": os.getenv("MEM0_LLM_MODEL", "claude-sonnet-4-5-20250929"),
                         "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     }
                 },
