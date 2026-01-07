@@ -94,30 +94,31 @@ class MemoryService:
             if supabase_url and supabase_db_password:
                 # Extract project ref from Supabase URL (https://xxx.supabase.co -> xxx)
                 import re
-                from urllib.parse import quote
                 match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
                 if match:
                     project_ref = match.group(1)
                     # Use Session Pooler for IPv4 compatibility (Cloud Run is IPv4-only)
                     # Format: postgresql://postgres.[project_ref]:[password]@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
-                    # Username contains a dot, which may need URL-encoding for some drivers
                     pooler_host = os.getenv("SUPABASE_POOLER_HOST", "aws-1-ap-southeast-2.pooler.supabase.com")
                     pooler_port = os.getenv("SUPABASE_POOLER_PORT", "5432")
                     
-                    # URL-encode the username (postgres.projectref) and password to handle special chars
+                    # Supabase pooler uses postgres.{project_ref} as the username
                     username = f"postgres.{project_ref}"
-                    encoded_password = quote(supabase_db_password, safe='')
-                    
-                    # Note: psycopg2 uses 'require' not 'no-verify' for SSL
-                    connection_string = f"postgresql://{username}:{encoded_password}@{pooler_host}:{pooler_port}/postgres?sslmode=require"
                     
                     # Log sanitized version (hide password)
                     logger.info(f"pgvector connection: {username}@{pooler_host}:{pooler_port}/postgres")
                     
+                    # Pass parameters separately to avoid connection string parsing issues
+                    # Mem0's pgvector accepts: user, password, host, port, dbname
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
-                            "connection_string": connection_string,
+                            "user": username,
+                            "password": supabase_db_password,
+                            "host": pooler_host,
+                            "port": int(pooler_port),
+                            "dbname": "postgres",
+                            "sslmode": "require",
                             "collection_name": "mem0_memories",
                             "embedding_model_dims": 1536,  # text-embedding-3-small
                             "hnsw": True,
