@@ -7,7 +7,8 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/jarvis-intelligence-service:latest']
 
-  # Deploy container to Cloud Run (env vars already set on service)
+  # Deploy container to Cloud Run
+  # All secrets should be in Secret Manager, env vars set here
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -21,6 +22,10 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      - '--update-secrets'
+      - 'SUPABASE_DB_PASSWORD=SUPABASE_DB_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,ANTHROPIC_API_KEY=CLAUDE_API_KEY:latest'
+      - '--set-env-vars'
+      - 'SUPABASE_URL=https://ojnllduebzfxqmiyinhx.supabase.co,SUPABASE_KEY=sb_secret_4jHJEMWEZBhsoKUFQDlX-A_5xANu0vQ,BEEPER_BRIDGE_URL=https://beeper.new-world-project.com,SYNC_SERVICE_URL=https://jarvis-sync-service-776871804948.asia-southeast1.run.app,TELEGRAM_BOT_URL=https://jarvis-telegram-bot-qkz4et4n4q-as.a.run.app,DEFAULT_TELEGRAM_CHAT_ID=7247716272'
 
 options:
   logging: CLOUD_LOGGING_ONLY
