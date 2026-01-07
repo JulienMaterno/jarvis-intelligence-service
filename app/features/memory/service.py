@@ -97,25 +97,20 @@ class MemoryService:
                 match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
                 if match:
                     project_ref = match.group(1)
-                    # Use Supabase Session Pooler for better compatibility
-                    # Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
-                    # Session mode (port 5432) supports prepared statements needed by pgvector
+                    # Use direct connection string format
+                    # Supabase direct: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+                    connection_string = f"postgresql://postgres:{supabase_db_password}@db.{project_ref}.supabase.co:5432/postgres?sslmode=require"
                     config["vector_store"] = {
                         "provider": "pgvector",
                         "config": {
-                            "dbname": "postgres",
+                            "connection_string": connection_string,
                             "collection_name": "mem0_memories",
-                            "user": f"postgres.{project_ref}",  # Pooler format
-                            "password": supabase_db_password,
-                            "host": "aws-0-ap-southeast-1.pooler.supabase.com",  # Use pooler
-                            "port": "5432",  # Session mode
-                            "sslmode": "require",
                             "embedding_model_dims": 1536,  # text-embedding-3-small
                             "hnsw": True,
                             "diskann": False,
                         }
                     }
-                    logger.info(f"Mem0 configured with Supabase pgvector pooler (project: {project_ref})")
+                    logger.info(f"Mem0 configured with Supabase pgvector (project: {project_ref})")
                 else:
                     logger.warning(f"Could not parse Supabase URL: {supabase_url}")
             
