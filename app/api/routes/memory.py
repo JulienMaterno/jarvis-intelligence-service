@@ -983,6 +983,112 @@ async def seed_from_beeper_messages(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================================
+# MEMORY CONSOLIDATION ENDPOINTS (Scheduled)
+# ============================================================================
+
+@router.post("/memory/consolidate")
+async def consolidate_all_memories(
+    background_tasks: BackgroundTasks,
+    hours_back: int = 24,
+    include_letta: bool = True,
+    include_mem0: bool = True,
+):
+    """
+    Comprehensive memory consolidation from ALL data sources.
+    
+    This endpoint processes:
+    - chat_messages → Letta archival (episodic memory)
+    - chat_messages → Mem0 (semantic memory, batch)
+    - beeper_messages → Mem0 (WhatsApp/LinkedIn/Slack conversations)
+    - transcripts → Mem0 (voice memo facts)
+    - meetings → Mem0 (meeting context)
+    - journals → Mem0 (introspective content)
+    
+    SCHEDULING RECOMMENDATION:
+    - Call 2x daily (morning + evening) for full coverage
+    - Use hours_back=12 for 2x daily, hours_back=24 for 1x daily
+    
+    Cost: ~$0.01-0.05 per run depending on data volume
+    
+    Args:
+        hours_back: How far back to look for new data
+        include_letta: Process chat_messages → Letta archival
+        include_mem0: Extract Mem0 memories from all sources
+    """
+    from app.features.memory.consolidation import get_consolidation_service
+    
+    consolidator = get_consolidation_service()
+    
+    async def _run_consolidation():
+        result = await consolidator.consolidate_all(
+            hours_back=hours_back,
+            include_letta=include_letta,
+            include_mem0=include_mem0
+        )
+        logger.info(f"Memory consolidation complete: {result}")
+    
+    background_tasks.add_task(_run_consolidation)
+    
+    return {
+        "status": "started",
+        "hours_back": hours_back,
+        "include_letta": include_letta,
+        "include_mem0": include_mem0,
+        "message": "Consolidation running in background. Check /memory/stats for results."
+    }
+
+
+@router.post("/memory/consolidate/lightweight")
+async def consolidate_lightweight():
+    """
+    Lightweight memory consolidation (hourly).
+    
+    Only processes chat_messages → Letta archival.
+    Fast and cheap (~$0.001/message).
+    
+    SCHEDULING RECOMMENDATION:
+    - Call hourly via Cloud Scheduler
+    """
+    from app.features.memory.consolidation import get_consolidation_service
+    
+    consolidator = get_consolidation_service()
+    result = await consolidator.consolidate_lightweight()
+    
+    return result
+
+
+@router.post("/memory/consolidate/beeper")
+async def consolidate_beeper_only(
+    background_tasks: BackgroundTasks,
+    hours_back: int = 24,
+):
+    """
+    Extract memories from Beeper messages only.
+    
+    Use when you want to specifically process WhatsApp/LinkedIn/Slack
+    conversations without touching other sources.
+    
+    This is particularly valuable because Beeper conversations often
+    contain rich personal and professional context.
+    """
+    from app.features.memory.consolidation import get_consolidation_service
+    
+    consolidator = get_consolidation_service()
+    
+    async def _run():
+        count = await consolidator._extract_from_beeper(hours_back)
+        logger.info(f"Beeper consolidation complete: {count} memories extracted")
+    
+    background_tasks.add_task(_run)
+    
+    return {
+        "status": "started",
+        "source": "beeper",
+        "hours_back": hours_back
+    }
+
+
 @router.get("/memory/stats")
 async def get_memory_stats():
     """
