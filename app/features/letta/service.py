@@ -79,7 +79,8 @@ class LettaService:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers=self._get_headers(),
-                timeout=120.0  # Increased for batch operations
+                timeout=120.0,  # Increased for batch operations
+                follow_redirects=True  # Letta API returns 307 redirects for trailing slashes
             )
         return self._client
     
