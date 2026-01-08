@@ -595,30 +595,30 @@ class ChatService:
                     
                     logger.info(f"💬 Final response (no more tools): {final_response[:200]}")
                     
-                    # Save memories from this conversation (background, don't block)
+                    # Save memories from this conversation (Mem0 - cheap, selective)
+                    # Only extracts if user shared meaningful content
                     try:
                         await self._save_memory_from_conversation(request.message, final_response)
                     except Exception as e:
                         logger.warning(f"Failed to save conversation memory: {e}")
                     
-                    # Store raw message exchange in Supabase (for audit trail)
+                    # Store raw message exchange in Supabase (for audit trail + Letta batch)
+                    # This is processed by Letta in batch later (hourly/daily), not per-message
                     try:
                         storage = get_chat_storage()
                         await storage.store_exchange(
                             user_message=request.message,
                             assistant_response=final_response,
                             source="telegram",
-                            metadata={"tools_used": list(set(tools_used))} if tools_used else None
+                            tools_used=list(set(tools_used)) if tools_used else None
                         )
                     except Exception as e:
                         logger.warning(f"Failed to store message exchange: {e}")
                     
-                    # Forward to Letta for episodic memory processing (async, don't block)
-                    try:
-                        letta = get_letta_service()
-                        await letta.send_message(request.message, final_response)
-                    except Exception as e:
-                        logger.warning(f"Failed to forward to Letta: {e}")
+                    # NOTE: Letta is NOT called per-message (too expensive ~$0.05/call)
+                    # Instead, batch processing runs hourly (lightweight archival) 
+                    # and daily (full consolidation with memory block updates)
+                    # See: LettaService.process_unprocessed_messages()
                     
                     return ChatResponse(
                         response=final_response,

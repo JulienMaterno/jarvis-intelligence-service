@@ -145,4 +145,206 @@ async def get_location():
 @router.get("/chat/health")
 async def chat_health():
     """Check if chat service is healthy."""
-    return {"status": "ok", "model": "claude-haiku-4-5-20251001"}
+    from app.features.letta import get_letta_service
+    
+    letta = get_letta_service()
+    letta_status = await letta.health_check()
+    
+    return {
+        "status": "ok",
+        "model": "claude-haiku-4-5-20251001",
+        "letta": letta_status
+    }
+
+
+# =============================================================================
+# LETTA BATCH PROCESSING ENDPOINTS
+# =============================================================================
+
+@router.post("/chat/letta/consolidate")
+async def consolidate_letta_messages(
+    mode: str = "lightweight",
+    limit: int = 100
+):
+    """
+    Process unprocessed chat messages and send to Letta.
+    
+    Called by Cloud Scheduler:
+    - Hourly: mode="lightweight" (just archival, ~$0.001/msg)
+    - Daily: mode="full" (agent processing, ~$0.05/msg)
+    
+    Modes:
+    - "lightweight": Insert to archival memory only (cheap)
+    - "full": Full agent processing with memory block updates (expensive)
+    
+    This endpoint is idempotent - messages are marked as processed.
+    """
+    try:
+        from app.features.letta import get_letta_service
+        
+        letta = get_letta_service()
+        
+        # Check if Letta is healthy first
+        health = await letta.health_check()
+        if health.get("status") != "healthy":
+            return {
+                "status": "skipped",
+                "reason": "Letta unavailable",
+                "letta_status": health
+            }
+        
+        # Process unprocessed messages
+        result = await letta.process_unprocessed_messages(mode=mode)
+        
+        return {
+            "status": "success",
+            "mode": mode,
+            **result
+        }
+        
+    except Exception as e:
+        logger.exception("Letta consolidation error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/letta/daily-summary")
+async def letta_daily_summary():
+    """
+    Generate and send a daily summary to Letta for memory block updates.
+    
+    Called by Cloud Scheduler once per day (evening).
+    
+    This:
+    1. Aggregates today's conversations
+    2. Extracts key topics, decisions, action items
+    3. Sends to Letta agent for memory block updates
+    
+    Cost: ~$0.05-0.10 (one agent call)
+    """
+    try:
+        from datetime import datetime, timedelta
+        from app.features.letta import get_letta_service
+        from app.features.chat.storage import get_chat_storage
+        
+        letta = get_letta_service()
+        storage = get_chat_storage()
+        
+        # Check Letta health
+        health = await letta.health_check()
+        if health.get("status") != "healthy":
+            return {
+                "status": "skipped",
+                "reason": "Letta unavailable",
+                "letta_status": health
+            }
+        
+        # Get today's messages
+        today = datetime.now()
+        messages = await storage.get_messages_for_date(today, include_processed=True)
+        
+        if not messages:
+            return {
+                "status": "skipped",
+                "reason": "No messages today"
+            }
+        
+        # Build summary using Claude (cheap with Haiku)
+        from app.services.llm import ClaudeMultiAnalyzer
+        llm = ClaudeMultiAnalyzer()
+        
+        conversation_text = "\n".join([
+            f"{m['role'].upper()}: {m['content'][:500]}"
+            for m in messages[:50]  # Limit to last 50 messages
+        ])
+        
+        summary_prompt = f"""Analyze this day's conversations and extract:
+
+1. KEY TOPICS (max 5): Main subjects discussed
+2. DECISIONS (max 3): Any decisions Aaron made
+3. ACTION ITEMS (max 5): Tasks or commitments
+
+Return JSON:
+{{
+  "summary": "One paragraph summary of the day",
+  "topics": ["topic1", "topic2"],
+  "decisions": ["decision1"],
+  "action_items": ["item1", "item2"]
+}}
+
+CONVERSATIONS:
+{conversation_text[:8000]}"""
+
+        response = llm.client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": summary_prompt}]
+        )
+        
+        import json
+        result_text = response.content[0].text.strip()
+        
+        # Parse JSON
+        try:
+            if "{" in result_text:
+                json_start = result_text.find("{")
+                json_end = result_text.rfind("}") + 1
+                summary_data = json.loads(result_text[json_start:json_end])
+            else:
+                summary_data = {"summary": result_text, "topics": [], "decisions": [], "action_items": []}
+        except json.JSONDecodeError:
+            summary_data = {"summary": result_text[:500], "topics": [], "decisions": [], "action_items": []}
+        
+        # Send to Letta for memory block updates
+        result = await letta.consolidate_day(
+            date=today,
+            summary=summary_data.get("summary", "No summary"),
+            key_topics=summary_data.get("topics", []),
+            decisions=summary_data.get("decisions", []),
+            action_items=summary_data.get("action_items", [])
+        )
+        
+        return {
+            "status": "success",
+            "messages_analyzed": len(messages),
+            "summary": summary_data,
+            "letta_updated": result is not None
+        }
+        
+    except Exception as e:
+        logger.exception("Daily summary error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/letta/status")
+async def letta_status():
+    """
+    Get current Letta status including memory blocks and unprocessed count.
+    """
+    try:
+        from app.features.letta import get_letta_service
+        from app.features.chat.storage import get_chat_storage
+        
+        letta = get_letta_service()
+        storage = get_chat_storage()
+        
+        # Get health
+        health = await letta.health_check()
+        
+        # Get memory blocks
+        blocks = {}
+        if health.get("status") == "healthy":
+            blocks = await letta.get_memory_blocks()
+        
+        # Get unprocessed count
+        unprocessed = await storage.get_unprocessed_count()
+        
+        return {
+            "letta_health": health,
+            "memory_blocks": blocks,
+            "unprocessed_messages": unprocessed,
+            "agent_id": letta.agent_id or "not configured"
+        }
+        
+    except Exception as e:
+        logger.exception("Letta status error")
+        raise HTTPException(status_code=500, detail=str(e))

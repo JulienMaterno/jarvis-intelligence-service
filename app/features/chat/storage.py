@@ -53,7 +53,9 @@ class ChatMessageStorage:
         role: str,
         content: str,
         source: str = "telegram",
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[int] = None,
+        tools_used: Optional[List[str]] = None
     ) -> Optional[str]:
         """
         Store a single message.
@@ -62,7 +64,9 @@ class ChatMessageStorage:
             role: 'user', 'assistant', or 'system'
             content: Message content
             source: 'telegram', 'web', 'api', 'voice'
-            metadata: Additional context (tool_calls, model, etc.)
+            metadata: Additional context (attachments, model, etc.)
+            user_id: Telegram user ID (for multi-user support)
+            tools_used: List of tools used (for assistant messages)
             
         Returns:
             Message ID if successful
@@ -80,6 +84,12 @@ class ChatMessageStorage:
                 "letta_processed": False,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
+            
+            # Add optional fields
+            if user_id is not None:
+                record["user_id"] = user_id
+            if tools_used:
+                record["tools_used"] = tools_used
             
             result = db.client.table("chat_messages").insert(record).execute()
             
@@ -99,28 +109,33 @@ class ChatMessageStorage:
         assistant_response: str,
         source: str = "telegram",
         user_metadata: Optional[Dict] = None,
-        assistant_metadata: Optional[Dict] = None
+        assistant_metadata: Optional[Dict] = None,
+        user_id: Optional[int] = None,
+        tools_used: Optional[List[str]] = None
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Store a complete user-assistant exchange.
         
         Returns tuple of (user_msg_id, assistant_msg_id)
         """
-        user_id = await self.store_message(
+        user_msg_id = await self.store_message(
             role="user",
             content=user_message,
             source=source,
-            metadata=user_metadata
+            metadata=user_metadata,
+            user_id=user_id
         )
         
-        assistant_id = await self.store_message(
+        assistant_msg_id = await self.store_message(
             role="assistant",
             content=assistant_response,
             source=source,
-            metadata=assistant_metadata
+            metadata=assistant_metadata,
+            user_id=user_id,
+            tools_used=tools_used
         )
         
-        return user_id, assistant_id
+        return user_msg_id, assistant_msg_id
     
     async def get_messages_for_date(
         self,
@@ -221,6 +236,44 @@ class ChatMessageStorage:
         except Exception as e:
             logger.error(f"Failed to get unprocessed count: {e}")
             return 0
+    
+    async def get_unprocessed_for_letta(
+        self,
+        limit: int = 100,
+        min_content_length: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Get messages that haven't been processed by Letta yet.
+        
+        Args:
+            limit: Maximum messages to return
+            min_content_length: Skip very short messages
+            
+        Returns:
+            List of message dicts with id, role, content, created_at
+        """
+        try:
+            db = get_database()
+            
+            result = db.client.table("chat_messages")\
+                .select("id,role,content,created_at,user_id")\
+                .eq("letta_processed", False)\
+                .order("created_at", desc=False)\
+                .limit(limit)\
+                .execute()
+            
+            # Filter by content length in Python (more flexible than SQL)
+            messages = [
+                m for m in (result.data or [])
+                if len(m.get("content", "")) >= min_content_length
+            ]
+            
+            logger.debug(f"Found {len(messages)} unprocessed messages for Letta")
+            return messages
+            
+        except Exception as e:
+            logger.error(f"Failed to get unprocessed messages: {e}")
+            return []
     
     async def search_messages(
         self,

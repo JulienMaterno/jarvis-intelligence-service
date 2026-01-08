@@ -9,6 +9,9 @@ DROP TABLE IF EXISTS chat_messages CASCADE;
 CREATE TABLE chat_messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     
+    -- User identification (Telegram user ID)
+    user_id BIGINT,  -- Telegram user IDs are large integers
+    
     -- Session grouping (optional, for multi-turn conversations)
     session_id UUID,
     
@@ -19,8 +22,11 @@ CREATE TABLE chat_messages (
     -- Source tracking
     source TEXT DEFAULT 'telegram' CHECK (source IN ('telegram', 'web', 'api', 'voice')),
     
+    -- Tools used (for assistant messages)
+    tools_used TEXT[],  -- Array of tool names used in this response
+    
     -- Additional context
-    metadata JSONB DEFAULT '{}',  -- tool_calls, attachments, model_used, etc.
+    metadata JSONB DEFAULT '{}',  -- attachments, model_used, tokens, latency_ms, etc.
     
     -- Letta processing status
     letta_processed BOOLEAN DEFAULT FALSE,
@@ -34,10 +40,12 @@ CREATE TABLE chat_messages (
 );
 
 -- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_letta_pending ON chat_messages(letta_processed) WHERE NOT letta_processed;
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created ON chat_messages(user_id, created_at DESC);
 
 -- Enable RLS (Row Level Security)
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
