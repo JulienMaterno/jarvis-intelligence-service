@@ -176,10 +176,10 @@ Keep memory blocks concise but comprehensive. Prioritize recent and important in
         try:
             client = await self._ensure_client()
             
-            # Build messages to send
-            messages = [{"role": "user", "text": user_message}]
+            # Build messages to send (Letta API uses "content" not "text")
+            messages = [{"role": "user", "content": user_message}]
             if assistant_response:
-                messages.append({"role": "assistant", "text": assistant_response})
+                messages.append({"role": "assistant", "content": assistant_response})
             
             response = await client.post(
                 f"/v1/agents/{self.agent_id}/messages",
