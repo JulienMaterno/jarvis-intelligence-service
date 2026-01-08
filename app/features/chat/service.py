@@ -358,20 +358,61 @@ class ChatService:
             return "\n\n**MEMORY STATUS:** Memory service unavailable - use search_memories tool."
     
     async def _save_memory_from_conversation(self, user_message: str, assistant_response: str) -> None:
-        """Extract and save memories from the conversation intelligently."""
+        """
+        Extract and save memories from the conversation intelligently.
+        
+        Uses a smarter heuristic than just keywords - we want to capture:
+        - Personal facts (I am, my job, etc.)
+        - Project updates (built, deployed, finished, working on)
+        - Decisions and events (decided, chose, met with, started)
+        - Opinions and preferences (think, believe, prefer)
+        - Temporal context (today, yesterday, this week)
+        
+        The actual extraction is done by Claude Haiku via Mem0's add() method,
+        which intelligently parses the text for facts. The heuristic here just
+        gates the API call to avoid unnecessary costs.
+        """
         try:
-            # Only extract if the user shared something meaningful (not just queries)
-            meaningful_keywords = [
+            user_lower = user_message.lower()
+            
+            # Skip pure questions (unlikely to contain memorable facts)
+            question_starters = ["what ", "when ", "where ", "who ", "how ", "why ", "can you", "could you", "would you", "do you"]
+            is_pure_question = any(user_lower.strip().startswith(q) for q in question_starters) and "?" in user_message
+            
+            # Skip very short messages
+            if len(user_message) < 25:
+                return
+            
+            # Broader heuristics for meaningful content (not just "I am...")
+            personal_indicators = [
+                # Traditional personal statements
                 "i'm", "i am", "my ", "i work", "i live", "i prefer", "i like", "i don't",
                 "i was", "i met", "i went", "i have", "i need", "i want",
-                "my name", "my job", "my company", "my friend"
+                # Actions and achievements
+                "i built", "i deployed", "i created", "i finished", "i started", "i completed",
+                "i decided", "i chose", "i realized", "i learned", "i discovered",
+                # Project/work updates
+                "working on", "built the", "deployed the", "finished the", "shipped",
+                "launched", "released", "implemented", "fixed", "updated",
+                # Decisions and opinions
+                "decided to", "going to", "plan to", "will be", "should be",
+                "think that", "believe that", "feel that",
+                # Temporal markers (often accompany important info)
+                "today ", "yesterday", "this week", "last week", "this month",
+                "just now", "earlier", "recently",
+                # Relationships and context
+                "met with", "talked to", "spoke with", "heard from",
+                "relationship", "contact", "friend", "colleague",
             ]
             
-            user_lower = user_message.lower()
-            has_meaningful_content = any(kw in user_lower for kw in meaningful_keywords)
+            has_meaningful_content = any(kw in user_lower for kw in personal_indicators)
             
-            if has_meaningful_content and len(user_message) > 30:
-                # Extract memories from what user shared (not just questions)
+            # If it's a pure question with no personal context, skip
+            if is_pure_question and not has_meaningful_content:
+                return
+            
+            # If it has meaningful content, extract memories
+            if has_meaningful_content:
                 combined = f"User said: {user_message}"
                 count = await self.memory.extract_from_text(
                     text=combined,
