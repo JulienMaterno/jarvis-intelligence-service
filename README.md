@@ -154,6 +154,21 @@ git add -A && git commit -m "Your changes" && git push origin master
 | `/api/v1/briefings/schedule-hourly` | POST | Scan and schedule briefings (Cloud Scheduler) |
 | `/api/v1/briefings/send-due` | POST | Send due briefings (runs every minute) |
 
+### Chat & Messaging
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/chat` | POST | Send chat message to AI |
+| `/api/v1/chat/usage` | GET | Get chat usage statistics |
+
+### Beeper (Unified Messaging)
+
+The service includes tools for sending/receiving messages via Beeper Bridge:
+- `get_beeper_inbox` - List chats needing response
+- `search_beeper_chats` - Find chats by name
+- `send_beeper_message` - Send message (requires user confirmation)
+- `archive_beeper_chat` - Archive handled chats
+
 ### Health
 
 | Endpoint | Method | Description |
@@ -166,8 +181,10 @@ git add -A && git commit -m "Your changes" && git push origin master
 | Service | Communication |
 |---------|---------------|
 | **jarvis-audio-pipeline** | Sends transcripts via POST /api/v1/process/{id} |
-| **jarvis-telegram-bot** | Receives notifications, handles contact linking |
+| **jarvis-telegram-bot** | Receives notifications, handles contact linking, chat interface |
 | **jarvis-sync-service** | Receives sync triggers after record creation |
+| **jarvis-beeper-bridge** | Unified messaging (WhatsApp, LinkedIn, Slack, etc.) |
+| **jarvis-screenpipe-bridge** | Sends meeting transcripts for analysis |
 | **Supabase** | Direct database connection |
 
 ## 📝 For AI Agents

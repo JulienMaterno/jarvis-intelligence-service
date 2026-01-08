@@ -176,13 +176,13 @@ class SupabaseMultiDatabase:
         
         try:
             # Check meetings
-            meetings = self.client.table("meetings").select("id").eq("transcript_id", transcript_id).execute()
+            meetings = self.client.table("meetings").select("id").eq("source_transcript_id", transcript_id).execute()
             if meetings.data:
                 result["meeting_ids"] = [m["id"] for m in meetings.data]
                 result["already_processed"] = True
             
             # Check reflections
-            reflections = self.client.table("reflections").select("id").eq("transcript_id", transcript_id).execute()
+            reflections = self.client.table("reflections").select("id").eq("source_transcript_id", transcript_id).execute()
             if reflections.data:
                 result["reflection_ids"] = [r["id"] for r in reflections.data]
                 result["already_processed"] = True
@@ -319,7 +319,7 @@ class SupabaseMultiDatabase:
             }
             
             if transcript_id:
-                payload["transcript_id"] = transcript_id
+                payload["source_transcript_id"] = transcript_id
             
             # Link to calendar event if provided
             if calendar_event_id:
@@ -646,7 +646,7 @@ class SupabaseMultiDatabase:
                 payload["topic_key"] = topic_key
             
             if transcript_id:
-                payload["transcript_id"] = transcript_id
+                payload["source_transcript_id"] = transcript_id
                 
             if contact_id:
                 payload["contact_id"] = contact_id
