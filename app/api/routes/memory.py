@@ -188,18 +188,28 @@ async def add_memory(request: AddMemoryRequest):
         }
         memory_type = type_map.get(request.memory_type.lower(), MemoryType.FACT)
         
-        memory_id = await memory_service.add(
+        result = await memory_service.add(
             content=request.content,
             memory_type=memory_type,
             metadata={"source": "api"},
         )
         
-        if memory_id:
-            logger.info(f"Added manual memory: {request.content[:50]}...")
+        # Handle both dict and string return types from memory service
+        if result:
+            if isinstance(result, dict):
+                memory_id = result.get("id")
+                event = result.get("event", "ADD")
+                status = result.get("status", "success")
+            else:
+                memory_id = str(result)
+                event = "ADD"
+                status = "success"
+            
+            logger.info(f"Added manual memory [{event}]: {request.content[:50]}...")
             return MemoryResponse(
-                status="success",
+                status=status,
                 memory_id=memory_id,
-                message=f"Memory added: {request.content[:100]}"
+                message=f"Memory {event.lower()}: {request.content[:100]}"
             )
         else:
             raise HTTPException(status_code=500, detail="Failed to add memory")
