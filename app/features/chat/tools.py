@@ -1342,6 +1342,34 @@ Do NOT tell the user you deleted something unless status is "deleted".""",
         }
     },
     {
+        "name": "search_conversations",
+        "description": """Search through past conversation history with Bertan.
+
+Use when user asks:
+- "What did we talk about last week?"
+- "Did I mention anything about X?"
+- "When did I tell you about Y?"
+- "What did I say about my trip?"
+- Any question about past conversations
+
+Returns relevant conversation excerpts from Letta's archival memory.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for in past conversations"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
         "name": "search_documents",
         "description": """Search Aaron's personal documents (CV, profiles, applications, notes).
 
@@ -1532,6 +1560,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _search_memories(tool_input)
         elif tool_name == "forget_memory":
             return _forget_memory(tool_input)
+        elif tool_name == "search_conversations":
+            return _run_async(_search_conversations(tool_input))
         # Document tools
         elif tool_name == "search_documents":
             return _run_async(_search_documents(tool_input))
@@ -4416,6 +4446,65 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to forget memory: {e}")
         return {"error": f"Failed to forget: {str(e)}"}
+
+
+# =============================================================================
+# CONVERSATION HISTORY TOOLS (LETTA)
+# =============================================================================
+
+async def _search_conversations(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search through past conversation history using Letta's archival memory."""
+    try:
+        from app.features.letta import get_letta_service
+        
+        query = tool_input.get("query", "")
+        limit = tool_input.get("limit", 10)
+        
+        if not query:
+            return {"error": "Query is required"}
+        
+        letta = get_letta_service()
+        results = await letta.search_archival(query, limit=limit)
+        
+        if not results:
+            # Fall back to raw message search in Supabase
+            from app.features.chat.storage import get_chat_storage
+            storage = get_chat_storage()
+            raw_results = await storage.search_messages(query, limit=limit)
+            
+            if not raw_results:
+                return {
+                    "status": "no_results",
+                    "message": f"No conversations found about '{query}'"
+                }
+            
+            formatted = []
+            for msg in raw_results:
+                formatted.append({
+                    "role": msg.get("role"),
+                    "content": msg.get("content", "")[:500],
+                    "timestamp": msg.get("created_at"),
+                })
+            
+            return {
+                "status": "found",
+                "count": len(formatted),
+                "source": "raw_history",
+                "conversations": formatted,
+                "message": f"Found {len(formatted)} messages about '{query}'"
+            }
+        
+        return {
+            "status": "found",
+            "count": len(results),
+            "source": "letta",
+            "conversations": results,
+            "message": f"Found {len(results)} conversation excerpts about '{query}'"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to search conversations: {e}")
+        return {"error": f"Failed to search conversations: {str(e)}"}
 
 
 # =============================================================================

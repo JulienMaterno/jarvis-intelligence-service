@@ -7,6 +7,7 @@ This module provides a Claude-powered conversational interface that can:
 3. Search and retrieve information
 4. Execute actions (complete tasks, etc.)
 5. Remember context across conversations (via Mem0)
+6. Track conversation history (via Letta + raw storage)
 
 Works similarly to Claude Desktop + MCP, but via Telegram.
 """
@@ -22,13 +23,15 @@ from pydantic import BaseModel, Field
 
 from app.features.chat.tools import TOOLS, execute_tool
 from app.features.memory import get_memory_service
+from app.features.chat.storage import get_chat_storage
+from app.features.letta import get_letta_service
 
 logger = logging.getLogger("Jarvis.Chat")
 
 # Use Haiku 3.5 for chat (cost-effective for text conversations)
 # Voice memo processing and journaling use Sonnet via llm.py (quality matters more there)
 MODEL_ID = os.getenv("CLAUDE_CHAT_MODEL", "claude-haiku-4-5-20251001")
-MAX_TOOL_CALLS = 3  # Reduced from 5 - prevents runaway loops
+MAX_TOOL_CALLS = 8  # Increased to handle multi-step requests
 
 
 class ChatMessage(BaseModel):
@@ -273,13 +276,19 @@ The user prefers reviewing drafts before sending. Always create drafts first and
 ABOUT THE USER:
 The user's name is **Aaron**. All other details about Aaron (location, interests, current projects, mood, focus areas) are stored in Mem0 memories and journal entries - always query these for up-to-date context rather than assuming.
 
+⚠️ CRITICAL INSTRUCTION-FOLLOWING RULES:
+1. **FOLLOW SEQUENCES EXACTLY** - If user says "First do X, then Y", complete X before starting Y
+2. **CONFIRM BEFORE PROCEEDING** - If user says "list them here first", show the list and WAIT for approval
+3. **DO NOT SKIP STEPS** - Every numbered instruction must be executed in order
+4. **ACKNOWLEDGE EACH STEP** - Say "✅ Done: [action]" before moving to next step
+5. **ASK IF UNSURE** - "You asked me to do X then Y. I've done X. Should I proceed with Y?"
+
 ⚠️ CRITICAL ANTI-LOOP RULES:
 1. **NEVER send the same message twice** - if you already sent to someone, don't send again
 2. **NEVER call the same tool with same params twice** - cache results mentally
 3. **If a tool fails, try ONCE more then give up** - don't retry infinitely
-4. **Maximum 2-3 tool calls per request** - if you need more, ask user to be more specific
-5. **If you asked for confirmation, WAIT** - don't send in same turn you asked
-6. **If send fails, tell user and STOP** - don't keep retrying the same send
+4. **If you asked for confirmation, WAIT** - don't send in same turn you asked
+5. **If send fails, tell user and STOP** - don't keep retrying the same send
 
 ⚠️ CRITICAL HONESTY RULES (NO HALLUCINATION):
 1. **NEVER claim you did something without tool result confirmation**
@@ -427,8 +436,17 @@ class ChatService:
             logger.warning(f"Could not get journal context: {e}")
             return ""
     
-    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "") -> str:
-        """Build system prompt with current date/time/location, memory, and journal context."""
+    async def _get_letta_context(self) -> str:
+        """Get episodic memory context from Letta (conversation history, topics, decisions)."""
+        try:
+            letta = get_letta_service()
+            return await letta.get_context_for_chat()
+        except Exception as e:
+            logger.warning(f"Could not get Letta context: {e}")
+            return ""
+    
+    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "") -> str:
+        """Build system prompt with current date/time/location, memory, journal, and Letta context."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -455,11 +473,15 @@ class ChatService:
             user_location=f"{location_str} ({timezone_str})"
         )
         
+        # Append Letta episodic context first (conversation history, topics, decisions)
+        if letta_context:
+            base_prompt += letta_context
+        
         # Append journal context (user's current mood/focus)
         if journal_context:
             base_prompt += journal_context
         
-        # Append memory context if available
+        # Append Mem0 semantic memory context last
         if memory_context:
             base_prompt += memory_context
         
@@ -468,14 +490,17 @@ class ChatService:
     async def process_message(self, request: ChatRequest) -> ChatResponse:
         """Process a user message and return a response."""
         try:
-            # Get relevant memories for this message
+            # Get relevant memories for this message (Mem0 - semantic)
             memory_context = await self._get_memory_context(request.message)
             
             # Get recent journal context (mood, focus, recent activities)
             journal_context = self._get_recent_journals_context(limit=3)
             
-            # Build dynamic system prompt with current context, journals, and memory
-            system_prompt = self._build_system_prompt(memory_context, journal_context)
+            # Get Letta episodic context (conversation history, topics, decisions)
+            letta_context = await self._get_letta_context()
+            
+            # Build dynamic system prompt with current context, journals, Letta, and memory
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
             
             # Build conversation messages
             messages = []
@@ -575,6 +600,25 @@ class ChatService:
                         await self._save_memory_from_conversation(request.message, final_response)
                     except Exception as e:
                         logger.warning(f"Failed to save conversation memory: {e}")
+                    
+                    # Store raw message exchange in Supabase (for audit trail)
+                    try:
+                        storage = get_chat_storage()
+                        await storage.store_exchange(
+                            user_message=request.message,
+                            assistant_response=final_response,
+                            source="telegram",
+                            metadata={"tools_used": list(set(tools_used))} if tools_used else None
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to store message exchange: {e}")
+                    
+                    # Forward to Letta for episodic memory processing (async, don't block)
+                    try:
+                        letta = get_letta_service()
+                        await letta.send_message(request.message, final_response)
+                    except Exception as e:
+                        logger.warning(f"Failed to forward to Letta: {e}")
                     
                     return ChatResponse(
                         response=final_response,
