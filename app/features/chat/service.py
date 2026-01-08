@@ -61,6 +61,7 @@ class ChatResponse(BaseModel):
     """Response from the chat endpoint."""
     response: str
     tools_used: List[str] = Field(default_factory=list)
+    tool_results_summary: Optional[str] = None  # Key findings from tool calls for history
     error: Optional[str] = None
 
 
@@ -496,6 +497,99 @@ class ChatService:
             logger.warning(f"Could not get Letta context: {e}")
             return ""
     
+    def _extract_key_finding(self, tool_name: str, tool_input: dict, result: dict) -> Optional[str]:
+        """
+        Extract key findings from tool results to persist in conversation history.
+        This helps maintain context across conversation turns.
+        
+        Returns a concise string summarizing important findings, or None if nothing notable.
+        """
+        try:
+            # Skip tools that don't produce important findings for history
+            skip_tools = {"get_current_time", "get_user_location", "update_user_location", "trigger_beeper_sync"}
+            if tool_name in skip_tools:
+                return None
+            
+            # Handle search/get results that found something
+            if isinstance(result, dict):
+                # Message sending - capture what was sent
+                if tool_name == "send_beeper_message":
+                    if result.get("status") == "sent":
+                        chat_name = result.get("chat_name", "unknown")
+                        return f"SENT message to {chat_name}"
+                    elif "error" in result:
+                        return f"FAILED to send: {result.get('error', 'unknown error')[:50]}"
+                
+                # Meeting/contact searches - capture who was found
+                if tool_name in ("get_meetings", "search_meetings"):
+                    meetings = result.get("meetings", [])
+                    if meetings:
+                        titles = [m.get("title", "untitled")[:30] for m in meetings[:3]]
+                        return f"FOUND {len(meetings)} meeting(s): {', '.join(titles)}"
+                
+                if tool_name in ("search_contacts", "get_contacts"):
+                    contacts = result.get("contacts", [])
+                    if contacts:
+                        names = [f"{c.get('first_name', '')} {c.get('last_name', '')}".strip() for c in contacts[:3]]
+                        return f"FOUND {len(contacts)} contact(s): {', '.join(names)}"
+                
+                # Beeper inbox - capture what needs response
+                if tool_name == "get_beeper_inbox":
+                    chats = result.get("chats", [])
+                    if chats:
+                        names = [c.get("chat_name", "")[:20] for c in chats[:3]]
+                        return f"INBOX: {len(chats)} chat(s) need reply: {', '.join(names)}"
+                
+                # Chat messages - capture recent message content
+                if tool_name in ("get_beeper_chat_messages", "get_beeper_contact_messages"):
+                    messages = result.get("messages", [])
+                    if messages:
+                        latest = messages[0] if messages else {}
+                        sender = latest.get("sender", "unknown")
+                        content_preview = (latest.get("content", "")[:50] + "...") if latest.get("content", "") else ""
+                        return f"LAST MSG from {sender}: {content_preview}"
+                
+                # Task operations
+                if tool_name == "create_task":
+                    if result.get("status") == "created":
+                        return f"CREATED task: {result.get('title', 'untitled')[:40]}"
+                
+                if tool_name == "complete_task":
+                    if result.get("status") == "completed":
+                        return f"COMPLETED task: {result.get('title', 'untitled')[:40]}"
+                
+                # Calendar operations  
+                if tool_name == "create_calendar_event":
+                    if result.get("status") == "created":
+                        return f"CREATED event: {result.get('title', 'untitled')[:30]}"
+                
+                # Email operations
+                if tool_name == "create_email_draft":
+                    if result.get("status") == "draft_created":
+                        return f"DRAFTED email to: {result.get('to', 'unknown')[:30]}"
+                
+                if tool_name == "send_email_draft":
+                    if result.get("status") == "sent":
+                        return f"SENT email to: {result.get('to', 'unknown')[:30]}"
+                
+                # Full-text search
+                if tool_name == "search_transcripts":
+                    results = result.get("results", [])
+                    if results:
+                        return f"SEARCH found {len(results)} transcript(s)"
+                
+                # Recent voice memo
+                if tool_name == "get_recent_voice_memo":
+                    if result.get("found"):
+                        category = result.get("category", "unknown")
+                        return f"VOICE MEMO: {category} - {result.get('summary', '')[:50]}"
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error extracting finding: {e}")
+            return None
+    
     def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "") -> str:
         """Build system prompt with current date/time/location, memory, journal, and Letta context."""
         from datetime import datetime
@@ -576,6 +670,9 @@ class ChatService:
             # Track sent messages in THIS request to prevent duplicates
             sent_messages_this_request = set()
             
+            # Track important tool findings to persist in conversation history
+            key_tool_findings = []
+            
             while tool_call_count < MAX_TOOL_CALLS:
                 response = self.client.messages.create(
                     model=MODEL_ID,
@@ -620,6 +717,11 @@ class ChatService:
                                 result = execute_tool(tool_name, tool_input, last_user_message=request.message)
                             
                             logger.info(f"   Result: {json.dumps(result, indent=2)[:500]}")
+                            
+                            # Capture key findings for conversation history
+                            finding = self._extract_key_finding(tool_name, tool_input, result)
+                            if finding:
+                                key_tool_findings.append(finding)
                             
                             tool_results.append({
                                 "type": "tool_result",
@@ -686,9 +788,15 @@ class ChatService:
                     # and daily (full consolidation with memory block updates)
                     # See: LettaService.process_unprocessed_messages()
                     
+                    # Build tool results summary for conversation history
+                    tool_results_summary = None
+                    if key_tool_findings:
+                        tool_results_summary = " | ".join(key_tool_findings[:5])  # Limit to 5 most important
+                    
                     return ChatResponse(
                         response=final_response,
-                        tools_used=list(set(tools_used))
+                        tools_used=list(set(tools_used)),
+                        tool_results_summary=tool_results_summary
                     )
             
             # Max tool calls reached
