@@ -440,8 +440,9 @@ class ChatService:
             # Get journals from the last 7 days
             seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
             
+            # Note: Using only columns that exist in the journals table
             result = supabase.table("journals").select(
-                "date, title, summary, mood, energy, tomorrow_focus, key_events, challenges, wins"
+                "date, title, summary, mood, tomorrow_focus, challenges, wins"
             ).gte("date", seven_days_ago).order("date", desc=True).limit(limit).execute()
             
             if not result.data:
@@ -451,14 +452,13 @@ class ChatService:
             for j in result.data:
                 date_str = j.get("date", "Unknown date")
                 mood = j.get("mood") or "Not recorded"
-                energy = j.get("energy") or "Not recorded"
                 summary = j.get("summary") or j.get("title") or "No summary"
                 
                 # Truncate summary if too long
                 if len(summary) > 300:
                     summary = summary[:300] + "..."
                 
-                journal_lines.append(f"**{date_str}** (Mood: {mood}, Energy: {energy})")
+                journal_lines.append(f"**{date_str}** (Mood: {mood})")
                 journal_lines.append(f"  {summary}")
                 
                 # Add tomorrow's focus if available (most relevant for recent entries)

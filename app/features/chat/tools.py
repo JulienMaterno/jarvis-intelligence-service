@@ -4340,9 +4340,15 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         # Format memories with FULL metadata for display
         formatted = []
         for mem in memories:
-            metadata = mem.get("metadata", {})
-            # Also check payload directly for Mem0 format
-            payload = mem.get("payload", {})
+            # Safely get metadata and payload with fallback to empty dict
+            metadata = mem.get("metadata") or {}
+            payload = mem.get("payload") or {}
+            
+            # Handle case where metadata/payload might still be None
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if not isinstance(payload, dict):
+                payload = {}
             
             mem_type = metadata.get("type") or payload.get("type") or "fact"
             source = metadata.get("source") or payload.get("source") or "unknown"
