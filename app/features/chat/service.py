@@ -323,15 +323,29 @@ class ChatService:
         self.memory = get_memory_service()
     
     async def _get_memory_context(self, message: str) -> str:
-        """Get relevant memories for the current message."""
+        """Get relevant memories for the current message - ALWAYS included in prompt."""
         try:
-            context = await self.memory.get_context(message, limit=5)
-            if context:
-                return f"\n\nRELEVANT MEMORIES:\n{context}"
-            return ""
+            # Search for memories related to the message
+            memories = await self.memory.search(message, limit=8)
+            
+            if not memories:
+                # Even if no matches, note that memory is available
+                return "\n\n**STORED MEMORIES:** No specific memories found for this query. Use search_memories tool if needed."
+            
+            # Format memories clearly
+            lines = ["**RELEVANT STORED MEMORIES (from Mem0):**"]
+            for mem in memories:
+                memory_text = mem.get("memory", "")
+                mem_type = mem.get("metadata", {}).get("type", "unknown")
+                source = mem.get("metadata", {}).get("source", "unknown")
+                if memory_text:
+                    lines.append(f"• [{mem_type}] {memory_text}")
+            
+            lines.append(f"\n_({len(memories)} memories loaded - use search_memories for more)_")
+            return "\n\n" + "\n".join(lines)
         except Exception as e:
             logger.warning(f"Could not get memory context: {e}")
-            return ""
+            return "\n\n**MEMORY STATUS:** Memory service unavailable - use search_memories tool."
     
     async def _save_memory_from_conversation(self, user_message: str, assistant_response: str) -> None:
         """Extract and save memories from the conversation intelligently."""
