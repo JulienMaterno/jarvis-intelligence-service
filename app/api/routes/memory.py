@@ -205,10 +205,13 @@ async def add_memory(request: AddMemoryRequest):
                 event = "ADD"
                 status = "success"
             
+            # Ensure memory_id is a string (None becomes empty string for Pydantic)
+            memory_id_str = str(memory_id) if memory_id else None
+            
             logger.info(f"Added manual memory [{event}]: {request.content[:50]}...")
             return MemoryResponse(
                 status=status,
-                memory_id=memory_id,
+                memory_id=memory_id_str,
                 message=f"Memory {event.lower()}: {request.content[:100]}"
             )
         else:
