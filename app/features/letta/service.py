@@ -61,9 +61,9 @@ class LettaService:
     
     def __init__(self):
         """Initialize Letta service."""
-        self.base_url = os.getenv("LETTA_URL", "http://localhost:8283")
-        self.password = os.getenv("LETTA_PASSWORD", "")
-        self.agent_id = os.getenv("LETTA_AGENT_ID", "")
+        self.base_url = os.getenv("LETTA_URL", "http://localhost:8283").strip()
+        self.password = os.getenv("LETTA_PASSWORD", "").strip()
+        self.agent_id = os.getenv("LETTA_AGENT_ID", "").strip()  # Strip \r\n from Secret Manager
         self._client: Optional[httpx.AsyncClient] = None
         
     def _get_headers(self) -> Dict[str, str]:
