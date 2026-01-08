@@ -301,6 +301,90 @@ class ChatMessageStorage:
         except Exception as e:
             logger.error(f"Failed to search messages: {e}")
             return []
+    
+    async def get_usage_stats(
+        self,
+        days: int = 30
+    ) -> Dict[str, Any]:
+        """
+        Get usage statistics with cost breakdown.
+        
+        Args:
+            days: Number of days to analyze
+            
+        Returns:
+            Dict with message counts, token usage, costs
+        """
+        try:
+            db = get_database()
+            
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            
+            # Get all assistant messages with metadata (costs are stored there)
+            result = db.client.table("chat_messages")\
+                .select("role,metadata,created_at")\
+                .gte("created_at", cutoff)\
+                .execute()
+            
+            messages = result.data or []
+            
+            # Calculate stats
+            total_messages = len(messages)
+            user_messages = sum(1 for m in messages if m.get("role") == "user")
+            assistant_messages = sum(1 for m in messages if m.get("role") == "assistant")
+            
+            # Extract cost data from metadata
+            total_cost = 0.0
+            total_input_tokens = 0
+            total_output_tokens = 0
+            messages_with_cost = 0
+            
+            daily_costs = {}  # date -> cost
+            
+            for m in messages:
+                if m.get("role") == "assistant":
+                    meta = m.get("metadata") or {}
+                    if "cost_usd" in meta:
+                        cost = meta.get("cost_usd", 0)
+                        total_cost += cost
+                        total_input_tokens += meta.get("input_tokens", 0)
+                        total_output_tokens += meta.get("output_tokens", 0)
+                        messages_with_cost += 1
+                        
+                        # Track daily costs
+                        date = m.get("created_at", "")[:10]
+                        daily_costs[date] = daily_costs.get(date, 0) + cost
+            
+            # Calculate averages
+            avg_cost_per_message = total_cost / messages_with_cost if messages_with_cost > 0 else 0
+            
+            # Estimate monthly at current rate
+            days_with_data = len(daily_costs)
+            avg_daily_cost = total_cost / days_with_data if days_with_data > 0 else 0
+            estimated_monthly = avg_daily_cost * 30
+            
+            return {
+                "period_days": days,
+                "total_messages": total_messages,
+                "user_messages": user_messages,
+                "assistant_messages": assistant_messages,
+                "messages_with_cost_tracking": messages_with_cost,
+                "tokens": {
+                    "total_input": total_input_tokens,
+                    "total_output": total_output_tokens,
+                },
+                "costs": {
+                    "total_usd": round(total_cost, 4),
+                    "avg_per_message_usd": round(avg_cost_per_message, 6),
+                    "avg_daily_usd": round(avg_daily_cost, 4),
+                    "estimated_monthly_usd": round(estimated_monthly, 2),
+                },
+                "daily_breakdown": dict(sorted(daily_costs.items())[-7:])  # Last 7 days
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get usage stats: {e}")
+            return {"error": str(e)}
 
 
 # Singleton instance

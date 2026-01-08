@@ -348,3 +348,30 @@ async def letta_status():
     except Exception as e:
         logger.exception("Letta status error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/usage")
+async def chat_usage(days: int = 30):
+    """
+    Get chat usage statistics with cost breakdown.
+    
+    Returns:
+        - Total messages in period
+        - Token usage (input/output)
+        - Costs (total, average, estimated monthly)
+        - Daily breakdown for last 7 days
+    """
+    try:
+        from app.features.chat.storage import get_chat_storage
+        
+        storage = get_chat_storage()
+        stats = await storage.get_usage_stats(days=days)
+        
+        return {
+            "status": "success",
+            **stats
+        }
+        
+    except Exception as e:
+        logger.exception("Usage stats error")
+        raise HTTPException(status_code=500, detail=str(e))

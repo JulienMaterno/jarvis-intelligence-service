@@ -23,6 +23,16 @@ from pydantic import BaseModel, Field
 
 from app.features.chat.tools import TOOLS, execute_tool
 from app.features.memory import get_memory_service
+
+# Cost tracking (per 1M tokens)
+COST_PER_1M_INPUT = {
+    "claude-haiku-4-5-20251001": 0.80,
+    "claude-sonnet-4-5-20250929": 3.00,
+}
+COST_PER_1M_OUTPUT = {
+    "claude-haiku-4-5-20251001": 4.00,
+    "claude-sonnet-4-5-20250929": 15.00,
+}
 from app.features.chat.storage import get_chat_storage
 from app.features.letta import get_letta_service
 
@@ -643,6 +653,15 @@ class ChatService:
                     except Exception as e:
                         logger.warning(f"Failed to save conversation memory: {e}")
                     
+                    # Calculate and log cost
+                    input_tokens = response.usage.input_tokens
+                    output_tokens = response.usage.output_tokens
+                    input_cost = (input_tokens / 1_000_000) * COST_PER_1M_INPUT.get(MODEL_ID, 0.80)
+                    output_cost = (output_tokens / 1_000_000) * COST_PER_1M_OUTPUT.get(MODEL_ID, 4.00)
+                    total_cost = input_cost + output_cost
+                    
+                    logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out)")
+                    
                     # Store raw message exchange in Supabase (for audit trail + Letta batch)
                     # This is processed by Letta in batch later (hourly/daily), not per-message
                     try:
@@ -651,7 +670,13 @@ class ChatService:
                             user_message=request.message,
                             assistant_response=final_response,
                             source="telegram",
-                            tools_used=list(set(tools_used)) if tools_used else None
+                            tools_used=list(set(tools_used)) if tools_used else None,
+                            assistant_metadata={
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "cost_usd": round(total_cost, 6),
+                                "model": MODEL_ID,
+                            }
                         )
                     except Exception as e:
                         logger.warning(f"Failed to store message exchange: {e}")
