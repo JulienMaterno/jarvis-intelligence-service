@@ -186,7 +186,7 @@ class ReflectionsRepository:
             if topic_key:
                 payload["topic_key"] = topic_key
             if transcript_id:
-                payload["source_transcript_id"] = transcript_id
+                payload["transcript_id"] = transcript_id
             if contact_id:
                 payload["contact_id"] = contact_id
             

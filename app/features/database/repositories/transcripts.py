@@ -89,7 +89,7 @@ class TranscriptsRepository:
         try:
             # Check meetings
             meetings = self.client.table("meetings").select("id").eq(
-                "source_transcript_id", transcript_id
+                "transcript_id", transcript_id
             ).execute()
             if meetings.data:
                 result["meeting_ids"] = [m["id"] for m in meetings.data]
@@ -97,7 +97,7 @@ class TranscriptsRepository:
             
             # Check reflections
             reflections = self.client.table("reflections").select("id").eq(
-                "source_transcript_id", transcript_id
+                "transcript_id", transcript_id
             ).execute()
             if reflections.data:
                 result["reflection_ids"] = [r["id"] for r in reflections.data]

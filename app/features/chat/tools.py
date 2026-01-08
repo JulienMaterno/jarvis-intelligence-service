@@ -3005,7 +3005,7 @@ def _get_recent_voice_memo(input: Dict) -> Dict[str, Any]:
         # Find meetings created from this transcript
         meetings = supabase.table("meetings").select(
             "id, title, summary, contact_name, date"
-        ).eq("source_transcript_id", transcript_id).execute()
+        ).eq("transcript_id", transcript_id).execute()
         
         if meetings.data:
             result["created_items"]["meetings"] = [
@@ -3038,7 +3038,7 @@ def _get_recent_voice_memo(input: Dict) -> Dict[str, Any]:
         # Find reflections created from this transcript
         reflections = supabase.table("reflections").select(
             "id, title, topic_key, content, tags"
-        ).eq("source_transcript_id", transcript_id).execute()
+        ).eq("transcript_id", transcript_id).execute()
         
         if reflections.data:
             result["created_items"]["reflections"] = [

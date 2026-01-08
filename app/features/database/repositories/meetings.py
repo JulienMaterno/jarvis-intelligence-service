@@ -107,7 +107,7 @@ class MeetingsRepository:
             }
             
             if transcript_id:
-                payload["source_transcript_id"] = transcript_id
+                payload["transcript_id"] = transcript_id
             
             if calendar_event_id:
                 payload["calendar_event_id"] = calendar_event_id
@@ -171,7 +171,7 @@ class MeetingsRepository:
         """Get meetings linked to a transcript."""
         try:
             result = self.client.table("meetings").select("*").eq(
-                "source_transcript_id", transcript_id
+                "transcript_id", transcript_id
             ).execute()
             return result.data or []
         except Exception as e:
