@@ -326,7 +326,8 @@ class ChatService:
         """Get relevant memories for the current message - ALWAYS included in prompt."""
         try:
             # Search for memories related to the message
-            memories = await self.memory.search(message, limit=8)
+            # Using 18 for rich context without overwhelming the prompt
+            memories = await self.memory.search(message, limit=18)
             
             if not memories:
                 # Even if no matches, note that memory is available
