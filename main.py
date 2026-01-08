@@ -5,11 +5,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.endpoints import router
 from app.core.config import settings
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] %(message)s'
-)
 
 # Add a filter to inject request_id into log records
 class RequestIdFilter(logging.Filter):
@@ -18,8 +13,19 @@ class RequestIdFilter(logging.Filter):
             record.request_id = '-'
         return True
 
-# Add filter to root logger
-logging.getLogger().addFilter(RequestIdFilter())
+
+# Configure logging with filter that handles missing request_id
+_request_id_filter = RequestIdFilter()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Removed request_id from format - use explicit logging
+)
+
+# Add filter to root logger and all existing loggers
+root_logger = logging.getLogger()
+root_logger.addFilter(_request_id_filter)
+for handler in root_logger.handlers:
+    handler.addFilter(_request_id_filter)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):

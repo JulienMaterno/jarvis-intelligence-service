@@ -12,6 +12,7 @@ pytz
 mem0ai
 openai  # Required for embeddings (text-embedding-3-small)
 psycopg2-binary  # Required for pgvector PostgreSQL connection
+psycopg[binary]  # Required by mem0 pgvector (psycopg3)
 
 # Document processing
 PyPDF2
