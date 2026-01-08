@@ -358,8 +358,62 @@ class ChatService:
         except Exception as e:
             logger.warning(f"Could not save memory: {e}")
     
-    def _build_system_prompt(self, memory_context: str = "") -> str:
-        """Build system prompt with current date/time/location context and memory."""
+    def _get_recent_journals_context(self, limit: int = 3) -> str:
+        """
+        Get recent journal entries to provide context about user's current state.
+        
+        This gives the AI awareness of:
+        - Current mood and energy levels
+        - Recent activities and focus areas
+        - Tomorrow's planned tasks
+        - Recent challenges and wins
+        """
+        try:
+            from app.core.database import supabase
+            from datetime import datetime, timedelta
+            
+            # Get journals from the last 7 days
+            seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            
+            result = supabase.table("journals").select(
+                "date, title, summary, mood, energy, tomorrow_focus, key_events, challenges, wins"
+            ).gte("date", seven_days_ago).order("date", desc=True).limit(limit).execute()
+            
+            if not result.data:
+                return ""
+            
+            journal_lines = []
+            for j in result.data:
+                date_str = j.get("date", "Unknown date")
+                mood = j.get("mood") or "Not recorded"
+                energy = j.get("energy") or "Not recorded"
+                summary = j.get("summary") or j.get("title") or "No summary"
+                
+                # Truncate summary if too long
+                if len(summary) > 300:
+                    summary = summary[:300] + "..."
+                
+                journal_lines.append(f"**{date_str}** (Mood: {mood}, Energy: {energy})")
+                journal_lines.append(f"  {summary}")
+                
+                # Add tomorrow's focus if available (most relevant for recent entries)
+                tomorrow_focus = j.get("tomorrow_focus")
+                if tomorrow_focus and isinstance(tomorrow_focus, list) and len(tomorrow_focus) > 0:
+                    focus_str = ", ".join(tomorrow_focus[:3])
+                    journal_lines.append(f"  → Focus: {focus_str}")
+                
+                journal_lines.append("")
+            
+            if journal_lines:
+                return "\n\n**RECENT JOURNAL CONTEXT (user's current state):**\n" + "\n".join(journal_lines)
+            return ""
+            
+        except Exception as e:
+            logger.warning(f"Could not get journal context: {e}")
+            return ""
+    
+    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "") -> str:
+        """Build system prompt with current date/time/location, memory, and journal context."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -386,6 +440,10 @@ class ChatService:
             user_location=f"{location_str} ({timezone_str})"
         )
         
+        # Append journal context (user's current mood/focus)
+        if journal_context:
+            base_prompt += journal_context
+        
         # Append memory context if available
         if memory_context:
             base_prompt += memory_context
@@ -398,8 +456,11 @@ class ChatService:
             # Get relevant memories for this message
             memory_context = await self._get_memory_context(request.message)
             
-            # Build dynamic system prompt with current context and memory
-            system_prompt = self._build_system_prompt(memory_context)
+            # Get recent journal context (mood, focus, recent activities)
+            journal_context = self._get_recent_journals_context(limit=3)
+            
+            # Build dynamic system prompt with current context, journals, and memory
+            system_prompt = self._build_system_prompt(memory_context, journal_context)
             
             # Build conversation messages
             messages = []
