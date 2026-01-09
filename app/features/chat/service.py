@@ -704,7 +704,7 @@ WEB CHAT MODE - RESPONSE STYLE:
                 logger.info(f"Calling Anthropic streaming API:")
                 logger.info(f"  Model: {model}")
                 logger.info(f"  Max tokens: 8000")
-                logger.info(f"  Messages: {json.dumps(messages, indent=2)[:500]}")
+                logger.info(f"  Messages count: {len(messages)}")
                 logger.info(f"  Tools count: {len(TOOLS)}")
 
                 # Use Anthropic's streaming API
