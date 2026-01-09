@@ -83,6 +83,10 @@ app.add_middleware(RequestIdMiddleware)
 
 app.include_router(router, prefix="/api/v1")
 
+# Also mount chat routes at /v1 for OpenAI compatibility (LibreChat, etc.)
+from app.api.routes import chat as chat_routes
+app.include_router(chat_routes.router, prefix="/v1")
+
 @app.get("/")
 async def root():
     return {"message": "Jarvis Intelligence Service Running"}
