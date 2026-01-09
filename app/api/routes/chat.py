@@ -275,13 +275,28 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                             yield f"data: {json.dumps(chunk_data)}\n\n"
 
                         elif chunk["type"] == "tool_use":
-                            # Tool being invoked (optional: send as metadata)
-                            logger.info(f"Tool use: {chunk['tool']}")
-                            # Could yield a special chunk here if LibreChat supports it
+                            # Send tool use as visible text chunk so user sees what's happening
+                            tool_name = chunk['tool']
+                            logger.info(f"Tool use: {tool_name}")
+                            # Show tool invocation to user
+                            tool_chunk = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": f"\n\n🔧 *Using tool: {tool_name}...*\n\n"},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(tool_chunk)}\n\n"
 
                         elif chunk["type"] == "tool_result":
-                            # Tool result (optional: send as metadata)
-                            logger.info(f"Tool result: {chunk['tool']}")
+                            # Tool result - optionally show summary
+                            tool_name = chunk['tool']
+                            logger.info(f"Tool result: {tool_name}")
+                            # Don't flood with result details, just acknowledge
 
                         elif chunk["type"] == "done":
                             # Final chunk
