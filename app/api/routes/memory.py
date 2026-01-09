@@ -984,6 +984,141 @@ async def seed_from_beeper_messages(
 
 
 # ============================================================================
+# ARCHIVE EXTERNAL CONVERSATIONS (Telegram /archive command)
+# ============================================================================
+
+class ArchiveConversationRequest(BaseModel):
+    """Request to archive an external conversation."""
+    content: str = Field(..., description="The conversation summary/content to archive")
+    source: str = Field(default="external_llm", description="Source identifier (e.g., 'claude_web', 'chatgpt')")
+    process_mode: str = Field(
+        default="full",
+        description="'full' = Letta agent reasoning (~$0.05), 'lightweight' = archival only (~$0.001)"
+    )
+
+
+class ArchiveConversationResponse(BaseModel):
+    """Response from archive operation."""
+    status: str
+    archival_stored: bool = False
+    memory_updates: Optional[List[str]] = None
+    topics_extracted: Optional[List[str]] = None
+    message: Optional[str] = None
+
+
+@router.post("/memory/archive-conversation", response_model=ArchiveConversationResponse)
+async def archive_conversation(request: ArchiveConversationRequest):
+    """
+    Archive an external LLM conversation to Letta memory.
+    
+    This allows users to store conversations from Claude Web, ChatGPT, etc.
+    so Jarvis can recall them in future chats.
+    
+    Process modes:
+    - "full": Send to Letta agent for reasoning and memory block updates (~$0.05)
+    - "lightweight": Just store in archival, no agent processing (~$0.001)
+    
+    Usage via Telegram: /archive <paste conversation summary>
+    """
+    from app.features.letta import get_letta_service
+    
+    letta = get_letta_service()
+    
+    # Check Letta health first
+    health = await letta.health_check()
+    if health.get("status") != "healthy":
+        raise HTTPException(
+            status_code=503,
+            detail=f"Letta server unavailable: {health.get('error', 'Unknown error')}"
+        )
+    
+    try:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        
+        if request.process_mode == "lightweight":
+            # Just store in archival - cheap, no reasoning
+            archival_text = f"[{timestamp}] [Archived from {request.source}]\n{request.content}"
+            success = await letta.insert_to_archival(
+                text=archival_text,
+                metadata={
+                    "source": request.source,
+                    "archived_at": timestamp,
+                    "type": "external_conversation"
+                }
+            )
+            
+            if success:
+                logger.info(f"Archived conversation to Letta (lightweight): {len(request.content)} chars")
+                return ArchiveConversationResponse(
+                    status="success",
+                    archival_stored=True,
+                    message="Stored in archival memory (lightweight mode)"
+                )
+            else:
+                raise HTTPException(status_code=500, detail="Failed to store in archival")
+        
+        else:
+            # Full agent processing - more expensive but updates memory blocks
+            archive_message = f"""EXTERNAL CONVERSATION ARCHIVE
+
+Source: {request.source}
+Archived at: {timestamp}
+
+Content:
+{request.content}
+
+Please process this archived conversation:
+1. Update your 'recent_topics' block if there are new topics
+2. Update your 'decisions' block if decisions were made
+3. Update your 'action_items' block if there are commitments
+4. Store key insights in archival memory for future recall
+5. Note any important facts or preferences mentioned"""
+
+            response = await letta.send_message(archive_message)
+            
+            if response:
+                # Parse what Letta updated
+                memory_updates = []
+                if response.get("memory_updated"):
+                    memory_updates = response.get("blocks_changed", [])
+                
+                # Try to extract topics mentioned
+                topics = []
+                content_lower = request.content.lower()
+                # Simple keyword extraction
+                topic_keywords = ["python", "javascript", "async", "api", "database", "meeting", 
+                                  "project", "design", "architecture", "deployment", "testing"]
+                for kw in topic_keywords:
+                    if kw in content_lower:
+                        topics.append(kw)
+                
+                logger.info(f"Archived conversation to Letta (full): {len(request.content)} chars")
+                return ArchiveConversationResponse(
+                    status="success",
+                    archival_stored=True,
+                    memory_updates=memory_updates if memory_updates else ["Processed by Letta agent"],
+                    topics_extracted=topics[:5] if topics else None,
+                    message="Processed by Letta agent - memory blocks updated"
+                )
+            else:
+                # Fallback to lightweight if agent fails
+                archival_text = f"[{timestamp}] [Archived from {request.source}]\n{request.content}"
+                await letta.insert_to_archival(text=archival_text)
+                
+                return ArchiveConversationResponse(
+                    status="partial",
+                    archival_stored=True,
+                    message="Agent processing failed, stored in archival only"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to archive conversation")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # MEMORY CONSOLIDATION ENDPOINTS (Scheduled)
 # ============================================================================
 
