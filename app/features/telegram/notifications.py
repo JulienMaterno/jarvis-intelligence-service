@@ -113,16 +113,26 @@ def build_processing_result_message(
     lines = []
     
     # Header based on category
-    emoji_map = {
-        "meeting": "📅",
-        "journal": "📓",
-        "reflection": "💭",
-        "task_planning": "✅",
-        "other": "📝"
+    category_descriptions = {
+        "meeting": "📅 *Meeting recorded!*",
+        "journal": "📓 *Journal entry created!*",
+        "reflection": "💭 *Reflection saved!*",
+        "task_planning": "✅ *Tasks extracted!*",
+        "other": "📝 *Voice memo transcribed*"
     }
-    emoji = emoji_map.get(category, "📝")
-    lines.append(f"{emoji} *Voice memo processed!*")
+    lines.append(category_descriptions.get(category, "📝 *Voice memo processed*"))
     lines.append("")
+    
+    # For "other" category, explain what happened
+    if category == "other":
+        lines.append("_Category: General/Unclassified_")
+        if transcript_preview:
+            # Show preview of what was transcribed
+            preview = transcript_preview[:150] + "..." if len(transcript_preview) > 150 else transcript_preview
+            lines.append(f'"{preview}"')
+        lines.append("")
+        lines.append("Transcript saved. Not classified as meeting/journal/reflection.")
+        lines.append("")
     
     # What was created
     created_items = []
@@ -157,9 +167,15 @@ def build_processing_result_message(
             else:
                 created_items.append(f"💭 Reflection: {title}")
     
-    if db_records.get("task_ids"):
-        task_count = len(db_records["task_ids"])
-        created_items.append(f"✅ {task_count} task(s) created")
+    # Show task titles, not just count
+    tasks = analysis.get("tasks", [])
+    if tasks:
+        created_items.append(f"✅ *Tasks ({len(tasks)}):*")
+        for t in tasks[:5]:  # Show up to 5 tasks
+            task_title = t.get("title", "Untitled task")
+            created_items.append(f"    • {task_title}")
+        if len(tasks) > 5:
+            created_items.append(f"    _...and {len(tasks) - 5} more_")
     
     if created_items:
         lines.append("*Created:*")

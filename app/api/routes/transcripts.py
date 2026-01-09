@@ -24,14 +24,17 @@ async def _seed_memory_from_analysis(analysis: dict, source_file: str) -> None:
         logger.warning(f"Failed to seed memories: {e}")
 
 
-async def _send_processing_notification(db_records: dict, analysis: dict) -> None:
+async def _send_processing_notification(db_records: dict, analysis: dict, transcript_text: str = None) -> None:
     """Send Telegram notification with processing results."""
     try:
         category = analysis.get("primary_category", "other")
+        # For "other" category, include transcript preview so user knows what was captured
+        preview = transcript_text[:200] if transcript_text else None
         message = build_processing_result_message(
             category=category,
             db_records=db_records,
-            analysis=analysis
+            analysis=analysis,
+            transcript_preview=preview
         )
         await send_telegram_message(message)
         logger.info("Sent Telegram notification for transcript processing")
@@ -300,7 +303,7 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
 
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
-        background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        background_tasks.add_task(_send_processing_notification, db_records, analysis, transcript_text)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, filename)
         
         # Send meeting feedback for EACH meeting (even if created with journal)
@@ -499,7 +502,7 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
 
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
-        background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        background_tasks.add_task(_send_processing_notification, db_records, analysis, request.transcript)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, request.filename)
         
         # Send meeting feedback for EACH meeting (even if created with journal)
@@ -711,7 +714,7 @@ async def process_meeting_transcript(
         
         # Schedule background tasks
         background_tasks.add_task(trigger_syncs_for_records, db_records)
-        background_tasks.add_task(_send_processing_notification, db_records, analysis)
+        background_tasks.add_task(_send_processing_notification, db_records, analysis, request.transcript)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, "screenpipe_meeting")
         
         # Send meeting feedback notifications
