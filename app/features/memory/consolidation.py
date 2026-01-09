@@ -220,6 +220,10 @@ class MemoryConsolidationService:
         """
         Extract memories from Beeper messages (WhatsApp, LinkedIn, Slack).
         
+        BATCHED: All conversations from all chats are combined into a single
+        Claude call to minimize API costs. The model extracts memories from
+        the combined context.
+        
         This is RICH data - people share lots of info in casual messages.
         """
         since = datetime.now(timezone.utc) - timedelta(hours=hours_back)
@@ -229,7 +233,7 @@ class MemoryConsolidationService:
             "id, content, is_outgoing, timestamp, beeper_chat_id"
         ).gte(
             "timestamp", since.isoformat()
-        ).order("timestamp", desc=True).limit(200).execute()
+        ).order("timestamp", desc=True).limit(500).execute()
         
         messages = result.data or []
         if not messages:
@@ -257,34 +261,44 @@ class MemoryConsolidationService:
         except Exception as e:
             logger.warning(f"Could not fetch chat names: {e}")
         
-        count = 0
+        # BATCHED: Build ALL conversations into one text block
+        all_conversations = []
         for chat_id, chat_msgs in chats.items():
-            # Build conversation text with speaker attribution
             chat_info = chat_names.get(chat_id, {"name": "Unknown", "platform": "unknown"})
             contact_name = chat_info["name"]
             platform = chat_info["platform"]
             
-            conversation = []
+            conversation_lines = []
             for m in sorted(chat_msgs, key=lambda x: x.get("timestamp", "")):
                 speaker = "Aaron" if m.get("is_outgoing") else contact_name
                 content = m.get("content", "")
                 if content and len(content.strip()) > 0:
-                    conversation.append(f"{speaker}: {content}")
+                    conversation_lines.append(f"{speaker}: {content}")
             
-            if len(conversation) < 2:  # Skip single-message "conversations"
-                continue
-            
-            text = f"[{platform.upper()} conversation with {contact_name}]\n" + "\n".join(conversation)
-            
-            if len(text) > 50:
-                extracted = await self._mem0.extract_from_text(
-                    text=text,
-                    source="beeper",
-                    source_id=chat_id
+            if len(conversation_lines) >= 2:  # Skip single-message "conversations"
+                all_conversations.append(
+                    f"=== {platform.upper()} conversation with {contact_name} ===\n" + 
+                    "\n".join(conversation_lines)
                 )
-                count += extracted
         
-        return count
+        if not all_conversations:
+            return 0
+        
+        # SINGLE Claude call for all conversations
+        combined_text = "\n\n".join(all_conversations)
+        
+        # Truncate if extremely long (shouldn't happen with 500 msg limit)
+        if len(combined_text) > 50000:
+            combined_text = combined_text[:50000] + "\n\n[... truncated ...]"
+        
+        logger.info(f"Batched {len(all_conversations)} conversations ({len(messages)} messages) for memory extraction")
+        
+        extracted = await self._mem0.extract_from_text(
+            text=combined_text,
+            source="beeper_batch",
+        )
+        
+        return extracted
     
     async def _extract_from_transcripts(self, hours_back: int = 24) -> int:
         """
@@ -327,9 +341,15 @@ class MemoryConsolidationService:
         """
         since = datetime.now(timezone.utc) - timedelta(hours=hours_back)
         
-        result = self._db.table("meetings").select(
-            "id, title, summary, topics_discussed, people_mentioned, action_items, contact_name, date"
-        ).gte("created_at", since.isoformat()).limit(20).execute()
+        # Use only columns that definitely exist in the database
+        # Avoid action_items as it may not exist in all deployments
+        try:
+            result = self._db.table("meetings").select(
+                "id, title, summary, topics_discussed, people_mentioned, contact_name, date"
+            ).gte("created_at", since.isoformat()).limit(20).execute()
+        except Exception as e:
+            logger.warning(f"Could not query meetings: {e}")
+            return 0
         
         meetings = result.data or []
         if not meetings:
@@ -378,9 +398,15 @@ class MemoryConsolidationService:
         """
         since = datetime.now(timezone.utc) - timedelta(hours=hours_back)
         
-        result = self._db.table("journals").select(
-            "id, date, title, content, mood, energy, wins, challenges, tomorrow_focus, gratitude"
-        ).gte("created_at", since.isoformat()).limit(10).execute()
+        # Use only columns that definitely exist in the database
+        # Note: wins, challenges, energy may not exist in all deployments
+        try:
+            result = self._db.table("journals").select(
+                "id, date, title, content, mood, tomorrow_focus, gratitude"
+            ).gte("created_at", since.isoformat()).limit(10).execute()
+        except Exception as e:
+            logger.warning(f"Could not query journals: {e}")
+            return 0
         
         journals = result.data or []
         if not journals:
@@ -394,19 +420,14 @@ class MemoryConsolidationService:
                 parts.append(f"Journal entry for {j['date']}")
             if j.get("mood"):
                 parts.append(f"Mood: {j['mood']}")
-            if j.get("energy"):
-                parts.append(f"Energy: {j['energy']}")
             if j.get("content"):
                 parts.append(f"Content: {j['content'][:500]}")  # Truncate long content
-            if j.get("wins"):
-                wins = j["wins"] if isinstance(j["wins"], list) else [j["wins"]]
-                parts.append(f"Wins: {', '.join(str(w) for w in wins)}")
-            if j.get("challenges"):
-                challenges = j["challenges"] if isinstance(j["challenges"], list) else [j["challenges"]]
-                parts.append(f"Challenges: {', '.join(str(c) for c in challenges)}")
             if j.get("tomorrow_focus"):
                 focus = j["tomorrow_focus"] if isinstance(j["tomorrow_focus"], list) else [j["tomorrow_focus"]]
                 parts.append(f"Tomorrow's focus: {', '.join(str(f) for f in focus)}")
+            if j.get("gratitude"):
+                gratitude = j["gratitude"] if isinstance(j["gratitude"], list) else [j["gratitude"]]
+                parts.append(f"Gratitude: {', '.join(str(g) for g in gratitude)}")
             
             text = "\n".join(parts)
             

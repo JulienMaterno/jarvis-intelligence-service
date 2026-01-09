@@ -1,6 +1,7 @@
 import logging
 import uuid
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.endpoints import router
 from app.core.config import settings
@@ -60,6 +61,21 @@ app = FastAPI(
     title="Jarvis Intelligence Service",
     description="AI Analysis and Reasoning Service for Jarvis",
     version="1.0.0"
+)
+
+# Add CORS middleware for web chat access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # LibreChat dev server
+        "http://localhost:3080",  # LibreChat alternative port
+        "http://localhost:5173",  # Vite dev server
+        "https://*.vercel.app",   # Vercel deployments
+        # Add your production URL when deployed
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Add request ID middleware

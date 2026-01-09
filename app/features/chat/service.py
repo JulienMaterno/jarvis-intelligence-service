@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 import anthropic
 from pydantic import BaseModel, Field
 
+# Import config to ensure .env is loaded
+from app.core.config import settings
+
 from app.features.chat.tools import TOOLS, execute_tool
 from app.features.memory import get_memory_service
 
@@ -55,6 +58,8 @@ class ChatRequest(BaseModel):
     message: str
     conversation_history: List[ChatMessage] = Field(default_factory=list)
     user_context: Optional[str] = None
+    client_type: str = "telegram"  # "telegram" or "web" - controls response style
+    model: Optional[str] = None  # Allow model selection (e.g., "claude-sonnet-4-5-20250929")
 
 
 class ChatResponse(BaseModel):
@@ -453,7 +458,7 @@ class ChatService:
             
             # Note: Using only columns that exist in the journals table
             result = supabase.table("journals").select(
-                "date, title, summary, mood, tomorrow_focus, challenges, wins"
+                "date, title, content, mood, tomorrow_focus, gratitude"
             ).gte("date", seven_days_ago).order("date", desc=True).limit(limit).execute()
             
             if not result.data:
@@ -463,14 +468,14 @@ class ChatService:
             for j in result.data:
                 date_str = j.get("date", "Unknown date")
                 mood = j.get("mood") or "Not recorded"
-                summary = j.get("summary") or j.get("title") or "No summary"
+                content = j.get("content") or j.get("title") or "No content"
                 
-                # Truncate summary if too long
-                if len(summary) > 300:
-                    summary = summary[:300] + "..."
+                # Truncate content if too long
+                if len(content) > 300:
+                    content = content[:300] + "..."
                 
                 journal_lines.append(f"**{date_str}** (Mood: {mood})")
-                journal_lines.append(f"  {summary}")
+                journal_lines.append(f"  {content}")
                 
                 # Add tomorrow's focus if available (most relevant for recent entries)
                 tomorrow_focus = j.get("tomorrow_focus")
@@ -617,21 +622,157 @@ class ChatService:
             current_time=current_time,
             user_location=f"{location_str} ({timezone_str})"
         )
-        
+
         # Append Letta episodic context first (conversation history, topics, decisions)
         if letta_context:
             base_prompt += letta_context
-        
+
         # Append journal context (user's current mood/focus)
         if journal_context:
             base_prompt += journal_context
-        
+
         # Append Mem0 semantic memory context last
         if memory_context:
             base_prompt += memory_context
-        
+
         return base_prompt
+
+    def _add_client_specific_instructions(self, base_prompt: str, client_type: str) -> str:
+        """
+        Add client-specific response style instructions.
+
+        Telegram: Short, concise, mobile-optimized
+        Web: Detailed, comprehensive, desktop reading experience
+        """
+        if client_type == "telegram":
+            return base_prompt + """
+
+TELEGRAM MODE - RESPONSE STYLE:
+- Keep responses SHORT and CONCISE (1-3 sentences when possible)
+- Use simple Markdown (bold, italic, code only - NO tables or complex formatting)
+- Prioritize mobile readability
+- Ask before long operations
+- Get to the point quickly
+"""
+        else:  # web or default
+            return base_prompt + """
+
+WEB CHAT MODE - RESPONSE STYLE:
+- Provide DETAILED, THOROUGH explanations
+- Use rich Markdown: tables, code blocks, numbered lists, bullet points
+- Include context and reasoning
+- Show intermediate steps for complex operations
+- Format for desktop reading experience
+- Be comprehensive and explanatory
+"""
     
+    async def process_message_stream(self, request: ChatRequest):
+        """
+        Process a user message and yield streaming chunks.
+
+        Yields dictionaries with:
+        - {"type": "content", "text": "..."} for text chunks
+        - {"type": "tool_use", "tool": "...", "input": {...}} for tool calls
+        - {"type": "tool_result", "tool": "...", "output": {...}} for tool results
+        - {"type": "done", "tools_used": [...]} when complete
+        - {"type": "error", "message": "..."} on error
+        """
+        try:
+            # Get context (same as non-streaming)
+            memory_context = await self._get_memory_context(request.message)
+            journal_context = self._get_recent_journals_context(limit=3)
+            letta_context = await self._get_letta_context()
+
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
+            system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
+
+            model = request.model or MODEL_ID
+            logger.info(f"Streaming with model: {model}, client_type: {request.client_type}")
+
+            # Build messages
+            messages = []
+            for msg in request.conversation_history[-10:]:
+                messages.append({"role": msg.role, "content": msg.content})
+            messages.append({"role": "user", "content": request.message})
+
+            tools_used = []
+            tool_call_count = 0
+
+            # Tool loop with streaming
+            while tool_call_count < MAX_TOOL_CALLS:
+                # Log the request parameters for debugging
+                logger.info(f"Calling Anthropic streaming API:")
+                logger.info(f"  Model: {model}")
+                logger.info(f"  Max tokens: 8000")
+                logger.info(f"  Messages: {json.dumps(messages, indent=2)[:500]}")
+                logger.info(f"  Tools count: {len(TOOLS)}")
+
+                # Use Anthropic's streaming API
+                try:
+                    with self.client.messages.stream(
+                        model=model,
+                        max_tokens=8000,
+                        system=system_prompt,
+                        tools=TOOLS,
+                        messages=messages
+                    ) as stream:
+                        # Stream text chunks in real-time
+                        for text in stream.text_stream:
+                            yield {"type": "content", "text": text}
+
+                        # Get the final message after streaming completes
+                        response = stream.get_final_message()
+                except anthropic.BadRequestError as e:
+                    logger.error(f"Anthropic API error: {e}")
+                    yield {"type": "error", "message": str(e)}
+                    return
+
+                # Check if Claude wants to use tools
+                if response.stop_reason == "tool_use":
+                    tool_call_count += 1
+
+                    assistant_content = response.content
+                    tool_results = []
+
+                    for block in assistant_content:
+                        if block.type == "tool_use":
+                            tool_name = block.name
+                            tool_input = block.input
+                            tool_id = block.id
+
+                            logger.info(f"🔧 Tool invoked: {tool_name}")
+                            tools_used.append(tool_name)
+
+                            # Notify client about tool use
+                            yield {"type": "tool_use", "tool": tool_name, "input": tool_input}
+
+                            # Execute tool
+                            result = execute_tool(tool_name, tool_input, last_user_message=request.message)
+                            logger.info(f"   Result: {json.dumps(result, indent=2)[:500]}")
+
+                            # Notify client about tool result
+                            yield {"type": "tool_result", "tool": tool_name, "output": result}
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": json.dumps(result)
+                            })
+
+                    # Add to messages for next iteration
+                    messages.append({"role": "assistant", "content": assistant_content})
+                    messages.append({"role": "user", "content": tool_results})
+                else:
+                    # Done - no more tool calls
+                    break
+
+            # Final event
+            yield {"type": "done", "tools_used": tools_used}
+
+        except Exception as e:
+            logger.exception("Streaming error")
+            yield {"type": "error", "message": str(e)}
+
     async def process_message(self, request: ChatRequest) -> ChatResponse:
         """Process a user message and return a response."""
         try:
@@ -646,6 +787,13 @@ class ChatService:
             
             # Build dynamic system prompt with current context, journals, Letta, and memory
             system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
+
+            # Add client-specific response style instructions (telegram vs web)
+            system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
+
+            # Use specified model or default
+            model = request.model or MODEL_ID
+            logger.info(f"Using model: {model}, client_type: {request.client_type}")
             
             # Build conversation messages
             messages = []
@@ -675,9 +823,9 @@ class ChatService:
             
             while tool_call_count < MAX_TOOL_CALLS:
                 response = self.client.messages.create(
-                    model=MODEL_ID,
-                    max_tokens=2000,
-                    system=system_prompt,  # Use dynamic prompt with date/time/location
+                    model=model,  # Use selected model
+                    max_tokens=8000,  # Increased for web chat detailed responses
+                    system=system_prompt,  # Use dynamic prompt with date/time/location and client-specific style
                     tools=TOOLS,
                     messages=messages
                 )
@@ -755,14 +903,14 @@ class ChatService:
                     except Exception as e:
                         logger.warning(f"Failed to save conversation memory: {e}")
                     
-                    # Calculate and log cost
+                    # Calculate and log cost using selected model
                     input_tokens = response.usage.input_tokens
                     output_tokens = response.usage.output_tokens
-                    input_cost = (input_tokens / 1_000_000) * COST_PER_1M_INPUT.get(MODEL_ID, 0.80)
-                    output_cost = (output_tokens / 1_000_000) * COST_PER_1M_OUTPUT.get(MODEL_ID, 4.00)
+                    input_cost = (input_tokens / 1_000_000) * COST_PER_1M_INPUT.get(model, 0.80)
+                    output_cost = (output_tokens / 1_000_000) * COST_PER_1M_OUTPUT.get(model, 4.00)
                     total_cost = input_cost + output_cost
-                    
-                    logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out)")
+
+                    logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | Model: {model}")
                     
                     # Store raw message exchange in Supabase (for audit trail + Letta batch)
                     # This is processed by Letta in batch later (hourly/daily), not per-message

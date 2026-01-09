@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override=True to override empty env vars on Windows)
+load_dotenv(override=True)
 
 _SUPABASE_URL = os.getenv('SUPABASE_URL')
 _SUPABASE_KEY = os.getenv('SUPABASE_KEY')

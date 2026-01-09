@@ -4,9 +4,11 @@ Chat API Routes.
 Provides conversational AI endpoint for Telegram and other clients.
 """
 
+import json
 import logging
-from typing import Optional
+from typing import Optional, AsyncGenerator
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.features.chat import ChatRequest, ChatResponse, get_chat_service
@@ -29,13 +31,13 @@ class LocationUpdate(BaseModel):
 async def chat(request: ChatRequest):
     """
     Process a conversational message with tool use.
-    
+
     This endpoint allows natural language interaction with the knowledge database.
     Claude will automatically use tools to:
     - Query data (meetings, contacts, tasks, etc.)
     - Create records (tasks, reflections)
     - Search and retrieve information
-    
+
     Example requests:
     - "When did I last meet John?"
     - "Create a task to follow up with Sarah"
@@ -45,13 +47,56 @@ async def chat(request: ChatRequest):
     try:
         service = get_chat_service()
         response = await service.process_message(request)
-        
+
         logger.info(f"Chat processed. Tools used: {response.tools_used}")
         return response
-        
+
     except Exception as e:
         logger.exception("Chat endpoint error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Streaming chat endpoint using Server-Sent Events (SSE).
+
+    Streams Claude's response word-by-word as it's generated.
+    This provides a better UX for web clients (like LibreChat).
+
+    Stream format (newline-delimited JSON):
+    - {"type": "content", "text": "word"}  - Text chunks
+    - {"type": "tool_use", "name": "get_meetings", "input": {...}}  - Tool calls
+    - {"type": "tool_result", "name": "get_meetings", "output": "..."}  - Tool results
+    - {"type": "done", "tools_used": [...]}  - End of stream
+    - {"type": "error", "message": "..."}  - Error occurred
+    """
+    async def generate() -> AsyncGenerator[str, None]:
+        try:
+            service = get_chat_service()
+
+            # For now, use the non-streaming endpoint and return the full response
+            # TODO: Implement true streaming with anthropic.messages.stream()
+            response = await service.process_message(request)
+
+            # Stream the response character by character for better UX
+            words = response.response.split(' ')
+            for i, word in enumerate(words):
+                chunk = word + (' ' if i < len(words) - 1 else '')
+                yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
+
+            # Send tools used
+            if response.tools_used:
+                yield f"data: {json.dumps({'type': 'tool_summary', 'tools': response.tools_used})}\n\n"
+
+            # Send done event
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        except Exception as e:
+            logger.exception("Streaming chat error")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.post("/location")
@@ -142,14 +187,238 @@ async def get_location():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# OPENAI-COMPATIBLE ENDPOINTS (for LibreChat integration)
+# =============================================================================
+
+class OpenAIChatMessage(BaseModel):
+    """OpenAI format chat message."""
+    role: str
+    content: str
+
+class OpenAIChatRequest(BaseModel):
+    """OpenAI-compatible chat completion request."""
+    model: str
+    messages: list[OpenAIChatMessage]
+    stream: bool = False
+    temperature: Optional[float] = 1.0
+    max_tokens: Optional[int] = None
+
+class OpenAIChatResponse(BaseModel):
+    """OpenAI-compatible chat completion response."""
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: list[dict]
+    usage: dict
+
+@router.post("/chat/completions")
+async def openai_chat_completions(request: OpenAIChatRequest):
+    """
+    OpenAI-compatible chat completions endpoint for LibreChat integration.
+
+    Converts OpenAI format to Jarvis format and back.
+    """
+    import time
+    try:
+        # Convert OpenAI messages to Jarvis format
+        if not request.messages:
+            raise HTTPException(status_code=400, detail="messages is required")
+
+        # Last message should be the user message
+        last_message = request.messages[-1]
+        if last_message.role != "user":
+            raise HTTPException(status_code=400, detail="Last message must be from user")
+
+        # Convert conversation history
+        conversation_history = []
+        for msg in request.messages[:-1]:
+            if msg.role in ["user", "assistant"]:
+                conversation_history.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+
+        # Create Jarvis request
+        jarvis_request = ChatRequest(
+            message=last_message.content,
+            conversation_history=conversation_history,
+            client_type="web",
+            model=request.model
+        )
+
+        service = get_chat_service()
+
+        if request.stream:
+            # Streaming response using real Anthropic streaming
+            async def generate() -> AsyncGenerator[str, None]:
+                try:
+                    chat_id = f"chatcmpl-{int(time.time())}"
+                    created_time = int(time.time())
+
+                    # Stream from Anthropic via our streaming service
+                    async for chunk in service.process_message_stream(jarvis_request):
+                        if chunk["type"] == "content":
+                            # Text content from Claude
+                            chunk_data = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": chunk["text"]},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+
+                        elif chunk["type"] == "tool_use":
+                            # Tool being invoked (optional: send as metadata)
+                            logger.info(f"Tool use: {chunk['tool']}")
+                            # Could yield a special chunk here if LibreChat supports it
+
+                        elif chunk["type"] == "tool_result":
+                            # Tool result (optional: send as metadata)
+                            logger.info(f"Tool result: {chunk['tool']}")
+
+                        elif chunk["type"] == "done":
+                            # Final chunk
+                            final_chunk = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "stop"
+                                }]
+                            }
+                            yield f"data: {json.dumps(final_chunk)}\n\n"
+                            yield "data: [DONE]\n\n"
+
+                        elif chunk["type"] == "error":
+                            # Error during streaming
+                            error_chunk = {
+                                "error": {
+                                    "message": chunk["message"],
+                                    "type": "internal_error"
+                                }
+                            }
+                            yield f"data: {json.dumps(error_chunk)}\n\n"
+                            break
+
+                except Exception as e:
+                    logger.exception("OpenAI streaming error")
+                    error_chunk = {
+                        "error": {
+                            "message": str(e),
+                            "type": "internal_error"
+                        }
+                    }
+                    yield f"data: {json.dumps(error_chunk)}\n\n"
+
+            return StreamingResponse(generate(), media_type="text/event-stream")
+        else:
+            # Non-streaming response
+            response = await service.process_message(jarvis_request)
+
+            return OpenAIChatResponse(
+                id=f"chatcmpl-{int(time.time())}",
+                object="chat.completion",
+                created=int(time.time()),
+                model=request.model,
+                choices=[{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": response.response
+                    },
+                    "finish_reason": "stop"
+                }],
+                usage={
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+            )
+
+    except Exception as e:
+        logger.exception("OpenAI chat completions error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/models")
+async def openai_list_models():
+    """
+    OpenAI-compatible models endpoint for LibreChat.
+
+    Returns list of available models in OpenAI format.
+    """
+    import time
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "claude-haiku-4-5-20251001",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "anthropic",
+                "permission": [],
+                "root": "claude-haiku-4-5-20251001",
+                "parent": None
+            },
+            {
+                "id": "claude-sonnet-4-5-20250929",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "anthropic",
+                "permission": [],
+                "root": "claude-sonnet-4-5-20250929",
+                "parent": None
+            }
+        ]
+    }
+
+
+@router.get("/chat/models")
+async def get_available_models():
+    """List available Claude models with pricing."""
+    return {
+        "models": [
+            {
+                "id": "claude-haiku-4-5-20251001",
+                "name": "Claude 3.5 Haiku",
+                "provider": "anthropic",
+                "cost_per_1m_input": 0.80,
+                "cost_per_1m_output": 4.00,
+                "description": "Fast and cost-effective for most tasks",
+                "max_tokens": 8000
+            },
+            {
+                "id": "claude-sonnet-4-5-20250929",
+                "name": "Claude 3.5 Sonnet",
+                "provider": "anthropic",
+                "cost_per_1m_input": 3.00,
+                "cost_per_1m_output": 15.00,
+                "description": "Highest quality reasoning and analysis",
+                "max_tokens": 8000
+            }
+        ],
+        "default": "claude-haiku-4-5-20251001"
+    }
+
+
 @router.get("/chat/health")
 async def chat_health():
     """Check if chat service is healthy."""
     from app.features.letta import get_letta_service
-    
+
     letta = get_letta_service()
     letta_status = await letta.health_check()
-    
+
     return {
         "status": "ok",
         "model": "claude-haiku-4-5-20251001",
