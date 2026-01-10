@@ -36,6 +36,7 @@ def build_multi_analysis_prompt(
             "word_count": len(transcript.split()),
             "is_long": len(transcript) > 50000,  # ~10K words
             "is_very_long": len(transcript) > 100000,  # ~20K words
+            "is_short": len(transcript.split()) < 100,  # Quick reminder/note
         }
     
     # Scale summary length based on transcript length
@@ -49,6 +50,14 @@ def build_multi_analysis_prompt(
     elif word_count > 3000:
         summary_guidance = "5-8 sentences"
         content_guidance = "Capture 70-80% of substance"
+    elif word_count < 50:
+        # Very short - likely a quick task/reminder
+        summary_guidance = "1-2 sentences MAXIMUM (this is a VERY SHORT recording - likely a quick reminder)"
+        content_guidance = "Focus primarily on TASK EXTRACTION - short recordings are often quick reminders or notes-to-self"
+    elif word_count < 150:
+        # Short recording
+        summary_guidance = "2-3 sentences (short recording - be concise)"
+        content_guidance = "Capture the core intent - prioritize task extraction for short notes"
     else:
         summary_guidance = "3-5 sentences"
         content_guidance = "Capture 60-70% of substance"

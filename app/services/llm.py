@@ -253,6 +253,7 @@ class ClaudeMultiAnalyzer:
         response = self.client.messages.create(
             model=model_name,
             max_tokens=max_tokens,
+            temperature=0.3,  # Lower temperature for consistent JSON output
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -286,6 +287,7 @@ class ClaudeMultiAnalyzer:
         response = await self.async_client.messages.create(
             model=model_name,
             max_tokens=max_tokens,
+            temperature=0.3,  # Lower temperature for consistent JSON output
             messages=[{"role": "user", "content": prompt}],
         )
 

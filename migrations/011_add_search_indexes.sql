@@ -3,6 +3,9 @@
 -- Created: 2026-01-10
 -- ============================================================================
 
+-- Enable pg_trgm extension for trigram text search
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 -- Applications table indexes
 CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_applications_type ON applications(application_type);
