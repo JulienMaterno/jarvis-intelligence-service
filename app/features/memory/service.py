@@ -941,32 +941,42 @@ TRANSCRIPT:
             from app.services.llm import ClaudeMultiAnalyzer
             llm = ClaudeMultiAnalyzer()
             
-            prompt = f"""Extract key facts from this conversation. Aaron (the user) is one participant.
+            prompt = f"""Extract key facts about AARON (the user) from this conversation.
 
-⚠️ CRITICAL: Distinguish WHO each fact is about:
-- If Aaron says "I work at X" → "Aaron works at X" (type: fact)
-- If contact says "I work at X" → "[Contact name] works at X" (type: relationship)
-- If Aaron mentions "my friend works at X" → "[Friend] works at X" (type: relationship)
+⚠️ CRITICAL DISTINCTION - WHO said what:
+- Messages labeled "Aaron:" are what AARON said → facts about Aaron
+- Messages from anyone else (e.g., "Sarah:", "John:", etc.) are what THEY said → facts about THEM, not Aaron
+
+🚨 COMMON MISTAKE TO AVOID:
+If "Sarah: I have two sisters" → This is about SARAH, NOT Aaron!
+Do NOT create "Aaron has two sisters" from this!
 
 RULES:
-1. Facts ABOUT Aaron → type: "fact", start with "Aaron..."
-2. Facts ABOUT other people → type: "relationship", include their name
-3. Aaron's preferences → type: "preference"
-4. Never create ambiguous memories like "Works at Google" without saying WHO
+1. ONLY create "fact" or "preference" for things AARON explicitly says about himself
+2. When others share info about themselves → create "relationship" about THEM
+3. Include the person's name in relationship memories
+4. Skip greetings, small talk, logistics
+5. Never infer facts about Aaron from what others say about themselves
 
 Return JSON array. Max 5 memories. Only specific, valuable info.
 
-Example:
+Memory types:
+- "fact": Things about Aaron (from Aaron's own statements only)
+- "preference": Aaron's preferences (from Aaron's own statements only)  
+- "relationship": Info about OTHER people (their jobs, lives, etc.)
+
+Examples:
 [
   {{"type": "fact", "content": "Aaron is planning to visit San Francisco in March"}},
   {{"type": "relationship", "content": "Sarah works at McKinsey as a senior consultant"}},
+  {{"type": "relationship", "content": "John has two sisters living in Berlin"}},
   {{"type": "preference", "content": "Aaron prefers async communication over calls"}}
 ]
 
 Return ONLY the JSON array, or [] if nothing valuable.
 
 TEXT:
-{text[:2000]}"""
+{text[:3000]}"""
             
             response = llm.client.messages.create(
                 model="claude-haiku-4-5-20251001",

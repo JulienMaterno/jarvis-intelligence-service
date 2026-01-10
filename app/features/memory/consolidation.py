@@ -270,14 +270,20 @@ class MemoryConsolidationService:
             
             conversation_lines = []
             for m in sorted(chat_msgs, key=lambda x: x.get("timestamp", "")):
-                speaker = "Aaron" if m.get("is_outgoing") else contact_name
+                # IMPORTANT: Clearly label who said what
+                # Aaron's messages are outgoing, contact's messages are incoming
+                if m.get("is_outgoing"):
+                    speaker = "Aaron"  # This is the USER speaking
+                else:
+                    speaker = f"{contact_name} (not Aaron)"  # Clearly mark as OTHER person
                 content = m.get("content", "")
                 if content and len(content.strip()) > 0:
                     conversation_lines.append(f"{speaker}: {content}")
             
             if len(conversation_lines) >= 2:  # Skip single-message "conversations"
                 all_conversations.append(
-                    f"=== {platform.upper()} conversation with {contact_name} ===\n" + 
+                    f"=== {platform.upper()} conversation with {contact_name} ===\n"
+                    f"⚠️ Remember: Only Aaron's statements are facts about Aaron!\n" + 
                     "\n".join(conversation_lines)
                 )
         
