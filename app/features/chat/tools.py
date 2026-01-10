@@ -4672,8 +4672,9 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 }
             else:
                 return {
-                    "status": "failed",
-                    "message": f"❌ Could not delete memory {memory_id} - may not exist"
+                    "status": "FAILED",
+                    "error": f"❌ DELETION FAILED for memory {memory_id} - may not exist or deletion error",
+                    "message": f"❌ FAILED to delete memory {memory_id}"
                 }
         
         # Otherwise search and delete matching memories
@@ -4681,8 +4682,9 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         
         if not memories:
             return {
-                "status": "nothing_found",
-                "message": f"No memories found matching '{query}'"
+                "status": "FAILED",
+                "error": f"❌ NO MEMORIES FOUND matching '{query}' - nothing was deleted!",
+                "message": f"❌ FAILED: No memories found matching '{query}'"
             }
         
         # Show what was found and delete matches
@@ -4705,18 +4707,23 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                     failed_items.append(mem_id)
         
         if not deleted_items and not failed_items:
+            # THIS IS THE KEY FIX: This was returning a "helpful" message that the AI
+            # didn't recognize as a failure. Now we return a clear ERROR status.
+            found_previews = [f"- {m.get('memory', m.get('data', ''))[:60]}..." for m in memories[:5]]
             return {
-                "status": "no_match",
+                "status": "FAILED",
+                "error": f"❌ DELETION FAILED: Found {len(memories)} memories but query '{query}' didn't match any exactly.",
                 "found_count": len(memories),
-                "message": f"Found {len(memories)} memories but none closely matched '{query}'. Use search_memories to see them and delete by ID."
+                "found_previews": found_previews,
+                "message": f"❌ FAILED to delete! Query '{query}' found {len(memories)} memories but none contained that exact text. You MUST use the exact memory ID to delete. Here are the memories found:\n" + "\n".join(found_previews)
             }
         
         return {
-            "status": "deleted" if deleted_items else "failed",
+            "status": "deleted" if deleted_items else "FAILED",
             "deleted_count": len(deleted_items),
             "deleted_items": deleted_items,
             "failed_count": len(failed_items),
-            "message": f"✅ Deleted {len(deleted_items)} memory/memories" if deleted_items else "❌ Failed to delete"
+            "message": f"✅ Deleted {len(deleted_items)} memory/memories" if deleted_items else "❌ FAILED to delete any memories"
         }
         
     except Exception as e:
