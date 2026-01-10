@@ -15,7 +15,8 @@ Works similarly to Claude Desktop + MCP, but via Telegram.
 import json
 import logging
 import os
-from typing import Dict, List, Any, Optional
+import time
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone
 
 import anthropic
@@ -26,6 +27,41 @@ from app.core.config import settings
 
 from app.features.chat.tools import TOOLS, execute_tool
 from app.features.memory import get_memory_service
+
+# =============================================================================
+# CONVERSATION-LEVEL MEMORY CACHE
+# =============================================================================
+# Cache memory context per conversation to avoid repeated embedding lookups.
+# Memory is only searched ONCE when conversation starts (first message) or
+# after significant time has passed (user returns later).
+#
+# This is similar to how Claude Desktop works - it loads context at start,
+# not on every message.
+# =============================================================================
+_conversation_memory_cache: Dict[str, Tuple[float, str]] = {}
+_CONVERSATION_CACHE_TTL = 1800.0  # 30 minutes - conversation context is valid for 30 min
+_CONVERSATION_CACHE_MAX_SIZE = 100
+
+def _get_cached_memory_context(conversation_id: str) -> Optional[str]:
+    """Get cached memory context for a conversation if still valid."""
+    if conversation_id in _conversation_memory_cache:
+        cached_time, cached_context = _conversation_memory_cache[conversation_id]
+        if time.time() - cached_time < _CONVERSATION_CACHE_TTL:
+            return cached_context
+    return None
+
+def _set_cached_memory_context(conversation_id: str, context: str) -> None:
+    """Cache memory context for a conversation."""
+    global _conversation_memory_cache
+    _conversation_memory_cache[conversation_id] = (time.time(), context)
+    
+    # Prune old entries if too large
+    if len(_conversation_memory_cache) > _CONVERSATION_CACHE_MAX_SIZE:
+        sorted_keys = sorted(_conversation_memory_cache.keys(), 
+                            key=lambda k: _conversation_memory_cache[k][0])
+        for old_key in sorted_keys[:len(sorted_keys) // 2]:
+            del _conversation_memory_cache[old_key]
+# =============================================================================
 
 # Cost tracking (per 1M tokens)
 COST_PER_1M_INPUT = {
@@ -57,6 +93,7 @@ class ChatRequest(BaseModel):
     """Request to the chat endpoint."""
     message: str
     conversation_history: List[ChatMessage] = Field(default_factory=list)
+    conversation_id: Optional[str] = None  # For memory caching - same convo reuses cached context
     user_context: Optional[str] = None
     client_type: str = "telegram"  # "telegram" or "web" - controls response style
     model: Optional[str] = None  # Allow model selection (e.g., "claude-sonnet-4-5-20250929")
@@ -347,8 +384,23 @@ class ChatService:
         # Get memory service
         self.memory = get_memory_service()
     
-    async def _get_memory_context(self, message: str) -> str:
-        """Get relevant memories for the current message - ALWAYS included in prompt."""
+    async def _get_memory_context(self, message: str, conversation_id: Optional[str] = None) -> str:
+        """
+        Get relevant memories for the current message.
+        
+        Uses conversation-level caching: memory is only searched ONCE when the
+        conversation starts (first message), not on every follow-up message.
+        This is similar to how Claude Desktop loads context at conversation start.
+        
+        Cache TTL is 30 minutes - if user returns later, we re-search for fresh context.
+        """
+        # Check conversation cache first (fast path - no API call)
+        if conversation_id:
+            cached_context = _get_cached_memory_context(conversation_id)
+            if cached_context is not None:
+                logger.debug(f"Using cached memory context for conversation {conversation_id[:8]}...")
+                return cached_context
+        
         try:
             # Search for memories related to the message
             # Using 10 for good context with faster response (18 was too slow)
@@ -356,19 +408,26 @@ class ChatService:
             
             if not memories:
                 # Even if no matches, note that memory is available
-                return "\n\n**STORED MEMORIES:** No specific memories found for this query. Use search_memories tool if needed."
+                context = "\n\n**STORED MEMORIES:** No specific memories found for this query. Use search_memories tool if needed."
+            else:
+                # Format memories clearly
+                lines = ["**RELEVANT STORED MEMORIES (from Mem0):**"]
+                for mem in memories:
+                    memory_text = mem.get("memory", "")
+                    mem_type = mem.get("metadata", {}).get("type", "unknown")
+                    source = mem.get("metadata", {}).get("source", "unknown")
+                    if memory_text:
+                        lines.append(f"• [{mem_type}] {memory_text}")
+                
+                lines.append(f"\n_({len(memories)} memories loaded - use search_memories for more)_")
+                context = "\n\n" + "\n".join(lines)
             
-            # Format memories clearly
-            lines = ["**RELEVANT STORED MEMORIES (from Mem0):**"]
-            for mem in memories:
-                memory_text = mem.get("memory", "")
-                mem_type = mem.get("metadata", {}).get("type", "unknown")
-                source = mem.get("metadata", {}).get("source", "unknown")
-                if memory_text:
-                    lines.append(f"• [{mem_type}] {memory_text}")
+            # Cache the result for this conversation
+            if conversation_id:
+                _set_cached_memory_context(conversation_id, context)
+                logger.info(f"Cached memory context for conversation {conversation_id[:8]}... (30min TTL)")
             
-            lines.append(f"\n_({len(memories)} memories loaded - use search_memories for more)_")
-            return "\n\n" + "\n".join(lines)
+            return context
         except Exception as e:
             logger.warning(f"Could not get memory context: {e}")
             return "\n\n**MEMORY STATUS:** Memory service unavailable - use search_memories tool."
@@ -684,7 +743,10 @@ WEB CHAT MODE - RESPONSE STYLE:
             start_time = time.time()
             
             # Run all context gathering in PARALLEL for faster startup
-            memory_task = asyncio.create_task(self._get_memory_context(request.message))
+            # Pass conversation_id for memory caching (avoids repeat embedding lookups)
+            memory_task = asyncio.create_task(
+                self._get_memory_context(request.message, conversation_id=request.conversation_id)
+            )
             letta_task = asyncio.create_task(self._get_letta_context())
             
             # Journal context is sync/fast, run directly
@@ -811,7 +873,10 @@ WEB CHAT MODE - RESPONSE STYLE:
             start_time = time.time()
             
             # Run all context gathering in PARALLEL for faster startup
-            memory_task = asyncio.create_task(self._get_memory_context(request.message))
+            # Pass conversation_id for memory caching (avoids repeat embedding lookups)
+            memory_task = asyncio.create_task(
+                self._get_memory_context(request.message, conversation_id=request.conversation_id)
+            )
             letta_task = asyncio.create_task(self._get_letta_context())
             
             # Journal context is sync/fast, run directly
