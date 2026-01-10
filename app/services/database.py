@@ -1414,3 +1414,26 @@ class SupabaseMultiDatabase:
         except Exception as e:
             logger.error(f"Error linking calendar event to meeting: {e}")
             raise
+
+    def get_contacts_for_transcription(self, limit: int = 100) -> List[Dict]:
+        """
+        Get a list of contacts for smart transcription correction.
+        
+        Returns contacts with names and companies to help AI correct
+        misheard names in transcripts.
+        
+        Returns: List of dicts with first_name, last_name, company
+        """
+        try:
+            result = self.client.table("contacts").select(
+                "first_name, last_name, company"
+            ).is_(
+                "deleted_at", "null"
+            ).order(
+                "updated_at", desc=True  # Recent contacts first (more likely to be mentioned)
+            ).limit(limit).execute()
+            
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Error fetching contacts for transcription: {e}")
+            return []

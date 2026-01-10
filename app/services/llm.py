@@ -54,10 +54,14 @@ class ClaudeMultiAnalyzer:
         filename: str,
         recording_date: Optional[str] = None,
         existing_topics: Optional[List[Dict[str, str]]] = None,
+        known_contacts: Optional[List[Dict[str, str]]] = None,
     ) -> Dict:
         """
         ASYNC version - Analyze transcript without blocking the event loop.
         Use this from FastAPI endpoints for non-blocking LLM calls.
+        
+        Args:
+            known_contacts: List of contacts for smart name correction in transcripts
         """
         try:
             logger.info("Analyzing transcript ASYNC for multi-database routing (length: %d chars)", len(transcript))
@@ -76,6 +80,7 @@ class ClaudeMultiAnalyzer:
                 recording_date=recording_date,
                 existing_topics=existing_topics or [],
                 transcript_stats=transcript_stats,
+                known_contacts=known_contacts,
             )
 
             last_error: Optional[Exception] = None
@@ -228,6 +233,7 @@ class ClaudeMultiAnalyzer:
         recording_date: str,
         existing_topics: List[Dict[str, str]],
         transcript_stats: Dict = None,
+        known_contacts: List[Dict[str, str]] = None,
     ) -> str:
         """Generate the instruction block sent to Claude using centralized prompts."""
         return build_multi_analysis_prompt(
@@ -236,6 +242,7 @@ class ClaudeMultiAnalyzer:
             recording_date=recording_date,
             existing_topics=existing_topics,
             transcript_stats=transcript_stats,
+            known_contacts=known_contacts,
         )
 
     def _invoke_model(self, prompt: str, model_name: str) -> str:

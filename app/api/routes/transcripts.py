@@ -141,12 +141,17 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
 
         existing_topics = db.get_existing_reflection_topics()
         
+        # Fetch known contacts for smart transcription correction
+        known_contacts = db.get_contacts_for_transcription(limit=100)
+        logger.info(f"Fetched {len(known_contacts)} contacts for transcription correction")
+        
         # Use async analyzer for non-blocking LLM call
         analysis = await analyzer.analyze_transcript_async(
             transcript=transcript_text,
             filename=filename,
             recording_date=recording_date,
             existing_topics=existing_topics,
+            known_contacts=known_contacts,
         )
 
         db_records = {
@@ -343,12 +348,16 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
 
         existing_topics = db.get_existing_reflection_topics()
         
+        # Fetch known contacts for smart transcription correction
+        known_contacts = db.get_contacts_for_transcription(limit=100)
+        
         # Use async analyzer for non-blocking LLM call
         analysis = await analyzer.analyze_transcript_async(
             transcript=request.transcript,
             filename=request.filename,
             recording_date=request.recording_date,
             existing_topics=existing_topics,
+            known_contacts=known_contacts,
         )
 
         db_records = {
@@ -614,12 +623,16 @@ async def process_meeting_transcript(
         # Get existing topics for reflection routing
         existing_topics = db.get_existing_reflection_topics()
         
+        # Fetch known contacts for smart transcription correction
+        known_contacts = db.get_contacts_for_transcription(limit=100)
+        
         # Analyze with Claude (async for non-blocking)
         analysis = await analyzer.analyze_transcript_async(
             transcript=enhanced_transcript,
             filename=filename,
             recording_date=request.start_time[:10],
             existing_topics=existing_topics,
+            known_contacts=known_contacts,
         )
         
         db_records = {

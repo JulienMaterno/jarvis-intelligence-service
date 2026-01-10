@@ -3,7 +3,7 @@ LLM Prompts for transcript analysis.
 Centralized prompt templates for consistent AI behavior.
 """
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime
 
 
@@ -14,6 +14,7 @@ def build_multi_analysis_prompt(
     existing_topics: List[Dict[str, str]],
     user_context: str = None,
     transcript_stats: Dict = None,
+    known_contacts: List[Dict[str, str]] = None,
 ) -> str:
     """
     Build the main analysis prompt for Claude.
@@ -27,6 +28,7 @@ def build_multi_analysis_prompt(
     6. Scale output detail based on transcript length
     7. Consolidate multiple conversations into ONE meeting per person
     8. AI-DRIVEN reflection routing (no code-based fuzzy matching)
+    9. SMART TRANSCRIPTION CORRECTION using known contacts
     """
     
     # Calculate transcript stats for scaling output
@@ -99,7 +101,47 @@ Remember: topic_keys should be broad themes (e.g., "career-development" not "job
     if not user_context:
         user_context = """Aaron is a German engineer based in Sydney, currently in transition after being the first employee at Algenie, an Australian biotech startup. He holds two master's degrees from Germany and Tsinghua University in China. His core interests span climate tech, biotech, agritech, foodtech, and longevity. He's currently preparing to relocate to Singapore and Southeast Asia."""
 
+    # Build known contacts context for smart name correction
+    contacts_context = ""
+    if known_contacts:
+        contact_lines = []
+        for c in known_contacts[:50]:  # Limit to 50 most relevant contacts
+            name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+            company = c.get('company', '')
+            if name:
+                if company:
+                    contact_lines.append(f"  - {name} ({company})")
+                else:
+                    contact_lines.append(f"  - {name}")
+        if contact_lines:
+            contacts_context = f"""
+**AARON'S KNOWN CONTACTS (for name correction):**
+When you hear names in the transcript, try to match them to these known people:
+{chr(10).join(contact_lines)}
+
+If a name in the transcript sounds similar to one of these contacts, use the correct spelling.
+For example: "Melinder" → "Melinda", "Bao" sounds correct, "John" is common enough to be correct.
+"""
+
     return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
+
+**⚠️ CRITICAL: TRANSCRIPTION ERROR CORRECTION**
+The transcript was created by automatic speech recognition which often makes mistakes. You must INTELLIGENTLY CORRECT errors using context:
+{contacts_context}
+COMMON TRANSCRIPTION ERRORS TO FIX:
+- "Java", "Jarvis", "jardin" → Usually means "Jarvis" (Aaron's AI system he's building)
+- "Aaron" misheard as "Erin", "Aron", "Erin" → Correct to "Aaron"  
+- Names of people Aaron knows may be misspelled - use context to identify likely correct names
+- Technical terms may be garbled - use context to infer the correct term
+- "Sydney" might be heard as "city" or similar - use geographic context
+
+CORRECTION STRATEGY:
+1. If Aaron is discussing his personal AI project development → "Java/jardin/Jarvis" = "Jarvis"
+2. If a name sounds similar to someone Aaron has mentioned before, use the correct name
+3. For technical terms, use your knowledge of the domain to infer correct terms
+4. When uncertain, preserve the original but note it may be a transcription error
+
+Apply corrections silently - produce the correct interpretation in your output without explicitly noting every fix.
 
 **⚠️ CRITICAL: PERSPECTIVE**
 Aaron is the speaker who recorded this. When he talks about meeting someone, Aaron MET WITH that person.
