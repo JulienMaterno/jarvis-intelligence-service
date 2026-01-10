@@ -60,12 +60,18 @@ def _patch_mem0_anthropic():
 _patch_mem0_anthropic()
 # =============================================================================
 import os
+import time
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("Jarvis.Memory")
+
+# Simple TTL cache for memory searches to reduce embedding API calls
+_search_cache: Dict[str, Tuple[float, List[Dict]]] = {}
+_SEARCH_CACHE_TTL = 60.0  # 60 seconds - same message within 1 min uses cache
+_SEARCH_CACHE_MAX_SIZE = 50
 
 
 class MemoryType(Enum):
@@ -294,9 +300,21 @@ class MemoryService:
         Returns:
             List of matching memories with scores
         """
+        global _search_cache
+        
         self._ensure_initialized()
         
         try:
+            # Check TTL cache first (saves ~200-400ms embedding call)
+            cache_key = f"{query[:100]}:{limit}:{memory_type}"
+            now = time.time()
+            
+            if cache_key in _search_cache:
+                cached_time, cached_results = _search_cache[cache_key]
+                if now - cached_time < _SEARCH_CACHE_TTL:
+                    logger.debug(f"Memory cache hit for: {query[:30]}... (age: {now - cached_time:.1f}s)")
+                    return cached_results
+            
             if self._use_fallback:
                 # Simple keyword search for fallback
                 query_lower = query.lower()
@@ -324,6 +342,17 @@ class MemoryService:
             
             memories = result.get("results", []) if result else []
             logger.debug(f"Found {len(memories)} memories for query: {query[:30]}...")
+            
+            # Cache the result
+            _search_cache[cache_key] = (now, memories)
+            
+            # Prune old cache entries if too large
+            if len(_search_cache) > _SEARCH_CACHE_MAX_SIZE:
+                # Remove oldest entries
+                sorted_keys = sorted(_search_cache.keys(), key=lambda k: _search_cache[k][0])
+                for old_key in sorted_keys[:len(sorted_keys) // 2]:
+                    del _search_cache[old_key]
+            
             return memories
             
         except Exception as e:
