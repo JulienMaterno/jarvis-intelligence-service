@@ -22,21 +22,97 @@ TOOLS = [
     {
         "name": "query_database",
         "description": """Execute a read-only SQL query against the knowledge database.
-Use this to answer questions about meetings, contacts, tasks, reflections, emails, calendar events, etc.
+Use this for novel/complex queries that specific tools can't handle. For common operations, prefer specific tools like get_applications, search_contacts, get_tasks.
 
-Available tables:
-- contacts: People in CRM (first_name, last_name, email, company, job_title, notes, birthday)
-- meetings: Meeting records (title, date, summary, contact_name, topics_discussed, people_mentioned)
-- tasks: Action items (title, description, status, priority, due_date, completed_at)
-- reflections: Personal reflections (title, content, topic_key, tags, date)
-- journals: Daily journals (date, summary, mood, key_events, tomorrow_focus)
-- calendar_events: Calendar (google_event_id, summary, start_time, end_time, location, attendees, status)
-- emails: Full email records (subject, sender, recipient, date, snippet, body_text, body_html, thread_id, label_ids, contact_id)
-- transcripts: Voice transcripts (full_text, source_file, created_at)
-- books: Reading list (title, author, status, rating, current_page, total_pages, summary, notes)
-- highlights: Book highlights (book_title, content, note, chapter, page_number, is_favorite)
+FULL DATABASE SCHEMA:
+====================
 
-IMPORTANT: Only SELECT queries allowed. Use ILIKE for case-insensitive text search.""",
+CORE DATA:
+----------
+• contacts: CRM contacts
+  - id (uuid), first_name, last_name, email, company, job_title, phone, birthday (date), 
+  - linkedin_url, location, notes, dynamic_properties (jsonb)
+  - deleted_at (null = active), created_at, updated_at
+
+• meetings: Meeting records  
+  - id (uuid), title, date (timestamptz), location, summary (text)
+  - contact_id (fk→contacts), contact_name, topics_discussed (jsonb), people_mentioned (text[])
+  - action_items (jsonb), source_file, source_transcript_id (fk→transcripts)
+
+• tasks: Action items
+  - id (uuid), title, description, status ('pending'|'in_progress'|'done'), priority ('high'|'medium'|'low')
+  - due_date (date), completed_at (timestamptz), project, tags (text[])
+  - origin_id, origin_type ('meeting'|'journal'|'reflection')
+
+• reflections: Personal reflections/notes
+  - id (uuid), title, topic_key (slug), content (text), tags (text[])
+  - date, mood, energy_level, people_mentioned (text[])
+  - source_file, source_transcript_id, deleted_at
+
+• journals: Daily journal entries
+  - id (uuid), date (unique), title, content, mood, energy
+  - gratitude (text[]), wins (text[]), challenges (text[]), tomorrow_focus (text[])
+
+CALENDAR & EMAIL:
+-----------------
+• calendar_events: Google Calendar
+  - id (uuid), google_event_id (unique), calendar_id, summary, description
+  - start_time (timestamptz), end_time (timestamptz), location
+  - status ('confirmed'|'tentative'|'cancelled'), attendees (jsonb), contact_id (fk→contacts)
+
+• emails: Gmail messages
+  - id (uuid), google_message_id (unique), thread_id, subject, sender, recipient
+  - date (timestamptz), snippet, body_text, body_html, labels (text[])
+  - is_read (bool), contact_id (fk→contacts)
+
+MEDIA & CONTENT:
+----------------
+• transcripts: Voice memo transcriptions
+  - id (uuid), full_text (text), source_file, audio_duration (float)
+  - language, segments (jsonb), speakers (text[]), model_used
+
+• books: Reading list
+  - id (uuid), title, author, status ('reading'|'completed'|'want-to-read'|'abandoned')
+  - rating (1-5), current_page, total_pages, summary, notes
+
+• highlights: Book highlights  
+  - id (uuid), book_id (fk→books), book_title, content (text), note
+  - chapter, page_number, is_favorite (bool)
+
+APPLICATIONS & LINKEDIN:
+------------------------
+• applications: Grant/fellowship applications
+  - id (uuid), name, application_type ('Grant'|'Fellowship'|'Program'|'Accelerator'|'Residency')
+  - status ('Not Started'|'Researching'|'In Progress'|'Applied'|'Accepted')
+  - institution, website (url), grant_amount, deadline (date)
+  - context (text), notes (text), content (text - full application text)
+
+• linkedin_posts: LinkedIn content
+  - id (uuid), title, post_date (date)
+  - status ('Idea'|'Posted'), pillar ('Personal'|'Longevity'|'Algenie')
+  - likes, content (text - full post text)
+
+MESSAGING (Beeper):
+-------------------
+• beeper_chats: Chat rooms/DMs
+  - id (uuid), beeper_chat_id (unique), platform ('whatsapp'|'linkedin'|'slack'|etc.)
+  - chat_type ('dm'|'group'), chat_name, contact_id (fk→contacts)
+  - needs_response (bool), is_archived (bool)
+
+• beeper_messages: Chat messages
+  - id (uuid), beeper_event_id (unique), beeper_chat_id, content (text)
+  - is_outgoing (bool), timestamp (timestamptz), contact_id (fk→contacts)
+
+SQL TIPS:
+---------
+• Use ILIKE for case-insensitive search: WHERE title ILIKE '%keyword%'
+• Filter active contacts: WHERE deleted_at IS NULL
+• Join contacts: JOIN contacts c ON meetings.contact_id = c.id
+• Date ranges: WHERE date >= '2025-01-01' AND date < '2025-02-01'
+• JSON array search: WHERE 'tag' = ANY(tags)
+• Limit results: LIMIT 20
+
+IMPORTANT: Only SELECT queries allowed. Use specific tools when available.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1427,6 +1503,179 @@ Returns the full text content.""",
             },
             "required": ["document_type"]
         }
+    },
+    # =========================================================================
+    # APPLICATIONS - Track grants, fellowships, programs
+    # =========================================================================
+    {
+        "name": "get_applications",
+        "description": """Get a list of grant/fellowship/program applications.
+
+Use when user asks:
+- "What applications do I have?"
+- "Show my pending applications"
+- "What's the deadline for my grants?"
+- "List my fellowship applications"
+
+Returns applications with status, deadline, and details.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["Not Started", "Researching", "In Progress", "Applied", "Accepted"],
+                    "description": "Filter by status"
+                },
+                "application_type": {
+                    "type": "string",
+                    "enum": ["Grant", "Fellowship", "Program", "Accelerator", "Residency"],
+                    "description": "Filter by type"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum applications to return",
+                    "default": 20
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "search_applications",
+        "description": """Search applications by name, institution, or content.
+
+Use when user asks:
+- "Find applications about longevity"
+- "What grants from EIC?"
+- "Search for fellowship with deadline in March"
+
+Returns matching applications with full details.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search term to match in name, institution, context, or content"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_application_content",
+        "description": """Get the full content of a specific application (answers, essays, etc.).
+
+Use when user asks:
+- "Show me my EIC application"
+- "What did I write for the Y Combinator application?"
+- "Read my grant proposal for X"
+
+Returns the complete application text.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {
+                    "type": "string",
+                    "description": "The application UUID"
+                },
+                "application_name": {
+                    "type": "string",
+                    "description": "Application name (if ID not known)"
+                }
+            },
+            "required": []
+        }
+    },
+    # =========================================================================
+    # LINKEDIN POSTS - Content planning and tracking
+    # =========================================================================
+    {
+        "name": "get_linkedin_posts",
+        "description": """Get LinkedIn posts and content ideas.
+
+Use when user asks:
+- "What LinkedIn posts do I have?"
+- "Show my posted content"
+- "What post ideas do I have?"
+- "What did I post about longevity?"
+
+Returns posts with status, pillar, and engagement.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["Idea", "Posted"],
+                    "description": "Filter by status"
+                },
+                "pillar": {
+                    "type": "string",
+                    "enum": ["Personal", "Longevity", "Algenie"],
+                    "description": "Filter by content pillar"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum posts to return",
+                    "default": 20
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "search_linkedin_posts",
+        "description": """Search LinkedIn posts by title or content.
+
+Use when user asks:
+- "Find my posts about AI"
+- "What did I write about longevity?"
+- "Search my LinkedIn for meditation content"
+
+Returns matching posts with full content.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search term to match in title or content"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_linkedin_post_content",
+        "description": """Get the full content of a specific LinkedIn post.
+
+Use when user asks to:
+- Read a specific post fully
+- Get the complete text of a post idea
+
+Returns the full post text.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "post_id": {
+                    "type": "string",
+                    "description": "The post UUID"
+                },
+                "post_title": {
+                    "type": "string",
+                    "description": "Post title (if ID not known)"
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -1567,6 +1816,20 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _run_async(_search_documents(tool_input))
         elif tool_name == "get_document_content":
             return _run_async(_get_document_content(tool_input))
+        # Applications tools
+        elif tool_name == "get_applications":
+            return _get_applications(tool_input)
+        elif tool_name == "search_applications":
+            return _search_applications(tool_input)
+        elif tool_name == "get_application_content":
+            return _get_application_content(tool_input)
+        # LinkedIn Posts tools
+        elif tool_name == "get_linkedin_posts":
+            return _get_linkedin_posts(tool_input)
+        elif tool_name == "search_linkedin_posts":
+            return _search_linkedin_posts(tool_input)
+        elif tool_name == "get_linkedin_post_content":
+            return _get_linkedin_post_content(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -1609,7 +1872,8 @@ def _query_database(sql: str) -> Dict[str, Any]:
         allowed_tables = [
             "contacts", "meetings", "tasks", "journals", "reflections",
             "calendar_events", "emails", "transcripts", "beeper_chats",
-            "beeper_messages", "books", "highlights", "sync_logs"
+            "beeper_messages", "books", "highlights", "sync_logs",
+            "applications", "linkedin_posts"
         ]
         
         if table_name.lower() not in allowed_tables:
@@ -4621,4 +4885,259 @@ async def _get_document_content(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to get document content: {e}")
         return {"error": f"Failed to get document: {str(e)}"}
+
+
+# =============================================================================
+# APPLICATIONS TOOLS IMPLEMENTATION
+# =============================================================================
+
+def _get_applications(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get a list of applications with optional filters."""
+    try:
+        query = supabase.table("applications").select(
+            "id, name, application_type, status, institution, website, grant_amount, deadline, context, notes, created_at"
+        )
+        
+        # Apply filters
+        if tool_input.get("status"):
+            query = query.eq("status", tool_input["status"])
+        
+        if tool_input.get("application_type"):
+            query = query.eq("application_type", tool_input["application_type"])
+        
+        # Limit
+        limit = min(tool_input.get("limit", 20), 50)
+        query = query.order("deadline", desc=False, nullsfirst=False).limit(limit)
+        
+        result = query.execute()
+        
+        applications = []
+        for app in result.data or []:
+            applications.append({
+                "id": app.get("id"),
+                "name": app.get("name"),
+                "type": app.get("application_type"),
+                "status": app.get("status"),
+                "institution": app.get("institution"),
+                "website": app.get("website"),
+                "grant_amount": app.get("grant_amount"),
+                "deadline": app.get("deadline"),
+                "context": app.get("context", "")[:200] if app.get("context") else None,
+                "notes": app.get("notes", "")[:200] if app.get("notes") else None
+            })
+        
+        return {"applications": applications, "count": len(applications)}
+    except Exception as e:
+        logger.error(f"Failed to get applications: {e}")
+        return {"error": str(e)}
+
+
+def _search_applications(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search applications by name, institution, or content."""
+    try:
+        query_str = tool_input.get("query", "")
+        limit = min(tool_input.get("limit", 10), 50)
+        
+        if not query_str:
+            return {"error": "query is required"}
+        
+        # Search across name, institution, context, notes, and content
+        result = supabase.table("applications").select(
+            "id, name, application_type, status, institution, website, grant_amount, deadline, context, notes, content"
+        ).or_(
+            f"name.ilike.%{query_str}%,institution.ilike.%{query_str}%,context.ilike.%{query_str}%,notes.ilike.%{query_str}%,content.ilike.%{query_str}%"
+        ).limit(limit).execute()
+        
+        applications = []
+        for app in result.data or []:
+            # Create snippet from content if available
+            content = app.get("content", "") or ""
+            snippet = None
+            if query_str.lower() in content.lower():
+                # Find context around the match
+                idx = content.lower().find(query_str.lower())
+                start = max(0, idx - 100)
+                end = min(len(content), idx + len(query_str) + 100)
+                snippet = "..." + content[start:end] + "..."
+            
+            applications.append({
+                "id": app.get("id"),
+                "name": app.get("name"),
+                "type": app.get("application_type"),
+                "status": app.get("status"),
+                "institution": app.get("institution"),
+                "deadline": app.get("deadline"),
+                "grant_amount": app.get("grant_amount"),
+                "context": app.get("context"),
+                "content_snippet": snippet
+            })
+        
+        return {"applications": applications, "count": len(applications)}
+    except Exception as e:
+        logger.error(f"Failed to search applications: {e}")
+        return {"error": str(e)}
+
+
+def _get_application_content(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get full content of a specific application."""
+    try:
+        app_id = tool_input.get("application_id")
+        app_name = tool_input.get("application_name")
+        
+        if not app_id and not app_name:
+            return {"error": "Either application_id or application_name is required"}
+        
+        if app_id:
+            result = supabase.table("applications").select("*").eq("id", app_id).execute()
+        else:
+            result = supabase.table("applications").select("*").ilike("name", f"%{app_name}%").limit(1).execute()
+        
+        if not result.data:
+            return {"error": "Application not found"}
+        
+        app = result.data[0]
+        return {
+            "application": {
+                "id": app.get("id"),
+                "name": app.get("name"),
+                "type": app.get("application_type"),
+                "status": app.get("status"),
+                "institution": app.get("institution"),
+                "website": app.get("website"),
+                "grant_amount": app.get("grant_amount"),
+                "deadline": app.get("deadline"),
+                "context": app.get("context"),
+                "notes": app.get("notes"),
+                "content": app.get("content"),  # Full content
+                "created_at": app.get("created_at")
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to get application content: {e}")
+        return {"error": str(e)}
+
+
+# =============================================================================
+# LINKEDIN POSTS TOOLS IMPLEMENTATION
+# =============================================================================
+
+def _get_linkedin_posts(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get a list of LinkedIn posts with optional filters."""
+    try:
+        query = supabase.table("linkedin_posts").select(
+            "id, title, post_date, status, pillar, likes, created_at"
+        )
+        
+        # Apply filters
+        if tool_input.get("status"):
+            query = query.eq("status", tool_input["status"])
+        
+        if tool_input.get("pillar"):
+            query = query.eq("pillar", tool_input["pillar"])
+        
+        # Limit and order
+        limit = min(tool_input.get("limit", 20), 50)
+        query = query.order("post_date", desc=True, nullsfirst=False).limit(limit)
+        
+        result = query.execute()
+        
+        posts = []
+        for post in result.data or []:
+            posts.append({
+                "id": post.get("id"),
+                "title": post.get("title"),
+                "post_date": post.get("post_date"),
+                "status": post.get("status"),
+                "pillar": post.get("pillar"),
+                "likes": post.get("likes")
+            })
+        
+        return {"posts": posts, "count": len(posts)}
+    except Exception as e:
+        logger.error(f"Failed to get LinkedIn posts: {e}")
+        return {"error": str(e)}
+
+
+def _search_linkedin_posts(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search LinkedIn posts by title or content."""
+    try:
+        query_str = tool_input.get("query", "")
+        limit = min(tool_input.get("limit", 10), 50)
+        
+        if not query_str:
+            return {"error": "query is required"}
+        
+        # Search across title and content
+        result = supabase.table("linkedin_posts").select(
+            "id, title, post_date, status, pillar, likes, content"
+        ).or_(
+            f"title.ilike.%{query_str}%,content.ilike.%{query_str}%"
+        ).order("post_date", desc=True).limit(limit).execute()
+        
+        posts = []
+        for post in result.data or []:
+            # Create snippet from content if available
+            content = post.get("content", "") or ""
+            snippet = None
+            if content:
+                # If search term is in content, show context
+                if query_str.lower() in content.lower():
+                    idx = content.lower().find(query_str.lower())
+                    start = max(0, idx - 100)
+                    end = min(len(content), idx + len(query_str) + 100)
+                    snippet = "..." + content[start:end] + "..."
+                else:
+                    # Just show first 200 chars
+                    snippet = content[:200] + "..." if len(content) > 200 else content
+            
+            posts.append({
+                "id": post.get("id"),
+                "title": post.get("title"),
+                "post_date": post.get("post_date"),
+                "status": post.get("status"),
+                "pillar": post.get("pillar"),
+                "likes": post.get("likes"),
+                "content_snippet": snippet
+            })
+        
+        return {"posts": posts, "count": len(posts)}
+    except Exception as e:
+        logger.error(f"Failed to search LinkedIn posts: {e}")
+        return {"error": str(e)}
+
+
+def _get_linkedin_post_content(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get full content of a specific LinkedIn post."""
+    try:
+        post_id = tool_input.get("post_id")
+        post_title = tool_input.get("post_title")
+        
+        if not post_id and not post_title:
+            return {"error": "Either post_id or post_title is required"}
+        
+        if post_id:
+            result = supabase.table("linkedin_posts").select("*").eq("id", post_id).execute()
+        else:
+            result = supabase.table("linkedin_posts").select("*").ilike("title", f"%{post_title}%").limit(1).execute()
+        
+        if not result.data:
+            return {"error": "LinkedIn post not found"}
+        
+        post = result.data[0]
+        return {
+            "post": {
+                "id": post.get("id"),
+                "title": post.get("title"),
+                "post_date": post.get("post_date"),
+                "status": post.get("status"),
+                "pillar": post.get("pillar"),
+                "likes": post.get("likes"),
+                "content": post.get("content"),  # Full content
+                "created_at": post.get("created_at")
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to get LinkedIn post content: {e}")
+        return {"error": str(e)}
+
 
