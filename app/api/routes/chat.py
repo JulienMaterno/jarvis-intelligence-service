@@ -240,10 +240,17 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                     "content": msg.content
                 })
 
+        # Generate conversation_id from message history to enable memory caching
+        # This ensures the same conversation reuses cached context
+        import hashlib
+        history_signature = "|".join([f"{m.role}:{m.content[:50]}" for m in request.messages[:3]])
+        conversation_id = hashlib.md5(history_signature.encode()).hexdigest()
+
         # Create Jarvis request
         jarvis_request = ChatRequest(
             message=last_message.content,
             conversation_history=conversation_history,
+            conversation_id=conversation_id,  # For memory caching
             client_type="web",
             model=request.model
         )
@@ -277,8 +284,26 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                         elif chunk["type"] == "tool_use":
                             # Send tool use as visible text chunk so user sees what's happening
                             tool_name = chunk['tool']
+                            tool_input = chunk.get('input', {})
                             logger.info(f"Tool use: {tool_name}")
-                            # Show tool invocation to user
+                            
+                            # Format tool info nicely for the user
+                            tool_display = f"\n\n🔧 **Using tool: `{tool_name}`**"
+                            
+                            # Add relevant input details for context
+                            if tool_name == "query_database" and "sql" in tool_input:
+                                tool_display += f"\n_Query: {tool_input['sql'][:100]}..._"
+                            elif tool_name == "search_memories" and "query" in tool_input:
+                                tool_display += f"\n_Searching for: {tool_input['query']}_"
+                            elif tool_name == "search_contacts" and "query" in tool_input:
+                                tool_display += f"\n_Looking for: {tool_input['query']}_"
+                            elif tool_name == "get_meetings":
+                                tool_display += "\n_Fetching meeting records..._"
+                            elif tool_name == "create_task" and "title" in tool_input:
+                                tool_display += f"\n_Creating: {tool_input['title']}_"
+                            
+                            tool_display += "\n\n"
+                            
                             tool_chunk = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
@@ -286,17 +311,36 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                                 "model": request.model,
                                 "choices": [{
                                     "index": 0,
-                                    "delta": {"content": f"\n\n🔧 *Using tool: {tool_name}...*\n\n"},
+                                    "delta": {"content": tool_display},
                                     "finish_reason": None
                                 }]
                             }
                             yield f"data: {json.dumps(tool_chunk)}\n\n"
 
                         elif chunk["type"] == "tool_result":
-                            # Tool result - optionally show summary
+                            # Tool result - show brief acknowledgment
                             tool_name = chunk['tool']
+                            output = chunk.get('output', {})
                             logger.info(f"Tool result: {tool_name}")
-                            # Don't flood with result details, just acknowledge
+                            
+                            # Brief status indicator
+                            if isinstance(output, dict) and output.get("status") == "error":
+                                result_msg = f"⚠️ _Tool {tool_name} encountered an issue_\n\n"
+                            else:
+                                result_msg = f"✓ _Got results from {tool_name}_\n\n"
+                            
+                            result_chunk = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_time,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": result_msg},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(result_chunk)}\n\n"
 
                         elif chunk["type"] == "done":
                             # Final chunk

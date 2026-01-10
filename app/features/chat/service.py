@@ -29,31 +29,49 @@ from app.features.chat.tools import TOOLS, execute_tool
 from app.features.memory import get_memory_service
 
 # =============================================================================
-# CONVERSATION-LEVEL MEMORY CACHE
+# SMART CONVERSATION-LEVEL MEMORY CACHE
 # =============================================================================
-# Cache memory context per conversation to avoid repeated embedding lookups.
-# Memory is only searched ONCE when conversation starts (first message) or
-# after significant time has passed (user returns later).
+# Cache memory context per conversation, but with smart refresh capabilities:
+# 
+# 1. INITIAL LOAD: First message searches Mem0 for relevant context
+# 2. CACHE REUSE: Follow-up messages reuse cached context (fast!)
+# 3. SMART REFRESH: If topic shifts significantly, refresh memory
+# 4. TIME-BASED REFRESH: After 30 min idle, refresh on next message
 #
-# This is similar to how Claude Desktop works - it loads context at start,
-# not on every message.
+# The search_memories tool can ALWAYS be used mid-conversation to get
+# fresh/different memories when needed.
 # =============================================================================
-_conversation_memory_cache: Dict[str, Tuple[float, str]] = {}
-_CONVERSATION_CACHE_TTL = 1800.0  # 30 minutes - conversation context is valid for 30 min
+_conversation_memory_cache: Dict[str, Tuple[float, str, str]] = {}  # conv_id -> (time, context, topic_hint)
+_CONVERSATION_CACHE_TTL = 1800.0  # 30 minutes
 _CONVERSATION_CACHE_MAX_SIZE = 100
+_TOPIC_REFRESH_KEYWORDS = [
+    "different topic", "new topic", "change subject", "switch to",
+    "let's talk about", "what about", "moving on to", "another thing",
+    "actually,", "by the way", "unrelated,", "speaking of",
+]
 
 def _get_cached_memory_context(conversation_id: str) -> Optional[str]:
     """Get cached memory context for a conversation if still valid."""
     if conversation_id in _conversation_memory_cache:
-        cached_time, cached_context = _conversation_memory_cache[conversation_id]
+        cached_time, cached_context, _ = _conversation_memory_cache[conversation_id]
         if time.time() - cached_time < _CONVERSATION_CACHE_TTL:
             return cached_context
     return None
 
-def _set_cached_memory_context(conversation_id: str, context: str) -> None:
+def _should_refresh_memory(conversation_id: str, new_message: str) -> bool:
+    """Check if we should refresh memory based on topic shift indicators."""
+    message_lower = new_message.lower()
+    
+    # Check for explicit topic change indicators
+    if any(keyword in message_lower for keyword in _TOPIC_REFRESH_KEYWORDS):
+        return True
+    
+    return False
+
+def _set_cached_memory_context(conversation_id: str, context: str, topic_hint: str = "") -> None:
     """Cache memory context for a conversation."""
     global _conversation_memory_cache
-    _conversation_memory_cache[conversation_id] = (time.time(), context)
+    _conversation_memory_cache[conversation_id] = (time.time(), context, topic_hint)
     
     # Prune old entries if too large
     if len(_conversation_memory_cache) > _CONVERSATION_CACHE_MAX_SIZE:
@@ -61,6 +79,11 @@ def _set_cached_memory_context(conversation_id: str, context: str) -> None:
                             key=lambda k: _conversation_memory_cache[k][0])
         for old_key in sorted_keys[:len(sorted_keys) // 2]:
             del _conversation_memory_cache[old_key]
+
+def _invalidate_memory_cache(conversation_id: str) -> None:
+    """Invalidate cache for a conversation (force refresh on next message)."""
+    if conversation_id in _conversation_memory_cache:
+        del _conversation_memory_cache[conversation_id]
 # =============================================================================
 
 # Cost tracking (per 1M tokens)
@@ -384,22 +407,32 @@ class ChatService:
         # Get memory service
         self.memory = get_memory_service()
     
-    async def _get_memory_context(self, message: str, conversation_id: Optional[str] = None) -> str:
+    async def _get_memory_context(self, message: str, conversation_id: Optional[str] = None, force_refresh: bool = False) -> str:
         """
-        Get relevant memories for the current message.
+        Get relevant memories for the current message with smart caching.
         
-        Uses conversation-level caching: memory is only searched ONCE when the
-        conversation starts (first message), not on every follow-up message.
-        This is similar to how Claude Desktop loads context at conversation start.
+        SMART MEMORY STRATEGY:
+        1. First message in conversation: Search Mem0 and cache
+        2. Follow-up messages: Use cached context (instant!)
+        3. Topic shift detected: Refresh memory automatically
+        4. User explicitly asks for more: search_memories tool available
+        5. After 30 min idle: Refresh on next message
         
-        Cache TTL is 30 minutes - if user returns later, we re-search for fresh context.
+        This balances speed (cache) with context relevance (refresh when needed).
         """
+        # Check for topic shift that warrants a refresh
+        if conversation_id and not force_refresh:
+            if _should_refresh_memory(conversation_id, message):
+                logger.info(f"Topic shift detected - refreshing memory for conversation {conversation_id[:8]}...")
+                force_refresh = True
+        
         # Check conversation cache first (fast path - no API call)
-        if conversation_id:
+        if conversation_id and not force_refresh:
             cached_context = _get_cached_memory_context(conversation_id)
             if cached_context is not None:
                 logger.debug(f"Using cached memory context for conversation {conversation_id[:8]}...")
-                return cached_context
+                # Add note that search_memories is available for more
+                return cached_context + "\n\n_💡 For different memories, use the search_memories tool._"
         
         try:
             # Search for memories related to the message
@@ -419,12 +452,14 @@ class ChatService:
                     if memory_text:
                         lines.append(f"• [{mem_type}] {memory_text}")
                 
-                lines.append(f"\n_({len(memories)} memories loaded - use search_memories for more)_")
+                lines.append(f"\n_({len(memories)} memories loaded - use search_memories for deeper context)_")
                 context = "\n\n" + "\n".join(lines)
             
             # Cache the result for this conversation
             if conversation_id:
-                _set_cached_memory_context(conversation_id, context)
+                # Extract topic hint from first few words of message
+                topic_hint = " ".join(message.split()[:5])
+                _set_cached_memory_context(conversation_id, context, topic_hint)
                 logger.info(f"Cached memory context for conversation {conversation_id[:8]}... (30min TTL)")
             
             return context
