@@ -1925,10 +1925,13 @@ def _query_database(sql: str) -> Dict[str, Any]:
 def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
     """Search contacts by name, company, etc."""
     try:
+        # Escape special characters for ILIKE to prevent SQL injection
+        safe_query = query.replace("%", "\\%").replace("_", "\\_")
+        
         result = supabase.table("contacts").select(
             "id, first_name, last_name, email, company, job_title, phone, notes"
         ).or_(
-            f"first_name.ilike.%{query}%,last_name.ilike.%{query}%,company.ilike.%{query}%,email.ilike.%{query}%"
+            f"first_name.ilike.%{safe_query}%,last_name.ilike.%{safe_query}%,company.ilike.%{safe_query}%,email.ilike.%{safe_query}%"
         ).is_("deleted_at", "null").limit(limit).execute()
         
         contacts = []
@@ -1952,9 +1955,12 @@ def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
 def _get_contact_history(contact_name: str) -> Dict[str, Any]:
     """Get full interaction history with a contact."""
     try:
+        # Escape special characters for ILIKE
+        safe_name = contact_name.replace("%", "\\%").replace("_", "\\_")
+        
         # Find contact
         result = supabase.table("contacts").select("id, first_name, last_name, email, company").or_(
-            f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+            f"first_name.ilike.%{safe_name}%,last_name.ilike.%{safe_name}%"
         ).is_("deleted_at", "null").limit(1).execute()
         
         if not result.data:
@@ -4941,12 +4947,16 @@ def _search_applications(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         if not query_str:
             return {"error": "query is required"}
         
+        # Escape special characters for ILIKE
+        query_str = query_str.replace("%", "\\%").replace("_", "\\_")
+        
         # Search across name, institution, context, notes, and content
+        # Note: Fetching content for snippet generation
         result = supabase.table("applications").select(
             "id, name, application_type, status, institution, website, grant_amount, deadline, context, notes, content"
         ).or_(
             f"name.ilike.%{query_str}%,institution.ilike.%{query_str}%,context.ilike.%{query_str}%,notes.ilike.%{query_str}%,content.ilike.%{query_str}%"
-        ).limit(limit).execute()
+        ).order("deadline", desc=False, nullsfirst=False).limit(limit).execute()
         
         applications = []
         for app in result.data or []:
@@ -5066,6 +5076,9 @@ def _search_linkedin_posts(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         
         if not query_str:
             return {"error": "query is required"}
+        
+        # Escape special characters for ILIKE
+        query_str = query_str.replace("%", "\\%").replace("_", "\\_")
         
         # Search across title and content
         result = supabase.table("linkedin_posts").select(
