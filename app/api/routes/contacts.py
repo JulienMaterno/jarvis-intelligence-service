@@ -158,6 +158,59 @@ async def search_contacts(q: str, limit: int = 5):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/contacts/{contact_id}/history")
+async def get_contact_history(contact_id: str) -> Dict[str, Any]:
+    """
+    Return contact history in format expected by Telegram bot briefing.
+    
+    Returns: meetings, open_tasks, recent_emails grouped appropriately.
+    """
+    db = get_database()
+    
+    try:
+        # Get meetings with this contact
+        meetings_result = db.client.table("meetings").select(
+            "id, title, date, summary, topics_discussed"
+        ).eq("contact_id", contact_id).is_(
+            "deleted_at", "null"
+        ).order("date", desc=True).limit(10).execute()
+        
+        # Get open tasks from meetings with this contact
+        meeting_ids = [m['id'] for m in meetings_result.data] if meetings_result.data else []
+        open_tasks = []
+        if meeting_ids:
+            tasks_result = db.client.table("tasks").select(
+                "id, title, status, due_date"
+            ).in_("origin_id", meeting_ids).neq(
+                "status", "completed"
+            ).neq("status", "Done").limit(10).execute()
+            open_tasks = tasks_result.data or []
+        
+        # Get recent emails with this contact
+        emails_result = db.client.table("emails").select(
+            "id, subject, date, sender, recipient, snippet"
+        ).eq("contact_id", contact_id).order("date", desc=True).limit(5).execute()
+        
+        # Add direction to emails
+        emails_with_direction = []
+        for email in (emails_result.data or []):
+            email_data = dict(email)
+            # If sender contains user's email, it's outgoing
+            sender = email.get('sender', '')
+            email_data['direction'] = 'sent' if 'aaron' in sender.lower() else 'received'
+            emails_with_direction.append(email_data)
+        
+        return {
+            "meetings": meetings_result.data or [],
+            "open_tasks": open_tasks,
+            "recent_emails": emails_with_direction,
+        }
+    
+    except Exception as exc:
+        logger.exception("Failed to get history for contact %s", contact_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/contacts/{contact_id}/interactions", response_model=ContactInteractionsResponse)
 async def get_contact_interactions(contact_id: str, limit: int = 50) -> ContactInteractionsResponse:
     """Return the recent interactions for a contact."""
