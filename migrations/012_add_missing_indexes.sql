@@ -19,10 +19,8 @@ CREATE INDEX IF NOT EXISTS idx_meetings_source_transcript_id
     ON meetings(source_transcript_id) 
     WHERE source_transcript_id IS NOT NULL;
 
--- Journals: Check if journal already created from transcript
-CREATE INDEX IF NOT EXISTS idx_journals_source_transcript_id 
-    ON journals(source_transcript_id) 
-    WHERE source_transcript_id IS NOT NULL;
+-- Journals: Don't have source_transcript_id column - skip
+-- Journals use date-based lookup instead
 
 -- Reflections: Check if reflection already created from transcript
 CREATE INDEX IF NOT EXISTS idx_reflections_source_transcript_id 
