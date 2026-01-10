@@ -677,11 +677,40 @@ WEB CHAT MODE - RESPONSE STYLE:
         - {"type": "done", "tools_used": [...]} when complete
         - {"type": "error", "message": "..."} on error
         """
+        import asyncio
+        import time
+        
         try:
-            # Get context (same as non-streaming)
-            memory_context = await self._get_memory_context(request.message)
+            start_time = time.time()
+            
+            # Run all context gathering in PARALLEL for faster startup
+            memory_task = asyncio.create_task(self._get_memory_context(request.message))
+            letta_task = asyncio.create_task(self._get_letta_context())
+            
+            # Journal context is sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
-            letta_context = await self._get_letta_context()
+            
+            # Wait for async tasks (in parallel) with timeout
+            try:
+                memory_context, letta_context = await asyncio.wait_for(
+                    asyncio.gather(memory_task, letta_task, return_exceptions=True),
+                    timeout=2.0  # 2 second max for context gathering
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Context gathering timed out after 2s, proceeding without")
+                memory_context = ""
+                letta_context = ""
+            
+            # Handle exceptions from gather
+            if isinstance(memory_context, Exception):
+                logger.warning(f"Memory context failed: {memory_context}")
+                memory_context = ""
+            if isinstance(letta_context, Exception):
+                logger.warning(f"Letta context failed: {letta_context}")
+                letta_context = ""
+            
+            context_time = time.time() - start_time
+            logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
 
             system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
@@ -775,15 +804,40 @@ WEB CHAT MODE - RESPONSE STYLE:
 
     async def process_message(self, request: ChatRequest) -> ChatResponse:
         """Process a user message and return a response."""
+        import asyncio
+        import time
+        
         try:
-            # Get relevant memories for this message (Mem0 - semantic)
-            memory_context = await self._get_memory_context(request.message)
+            start_time = time.time()
             
-            # Get recent journal context (mood, focus, recent activities)
+            # Run all context gathering in PARALLEL for faster startup
+            memory_task = asyncio.create_task(self._get_memory_context(request.message))
+            letta_task = asyncio.create_task(self._get_letta_context())
+            
+            # Journal context is sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
             
-            # Get Letta episodic context (conversation history, topics, decisions)
-            letta_context = await self._get_letta_context()
+            # Wait for async tasks (in parallel) with timeout
+            try:
+                memory_context, letta_context = await asyncio.wait_for(
+                    asyncio.gather(memory_task, letta_task, return_exceptions=True),
+                    timeout=2.0  # 2 second max for context gathering
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Context gathering timed out after 2s, proceeding without")
+                memory_context = ""
+                letta_context = ""
+            
+            # Handle exceptions from gather
+            if isinstance(memory_context, Exception):
+                logger.warning(f"Memory context failed: {memory_context}")
+                memory_context = ""
+            if isinstance(letta_context, Exception):
+                logger.warning(f"Letta context failed: {letta_context}")
+                letta_context = ""
+            
+            context_time = time.time() - start_time
+            logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
             
             # Build dynamic system prompt with current context, journals, Letta, and memory
             system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
