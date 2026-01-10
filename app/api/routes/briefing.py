@@ -470,11 +470,52 @@ async def schedule_hourly_briefings():
             # All-day events have T00:00:00 as their time (date-only from Google)
             return "T00:00:00" in start_time
         
+        def is_real_meeting(event: dict) -> bool:
+            """
+            Determine if event is a real meeting worth briefing for.
+            
+            A real meeting either:
+            1. Has at least one attendee besides yourself (email without 'self': True)
+            2. OR title contains meeting indicators: "&", "<>", " x ", " X ", "|"
+            
+            Filters out:
+            - Solo calendar blocks
+            - Birthday reminders
+            - Focus time / work blocks
+            """
+            title = event.get("summary", "") or ""
+            attendees = event.get("attendees") or []
+            
+            # Check title for meeting indicators
+            # " x " or " X " need spaces to avoid matching words like "next" or "text"
+            meeting_title_markers = ["&", "<>", " x ", " X ", "|"]
+            has_meeting_marker = any(marker in title for marker in meeting_title_markers)
+            
+            if has_meeting_marker:
+                return True
+            
+            # Check for external attendees (not self)
+            external_attendees = [
+                a for a in attendees 
+                if not a.get("self", False)  # Not yourself
+            ]
+            
+            if len(external_attendees) > 0:
+                return True
+            
+            return False
+        
         timed_events = [e for e in events if not is_all_day_event(e)]
         all_day_count = len(events) - len(timed_events)
         if all_day_count > 0:
             logger.info(f"[Hourly Schedule] Skipping {all_day_count} all-day events")
-        events = timed_events
+        
+        # Filter to only real meetings (with other people or meeting indicators in title)
+        real_meetings = [e for e in timed_events if is_real_meeting(e)]
+        solo_count = len(timed_events) - len(real_meetings)
+        if solo_count > 0:
+            logger.info(f"[Hourly Schedule] Skipping {solo_count} solo/non-meeting events")
+        events = real_meetings
         
         scheduled_count = 0
         scheduled_times = []

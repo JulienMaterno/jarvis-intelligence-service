@@ -59,6 +59,42 @@ def is_all_day_event(event: Dict) -> bool:
     return "T00:00:00" in start_time
 
 
+def is_real_meeting(event: Dict) -> bool:
+    """
+    Determine if event is a real meeting worth briefing for.
+    
+    A real meeting either:
+    1. Has at least one attendee besides yourself (email without 'self': True)
+    2. OR title contains meeting indicators: "&", "<>", " x ", " X ", "|"
+    
+    Filters out:
+    - Solo calendar blocks (focus time, work blocks)
+    - Birthday reminders
+    - Personal appointments without other people
+    """
+    title = event.get("summary", "") or ""
+    attendees = event.get("attendees") or []
+    
+    # Check title for meeting indicators
+    # " x " or " X " need spaces to avoid matching words like "next" or "text"
+    meeting_title_markers = ["&", "<>", " x ", " X ", "|"]
+    has_meeting_marker = any(marker in title for marker in meeting_title_markers)
+    
+    if has_meeting_marker:
+        return True
+    
+    # Check for external attendees (not self)
+    external_attendees = [
+        a for a in attendees 
+        if not a.get("self", False)  # Not yourself
+    ]
+    
+    if len(external_attendees) > 0:
+        return True
+    
+    return False
+
+
 def get_upcoming_events_for_briefing(
     db,
     minutes_ahead: int = 30,
@@ -96,6 +132,9 @@ def get_upcoming_events_for_briefing(
         # Filter out all-day events unless explicitly requested
         if not include_all_day:
             events = [e for e in events if not is_all_day_event(e)]
+        
+        # Filter to only real meetings (with other people or meeting indicators)
+        events = [e for e in events if is_real_meeting(e)]
         
         return events
     except Exception as e:
