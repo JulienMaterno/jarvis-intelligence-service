@@ -142,7 +142,7 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
         existing_topics = db.get_existing_reflection_topics()
         
         # Fetch known contacts for smart transcription correction
-        known_contacts = db.get_contacts_for_transcription(limit=100)
+        known_contacts = db.get_contacts_for_transcription(limit=200)
         logger.info(f"Fetched {len(known_contacts)} contacts for transcription correction")
         
         # Use async analyzer for non-blocking LLM call
@@ -349,7 +349,7 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
         existing_topics = db.get_existing_reflection_topics()
         
         # Fetch known contacts for smart transcription correction
-        known_contacts = db.get_contacts_for_transcription(limit=100)
+        known_contacts = db.get_contacts_for_transcription(limit=200)
         
         # Use async analyzer for non-blocking LLM call
         analysis = await analyzer.analyze_transcript_async(
@@ -624,7 +624,7 @@ async def process_meeting_transcript(
         existing_topics = db.get_existing_reflection_topics()
         
         # Fetch known contacts for smart transcription correction
-        known_contacts = db.get_contacts_for_transcription(limit=100)
+        known_contacts = db.get_contacts_for_transcription(limit=200)
         
         # Analyze with Claude (async for non-blocking)
         analysis = await analyzer.analyze_transcript_async(

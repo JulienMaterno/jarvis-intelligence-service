@@ -197,6 +197,18 @@ def build_processing_result_message(
             lines.append(f"  👤 Linked: {linked_name}{company_str}")
         lines.append("")
     
+    # Show clarifications needed (if AI flagged unclear references)
+    clarifications = analysis.get("clarifications_needed", [])
+    if clarifications:
+        lines.append("*❓ Clarifications needed:*")
+        for c in clarifications[:3]:  # Show up to 3
+            item = c.get("item", "Unknown")
+            question = c.get("question", "")
+            lines.append(f"  • {item}: {question}")
+        if len(clarifications) > 3:
+            lines.append(f"  _...and {len(clarifications) - 3} more_")
+        lines.append("")
+    
     # Footer with feedback options
     lines.append("_Reply to provide feedback or corrections._")
     

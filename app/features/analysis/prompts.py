@@ -105,7 +105,7 @@ Remember: topic_keys should be broad themes (e.g., "career-development" not "job
     contacts_context = ""
     if known_contacts:
         contact_lines = []
-        for c in known_contacts[:50]:  # Limit to 50 most relevant contacts
+        for c in known_contacts[:200]:  # Top 200 most recently interacted contacts
             name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
             company = c.get('company', '')
             if name:
@@ -115,12 +115,18 @@ Remember: topic_keys should be broad themes (e.g., "career-development" not "job
                     contact_lines.append(f"  - {name}")
         if contact_lines:
             contacts_context = f"""
-**AARON'S KNOWN CONTACTS (for name correction):**
-When you hear names in the transcript, try to match them to these known people:
+**AARON'S KNOWN CONTACTS (for name correction - {len(contact_lines)} of ~500+ total):**
+This is a PARTIAL list of Aaron's contacts, ordered by recent interaction. Not everyone is listed!
+
+When you hear names in the transcript:
+1. If it matches or sounds like someone in this list → use the correct spelling
+2. If it's a NEW name not in this list → that's fine! Aaron knows many people not listed here
+3. Use CONTEXT to determine if a name is a known contact vs a new person
+
 {chr(10).join(contact_lines)}
 
-If a name in the transcript sounds similar to one of these contacts, use the correct spelling.
-For example: "Melinder" → "Melinda", "Bao" sounds correct, "John" is common enough to be correct.
+**IMPORTANT:** Don't assume a name is wrong just because it's not in this list. Aaron has hundreds 
+more contacts. Only correct names that SOUND SIMILAR to someone listed (phonetic matching).
 """
 
     return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
@@ -139,7 +145,20 @@ CORRECTION STRATEGY:
 1. If Aaron is discussing his personal AI project development → "Java/jardin/Jarvis" = "Jarvis"
 2. If a name sounds similar to someone Aaron has mentioned before, use the correct name
 3. For technical terms, use your knowledge of the domain to infer correct terms
-4. When uncertain, preserve the original but note it may be a transcription error
+4. When uncertain, preserve the original but flag it in `clarifications_needed`
+
+**🔍 UNCERTAINTY DETECTION (IMPORTANT):**
+Pay attention to things that seem UNUSUAL or UNCLEAR:
+- Aaron mentions a person/project/company casually as if it's well-known, but you've never heard of it
+- Names that don't match any contacts AND don't sound like typical names
+- Technical terms or acronyms that seem project-specific but aren't explained
+- References to past conversations/events that seem important but lack context
+
+When you detect something unclear, add it to `clarifications_needed` in your output. This helps Aaron 
+know what context might be missing from his system. Examples:
+- "Who is 'Marco'? Not found in contacts - is this a new person or transcription error?"
+- "What is 'Project Phoenix'? Mentioned casually but no context in system."
+- "Name 'Schwerzenbach' unclear - is this a person, place, or company?"
 
 Apply corrections silently - produce the correct interpretation in your output without explicitly noting every fix.
 
@@ -274,6 +293,14 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
         "location": "City/country or null",
         "personal_notes": "Memorable personal details"
       }}
+    }}
+  ],
+  
+  "clarifications_needed": [
+    {{
+      "item": "The unclear term/name/reference",
+      "context": "How it was mentioned in the transcript",
+      "question": "What clarification would help? Is this a person, project, error?"
     }}
   ]
 }}
