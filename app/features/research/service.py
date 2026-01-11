@@ -20,7 +20,7 @@ from functools import lru_cache
 
 from .providers.base import ProviderResult
 from .providers.linkedin import LinkedInProvider
-from .providers.web_search import WebSearchProvider, SearchBackend
+from .providers.web_search import WebSearchProvider
 
 logger = logging.getLogger("Jarvis.Research")
 
@@ -80,7 +80,7 @@ class ResearchService:
         """Get web search provider (lazy loaded)."""
         if self._web_search is None:
             self._web_search = WebSearchProvider()
-            logger.info(f"WebSearch provider initialized (backends: {[b.value for b in self._web_search.available_backends]})")
+            logger.info(f"WebSearch provider initialized (configured: {self._web_search.is_configured})")
         return self._web_search
     
     # ==========================================================================
@@ -130,11 +130,12 @@ class ResearchService:
         return {
             "linkedin": {
                 "configured": self.linkedin.is_configured,
+                "provider": "Bright Data Scrapers API",
                 "operations": len(self.linkedin.get_operations())
             },
             "web_search": {
                 "configured": self.web_search.is_configured,
-                "backends": [b.value for b in self.web_search.available_backends],
+                "provider": "Brave Search API",
                 "operations": len(self.web_search.get_operations())
             }
         }

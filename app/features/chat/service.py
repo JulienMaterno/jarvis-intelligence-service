@@ -153,17 +153,29 @@ AVAILABLE TOOLS:
 - **Email sending**: draft and send emails (with user confirmation)
 - **Messaging (Beeper)**: send messages via WhatsApp, Telegram, LinkedIn, etc.
 - **Sync trigger**: trigger immediate data sync when needed
-- **Research (LinkedIn)**: profile lookups, company info, employee lists, job postings (via Bright Data - costs per query)
-- **Web Search**: search the internet for current information (via Tavily/SERP)
+- **LinkedIn Research**: profile lookups, people search, company info, employee lists, job postings (via Bright Data - costs per query)
+- **Web Search**: search the internet for current information (via Brave Search)
 
 RESEARCH TOOLS (⚠️ Cost-per-query APIs - use sparingly):
 Only use these when user EXPLICITLY asks for web research or LinkedIn information:
-- **linkedin_get_profile**: Get LinkedIn profile by URL (~$0.01-0.05)
-- **linkedin_search_profiles**: Search for people on LinkedIn (~$0.02-0.10)
-- **linkedin_get_company**: Get company info from LinkedIn (~$0.01-0.05)
-- **web_search**: Search the web (~$0.001-0.01)
-- **research_person**: Comprehensive person research (combines LinkedIn + web)
-- **research_company**: Comprehensive company research (combines LinkedIn + web)
+
+**LinkedIn Tools (Bright Data Scrapers API):**
+- **linkedin_get_profiles**: Get profile(s) by URL - supports batch (1-20 URLs) (~$0.01-0.05 each)
+- **linkedin_search_people**: Search LinkedIn by keyword: name, title, company, location, skills (~$0.02-0.10)
+- **linkedin_get_company**: Get company page info (~$0.01-0.05)
+- **linkedin_get_company_employees**: Get list of employees at a company (~$0.05-0.20)
+- **linkedin_get_company_jobs**: Get job postings from a company (~$0.02-0.10)
+
+**Web Search Tools (Brave Search API):**
+- **web_search**: General web search (~$0.003/query, 2000 free/month)
+- **web_search_news**: Search news articles (~$0.003/query)
+
+**Usage examples:**
+- "Look up John Smith on LinkedIn" → linkedin_search_people with query "John Smith"
+- "Get profiles for these 5 LinkedIn URLs" → linkedin_get_profiles with URLs array
+- "Find Founders in Ho Chi Minh City" → linkedin_search_people with query "Founder Ho Chi Minh City"
+- "What jobs are open at Google?" → linkedin_get_company_jobs
+- "Search the web for AI news" → web_search_news
 
 MESSAGING DATA STRATEGY (IMPORTANT - READ THIS):
 Messages from WhatsApp, Telegram, LinkedIn, etc. are synced to the database every 15 minutes.

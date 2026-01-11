@@ -1851,10 +1851,10 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _search_linkedin_posts(tool_input)
         elif tool_name == "get_linkedin_post_content":
             return _get_linkedin_post_content(tool_input)
-        # Research tools (LinkedIn via Bright Data, Web Search)
-        elif tool_name in ("linkedin_get_profile", "linkedin_search_profiles", 
-                          "linkedin_get_company", "linkedin_get_company_jobs",
-                          "web_search", "research_person", "research_company",
+        # Research tools (LinkedIn via Bright Data, Web Search via Brave)
+        elif tool_name in ("linkedin_get_profiles", "linkedin_search_people", 
+                          "linkedin_get_company", "linkedin_get_company_employees",
+                          "linkedin_get_company_jobs", "web_search", "web_search_news",
                           "get_research_status"):
             return _run_async(_handle_research_tool(tool_name, tool_input))
         else:

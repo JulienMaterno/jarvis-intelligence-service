@@ -1,20 +1,17 @@
 """
 Research Tools for Chat - Claude-compatible tool definitions
 
-These tools expose the research service capabilities to the chat system.
+These tools expose LinkedIn research and web search capabilities.
 They follow the same pattern as other chat tools in app/features/chat/tools.py.
 
-IMPORTANT: These tools are expensive (API costs). Use with care.
-- LinkedIn lookups: ~$0.01-0.05 per profile
-- Web searches: ~$0.001-0.01 per search
+Providers:
+- LinkedIn: Bright Data Web Scraper API (sign up at https://brightdata.com)
+- Web Search: Brave Search API (sign up at https://brave.com/search/api/)
 
-Tools:
-- linkedin_get_profile: Get LinkedIn profile by URL
-- linkedin_search_profiles: Search for LinkedIn profiles
-- linkedin_get_company: Get company info
-- web_search: Search the web
-- research_person: Comprehensive person research
-- research_company: Comprehensive company research
+Cost guidance:
+- LinkedIn profile lookup: ~$0.01-0.05 each
+- LinkedIn profile search: ~$0.02-0.10 per search
+- Web search: ~$0.003 per query (2000 free/month on Brave)
 """
 
 import logging
@@ -30,74 +27,128 @@ logger = logging.getLogger("Jarvis.Research.Tools")
 # =============================================================================
 
 RESEARCH_TOOLS = [
+    # -------------------------------------------------------------------------
+    # LinkedIn Tools (Bright Data)
+    # -------------------------------------------------------------------------
     {
-        "name": "linkedin_get_profile",
-        "description": """Get detailed LinkedIn profile information.
-        
-Use when user asks about a specific person's LinkedIn profile, professional background, or current role.
-Requires the profile URL or username.
+        "name": "linkedin_get_profiles",
+        "description": """Get LinkedIn profile(s) by URL. Can handle single or multiple URLs.
 
-⚠️ COST: ~$0.01-0.05 per lookup. Only use when specifically requested.""",
+USE WHEN:
+- User provides one or more LinkedIn profile URLs
+- User asks about a specific person's professional background
+- Need to look up contacts by their LinkedIn URL
+
+EXAMPLES:
+- "Get the profile for linkedin.com/in/satya-nadella" → single URL
+- "Look up these 5 people: [url1, url2, ...]" → batch of URLs
+- "What does John's LinkedIn say?" (if URL is known)
+
+⚠️ COST: ~$0.01-0.05 per profile. Use batch mode for multiple URLs (more efficient).""",
         "input_schema": {
             "type": "object",
             "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "LinkedIn profile URL (e.g., https://linkedin.com/in/username) or just the username"
+                "urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of LinkedIn profile URLs or usernames (1-20 URLs)"
                 }
             },
-            "required": ["url"]
+            "required": ["urls"]
         }
     },
     {
-        "name": "linkedin_search_profiles",
-        "description": """Search for LinkedIn profiles by keyword (name, title, company, skills).
-        
-Use when user wants to find people on LinkedIn by name, job title, company, or skills.
-Returns a list of matching profiles.
+        "name": "linkedin_search_people",
+        "description": """Search LinkedIn for people matching keywords like name, title, company, location, skills.
 
-⚠️ COST: ~$0.02-0.10 depending on result count. Only use when specifically requested.""",
+USE WHEN:
+- User wants to find people by criteria (e.g., "Founders in Ho Chi Minh City")
+- Looking for professionals with specific skills or titles
+- Need to discover potential contacts, leads, or experts
+
+SEARCH TIPS:
+- Be specific: "CTO fintech Singapore" works better than just "CTO"
+- Combine criteria: "Product Manager AI startup HCMC"
+- Include company if known: "Software Engineer Google"
+
+RETURNS: List of profiles with names, titles, companies, and profile URLs.
+
+⚠️ COST: ~$0.02-0.10 depending on result count.""",
         "input_schema": {
             "type": "object",
             "properties": {
-                "keyword": {
+                "query": {
                     "type": "string",
-                    "description": "Search keyword (name, title, company, etc.)"
+                    "description": "Search query (combine: name, title, company, location, skills)"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max results to return (default 10, max 50)",
+                    "description": "Number of results (default 10, max 50)",
                     "default": 10
                 }
             },
-            "required": ["keyword"]
+            "required": ["query"]
         }
     },
     {
         "name": "linkedin_get_company",
         "description": """Get LinkedIn company page information.
-        
-Use when user asks about a company's LinkedIn presence, size, industry, etc.
 
-⚠️ COST: ~$0.01-0.05 per lookup. Only use when specifically requested.""",
+USE WHEN:
+- User asks about a company's LinkedIn profile
+- Need company size, industry, description, location
+- Researching a company before a meeting
+
+⚠️ COST: ~$0.01-0.05 per lookup.""",
         "input_schema": {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "Company LinkedIn URL (e.g., https://linkedin.com/company/google) or company slug"
+                    "description": "Company LinkedIn URL (e.g., linkedin.com/company/google) or company slug"
                 }
             },
             "required": ["url"]
         }
     },
     {
-        "name": "linkedin_get_company_jobs",
-        "description": """Get job postings from a LinkedIn company page.
-        
-Use when user asks about job openings at a specific company.
+        "name": "linkedin_get_company_employees",
+        "description": """Get list of employees at a company from LinkedIn.
 
-⚠️ COST: ~$0.02-0.10 depending on job count.""",
+USE WHEN:
+- User wants to see who works at a company
+- Looking for specific roles at a company
+- Building a contact list for a target company
+
+NOTE: This is an async operation for large results. May return a job ID to check later.
+
+⚠️ COST: ~$0.05-0.20 depending on company size.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_url": {
+                    "type": "string",
+                    "description": "Company LinkedIn URL"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max employees (default 50, max 200)",
+                    "default": 50
+                }
+            },
+            "required": ["company_url"]
+        }
+    },
+    {
+        "name": "linkedin_get_company_jobs",
+        "description": """Get job postings from a company's LinkedIn page.
+
+USE WHEN:
+- User asks about job openings at a company
+- Researching hiring trends
+- Looking for opportunities at a specific company
+
+⚠️ COST: ~$0.02-0.10.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -114,20 +165,28 @@ Use when user asks about job openings at a specific company.
             "required": ["company_url"]
         }
     },
+    # -------------------------------------------------------------------------
+    # Web Search Tools (Brave)
+    # -------------------------------------------------------------------------
     {
         "name": "web_search",
-        "description": """Search the web for information.
-        
-Use when user needs current information from the web that isn't in the knowledge base.
-Returns search results with titles, URLs, and snippets.
+        "description": """Search the web using Brave Search.
 
-Good for:
-- Current news and events
-- Research on topics not in database
-- Fact-checking
-- Finding specific websites/resources
+USE WHEN:
+- User needs current information not in your knowledge
+- Fact-checking or research on any topic
+- Looking up websites, news, or recent events
+- Finding information about companies, products, people (non-LinkedIn)
 
-⚠️ Use sparingly - check database/memory first.""",
+DO NOT USE FOR:
+- LinkedIn profiles (use linkedin_* tools instead)
+- Information already in the database/memory
+
+TIPS:
+- Be specific in queries for better results
+- Use 'freshness' for time-sensitive queries
+
+⚠️ COST: ~$0.003/query (2000 free/month on Brave).""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -137,93 +196,50 @@ Good for:
                 },
                 "num_results": {
                     "type": "integer",
-                    "description": "Number of results (default 10)",
+                    "description": "Number of results (default 10, max 20)",
                     "default": 10
                 },
-                "include_domains": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Only search these domains (e.g., ['wikipedia.org', 'reuters.com'])"
-                },
-                "exclude_domains": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Exclude these domains"
+                "freshness": {
+                    "type": "string",
+                    "description": "Filter by recency: 'pd' (past day), 'pw' (past week), 'pm' (past month)",
+                    "enum": ["pd", "pw", "pm"]
                 }
             },
             "required": ["query"]
         }
     },
     {
-        "name": "research_person",
-        "description": """Comprehensive person research combining LinkedIn and web search.
-        
-Use when user wants thorough research on a person, combining:
-- LinkedIn profile data
-- Web mentions and news
-- Professional background
+        "name": "web_search_news",
+        "description": """Search for news articles using Brave News.
 
-Provide LinkedIn URL if known for best results.
+USE WHEN:
+- User asks about recent news or events
+- Need to find news coverage about a company/person
+- Researching current events
 
-⚠️ COST: Higher cost tool (~$0.05-0.15). Only use when explicitly requested.""",
+⚠️ COST: ~$0.003/query.""",
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {
+                "query": {
                     "type": "string",
-                    "description": "Person's full name"
+                    "description": "News search query"
                 },
-                "company": {
-                    "type": "string",
-                    "description": "Company name (helps narrow search)"
-                },
-                "linkedin_url": {
-                    "type": "string",
-                    "description": "LinkedIn profile URL if known"
+                "num_results": {
+                    "type": "integer",
+                    "description": "Number of results (default 10)",
+                    "default": 10
                 }
             },
-            "required": ["name"]
+            "required": ["query"]
         }
     },
-    {
-        "name": "research_company",
-        "description": """Comprehensive company research combining LinkedIn and web search.
-        
-Use when user wants thorough research on a company, including:
-- Company profile and description
-- Industry and size
-- Recent news and web mentions
-- Optionally: job postings and employee list
-
-⚠️ COST: Higher cost tool. Only use when explicitly requested.""",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "company_name": {
-                    "type": "string",
-                    "description": "Company name"
-                },
-                "linkedin_url": {
-                    "type": "string",
-                    "description": "LinkedIn company URL if known"
-                },
-                "include_jobs": {
-                    "type": "boolean",
-                    "description": "Include job postings (adds cost)",
-                    "default": False
-                },
-                "include_employees": {
-                    "type": "boolean",
-                    "description": "Include employee list (adds cost, can be slow)",
-                    "default": False
-                }
-            },
-            "required": ["company_name"]
-        }
-    },
+    # -------------------------------------------------------------------------
+    # Meta Tools
+    # -------------------------------------------------------------------------
     {
         "name": "get_research_status",
-        "description": "Check which research providers are configured and available.",
+        "description": "Check which research providers are configured and available. Use this to diagnose configuration issues.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -237,53 +253,90 @@ Use when user wants thorough research on a company, including:
 # Tool Implementations
 # =============================================================================
 
-async def _linkedin_get_profile(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Get LinkedIn profile by URL."""
+async def _linkedin_get_profiles(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get LinkedIn profile(s) by URL - supports batch."""
     service = get_research_service()
     
     if not service.linkedin.is_configured:
         return {
             "error": "LinkedIn research not configured",
-            "message": "Set BRIGHTDATA_API_KEY to enable LinkedIn lookups."
+            "setup": "Sign up at https://brightdata.com → Get Scrapers API key → Set BRIGHTDATA_API_KEY"
         }
     
-    url = tool_input.get("url", "")
-    result = await service.linkedin.execute("get_profile", {"url": url})
+    urls = tool_input.get("urls", [])
+    if isinstance(urls, str):
+        urls = [urls]  # Handle single URL passed as string
     
-    if result.is_success:
-        return {
-            "status": "success",
-            "profile": result.data,
-            "cache_hit": result.metadata.get("cache_hit", False)
-        }
-    else:
-        return {"error": result.error, "status": result.status.value}
+    if not urls:
+        return {"error": "No URLs provided"}
+    
+    if len(urls) > 20:
+        return {"error": f"Too many URLs ({len(urls)}). Maximum is 20 per request."}
+    
+    results = []
+    errors = []
+    
+    for url in urls:
+        try:
+            result = await service.linkedin.execute("get_profile", {"url": url})
+            if result.is_success:
+                results.append({
+                    "url": url,
+                    "profile": result.data,
+                    "cached": result.metadata.get("cache_hit", False)
+                })
+            else:
+                errors.append({"url": url, "error": result.error})
+        except Exception as e:
+            errors.append({"url": url, "error": str(e)})
+    
+    return {
+        "status": "success" if results else "failed",
+        "profiles": results,
+        "errors": errors if errors else None,
+        "count": len(results),
+        "failed_count": len(errors)
+    }
 
 
-async def _linkedin_search_profiles(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Search LinkedIn profiles."""
+async def _linkedin_search_people(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search LinkedIn for people."""
     service = get_research_service()
     
     if not service.linkedin.is_configured:
         return {
             "error": "LinkedIn research not configured",
-            "message": "Set BRIGHTDATA_API_KEY to enable LinkedIn searches."
+            "setup": "Sign up at https://brightdata.com → Get Scrapers API key → Set BRIGHTDATA_API_KEY"
         }
     
-    keyword = tool_input.get("keyword", "")
+    query = tool_input.get("query", "")
+    if not query:
+        return {"error": "Search query is required"}
+    
     limit = min(tool_input.get("limit", 10), 50)
     
     result = await service.linkedin.execute(
         "search_profiles",
-        {"keyword": keyword, "limit": limit}
+        {"keyword": query, "limit": limit}
     )
     
     if result.is_success:
+        # Handle both list response and async job response
+        data = result.data
+        if isinstance(data, dict) and data.get("snapshot_id"):
+            return {
+                "status": "pending",
+                "message": "Large search started. Results will be available soon.",
+                "snapshot_id": data["snapshot_id"]
+            }
+        
+        profiles = data if isinstance(data, list) else []
         return {
             "status": "success",
-            "profiles": result.data,
-            "count": len(result.data) if isinstance(result.data, list) else None,
-            "cache_hit": result.metadata.get("cache_hit", False)
+            "profiles": profiles,
+            "count": len(profiles),
+            "query": query,
+            "cached": result.metadata.get("cache_hit", False)
         }
     else:
         return {"error": result.error, "status": result.status.value}
@@ -294,22 +347,53 @@ async def _linkedin_get_company(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     service = get_research_service()
     
     if not service.linkedin.is_configured:
-        return {
-            "error": "LinkedIn research not configured",
-            "message": "Set BRIGHTDATA_API_KEY to enable LinkedIn lookups."
-        }
+        return {"error": "LinkedIn research not configured"}
     
     url = tool_input.get("url", "")
+    if not url:
+        return {"error": "Company URL is required"}
+    
     result = await service.linkedin.execute("get_company", {"url": url})
     
     if result.is_success:
         return {
             "status": "success",
             "company": result.data,
-            "cache_hit": result.metadata.get("cache_hit", False)
+            "cached": result.metadata.get("cache_hit", False)
         }
     else:
-        return {"error": result.error, "status": result.status.value}
+        return {"error": result.error}
+
+
+async def _linkedin_get_company_employees(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Get company employees from LinkedIn."""
+    service = get_research_service()
+    
+    if not service.linkedin.is_configured:
+        return {"error": "LinkedIn research not configured"}
+    
+    company_url = tool_input.get("company_url", "")
+    if not company_url:
+        return {"error": "Company URL is required"}
+    
+    limit = min(tool_input.get("limit", 50), 200)
+    
+    result = await service.linkedin.execute(
+        "get_company_employees",
+        {"company_url": company_url, "limit": limit}
+    )
+    
+    if result.is_success:
+        data = result.data
+        if isinstance(data, dict) and data.get("snapshot_id"):
+            return {
+                "status": "pending",
+                "message": "Employee lookup started (async). Results will be available soon.",
+                "snapshot_id": data["snapshot_id"]
+            }
+        return {"status": "success", "employees": data}
+    else:
+        return {"error": result.error}
 
 
 async def _linkedin_get_company_jobs(tool_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -320,6 +404,9 @@ async def _linkedin_get_company_jobs(tool_input: Dict[str, Any]) -> Dict[str, An
         return {"error": "LinkedIn research not configured"}
     
     company_url = tool_input.get("company_url", "")
+    if not company_url:
+        return {"error": "Company URL is required"}
+    
     limit = tool_input.get("limit", 25)
     
     result = await service.linkedin.execute(
@@ -330,29 +417,29 @@ async def _linkedin_get_company_jobs(tool_input: Dict[str, Any]) -> Dict[str, An
     if result.is_success:
         return {"status": "success", "jobs": result.data}
     else:
-        return {"error": result.error, "status": result.status.value}
+        return {"error": result.error}
 
 
 async def _web_search(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute web search."""
+    """Execute web search via Brave."""
     service = get_research_service()
     
     if not service.web_search.is_configured:
         return {
             "error": "Web search not configured",
-            "message": "Set TAVILY_API_KEY or another search API key."
+            "setup": "Sign up at https://brave.com/search/api/ → Set BRAVE_API_KEY"
         }
     
     query = tool_input.get("query", "")
-    num_results = tool_input.get("num_results", 10)
-    include_domains = tool_input.get("include_domains")
-    exclude_domains = tool_input.get("exclude_domains")
+    if not query:
+        return {"error": "Search query is required"}
     
-    params = {"query": query, "num_results": num_results}
-    if include_domains:
-        params["include_domains"] = include_domains
-    if exclude_domains:
-        params["exclude_domains"] = exclude_domains
+    params = {
+        "query": query,
+        "num_results": tool_input.get("num_results", 10)
+    }
+    if tool_input.get("freshness"):
+        params["freshness"] = tool_input["freshness"]
     
     result = await service.web_search.execute("search", params)
     
@@ -360,86 +447,63 @@ async def _web_search(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "status": "success",
             "results": result.data,
-            "backend": result.metadata.get("backend"),
-            "cache_hit": result.metadata.get("cache_hit", False)
+            "cached": result.metadata.get("cache_hit", False)
         }
     else:
         return {"error": result.error, "status": result.status.value}
 
 
-async def _research_person(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Comprehensive person research."""
+async def _web_search_news(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Search news articles."""
     service = get_research_service()
     
-    name = tool_input.get("name", "")
-    company = tool_input.get("company")
-    linkedin_url = tool_input.get("linkedin_url")
+    if not service.web_search.is_configured:
+        return {"error": "Web search not configured"}
     
-    if not name:
-        return {"error": "Name is required"}
+    query = tool_input.get("query", "")
+    if not query:
+        return {"error": "Search query is required"}
     
-    result = await service.research_person(
-        name=name,
-        company=company,
-        linkedin_url=linkedin_url
-    )
-    
-    return {
-        "status": "success",
-        "research": result,
-        "sources_used": {
-            "linkedin": result.get("linkedin") is not None,
-            "web": result.get("web_mentions") is not None
-        }
+    params = {
+        "query": query,
+        "num_results": tool_input.get("num_results", 10)
     }
-
-
-async def _research_company(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Comprehensive company research."""
-    service = get_research_service()
     
-    company_name = tool_input.get("company_name", "")
-    linkedin_url = tool_input.get("linkedin_url")
-    include_jobs = tool_input.get("include_jobs", False)
-    include_employees = tool_input.get("include_employees", False)
+    result = await service.web_search.execute("search_news", params)
     
-    if not company_name:
-        return {"error": "Company name is required"}
-    
-    result = await service.research_company(
-        company_name=company_name,
-        linkedin_url=linkedin_url,
-        include_jobs=include_jobs,
-        include_employees=include_employees
-    )
-    
-    return {
-        "status": "success",
-        "research": result
-    }
+    if result.is_success:
+        return {"status": "success", "articles": result.data}
+    else:
+        return {"error": result.error}
 
 
 async def _get_research_status(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     """Get research service status."""
     service = get_research_service()
+    status = service.get_status()
+    
     return {
         "status": "success",
-        "providers": service.get_status()
+        "providers": status,
+        "setup_instructions": {
+            "linkedin": "Bright Data Scrapers API → https://brightdata.com → Set BRIGHTDATA_API_KEY",
+            "web_search": "Brave Search API → https://brave.com/search/api/ → Set BRAVE_API_KEY"
+        }
     }
 
 
 # =============================================================================
-# Tool Router (for chat service integration)
+# Tool Router
 # =============================================================================
 
 RESEARCH_TOOL_HANDLERS = {
-    "linkedin_get_profile": _linkedin_get_profile,
-    "linkedin_search_profiles": _linkedin_search_profiles,
+    "linkedin_get_profiles": _linkedin_get_profiles,
+    "linkedin_search_people": _linkedin_search_people,
     "linkedin_get_company": _linkedin_get_company,
+    "linkedin_get_company_employees": _linkedin_get_company_employees,
     "linkedin_get_company_jobs": _linkedin_get_company_jobs,
     "web_search": _web_search,
-    "research_person": _research_person,
-    "research_company": _research_company,
+    "web_search_news": _web_search_news,
     "get_research_status": _get_research_status,
 }
 
@@ -452,7 +516,11 @@ async def handle_research_tool(tool_name: str, tool_input: Dict[str, Any]) -> Di
     """
     handler = RESEARCH_TOOL_HANDLERS.get(tool_name)
     if handler:
-        return await handler(tool_input)
+        try:
+            return await handler(tool_input)
+        except Exception as e:
+            logger.error(f"Research tool error ({tool_name}): {e}")
+            return {"error": str(e), "tool": tool_name}
     else:
         return {"error": f"Unknown research tool: {tool_name}"}
 
