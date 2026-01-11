@@ -2126,11 +2126,20 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
     else:
         return {"error": "Only UPDATE, INSERT, or DELETE statements are allowed. For SELECT, use query_database."}
     
-    # Block extremely dangerous operations
-    dangerous = ["DROP", "TRUNCATE", "ALTER", "GRANT", "REVOKE", "CREATE"]
-    for keyword in dangerous:
-        if keyword in sql_upper:
-            return {"error": f"Query contains forbidden keyword: {keyword}"}
+    # Block extremely dangerous SQL commands (using word boundaries to avoid false positives)
+    # e.g., "GRANT" in "application_type='Grant'" should NOT be blocked
+    import re
+    dangerous_patterns = [
+        r'\bDROP\s+(TABLE|DATABASE|INDEX|VIEW)',
+        r'\bTRUNCATE\s+',
+        r'\bALTER\s+(TABLE|DATABASE)',
+        r'^\s*GRANT\s+',  # Only block GRANT at start of statement
+        r'^\s*REVOKE\s+',  # Only block REVOKE at start of statement
+        r'\bCREATE\s+(TABLE|DATABASE|INDEX|VIEW|USER)',
+    ]
+    for pattern in dangerous_patterns:
+        if re.search(pattern, sql_upper):
+            return {"error": f"Query contains forbidden SQL command pattern: {pattern}"}
     
     # Extract table name
     import re
