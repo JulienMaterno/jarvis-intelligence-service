@@ -15,6 +15,7 @@ def build_multi_analysis_prompt(
     user_context: str = None,
     transcript_stats: Dict = None,
     known_contacts: List[Dict[str, str]] = None,
+    person_context: Dict = None,
 ) -> str:
     """
     Build the main analysis prompt for Claude.
@@ -29,6 +30,7 @@ def build_multi_analysis_prompt(
     7. Consolidate multiple conversations into ONE meeting per person
     8. AI-DRIVEN reflection routing (no code-based fuzzy matching)
     9. SMART TRANSCRIPTION CORRECTION using known contacts
+    10. PERSON CONTEXT - Use confirmed person name when provided
     """
     
     # Calculate transcript stats for scaling output
@@ -129,8 +131,39 @@ When you hear names in the transcript:
 more contacts. Only correct names that SOUND SIMILAR to someone listed (phonetic matching).
 """
 
-    return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
+    # Build person context for meeting attribution
+    person_context_section = ""
+    if person_context and person_context.get("confirmed_person_name"):
+        confirmed_name = person_context.get("confirmed_person_name")
+        is_confirmed = person_context.get("person_confirmed", False)
+        prev_meetings = person_context.get("previous_meetings_summary", "")
+        
+        if is_confirmed:
+            person_context_section = f"""
+**🎯 CONFIRMED MEETING PARTICIPANT (USER VERIFIED):**
+Aaron has CONFIRMED he is meeting with: **{confirmed_name}**
+- This is NOT a guess - Aaron explicitly confirmed this
+- Use "{confirmed_name}" as the person_name in the meeting record
+- Do NOT change this name based on other names mentioned in the transcript
+"""
+        else:
+            person_context_section = f"""
+**📅 CALENDAR-DETECTED MEETING PARTICIPANT:**
+Based on Aaron's calendar, this appears to be a meeting with: **{confirmed_name}**
+- Use "{confirmed_name}" as the person_name unless the transcript clearly indicates otherwise
+- Other names mentioned might be people discussed in the conversation, not the meeting participant
+"""
+        
+        if prev_meetings:
+            person_context_section += f"""
+**📚 PREVIOUS MEETINGS WITH {confirmed_name.upper()}:**
+{prev_meetings}
+- Consider this context when summarizing the current meeting
+- Note any follow-up items from previous discussions
+"""
 
+    return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
+{person_context_section}
 **⚠️ CRITICAL: TRANSCRIPTION ERROR CORRECTION**
 The transcript was created by automatic speech recognition which often makes mistakes. You must INTELLIGENTLY CORRECT errors using context:
 {contacts_context}

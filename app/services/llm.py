@@ -55,6 +55,7 @@ class ClaudeMultiAnalyzer:
         recording_date: Optional[str] = None,
         existing_topics: Optional[List[Dict[str, str]]] = None,
         known_contacts: Optional[List[Dict[str, str]]] = None,
+        person_context: Optional[Dict] = None,
     ) -> Dict:
         """
         ASYNC version - Analyze transcript without blocking the event loop.
@@ -62,6 +63,11 @@ class ClaudeMultiAnalyzer:
         
         Args:
             known_contacts: List of contacts for smart name correction in transcripts
+            person_context: Context about who the meeting is with (from Screenpipe bridge)
+                - confirmed_person_name: Name from calendar or user confirmation
+                - person_confirmed: Whether user explicitly confirmed this
+                - contact_id: Linked contact ID if known
+                - previous_meetings_summary: Brief summary of past interactions
         """
         try:
             logger.info("Analyzing transcript ASYNC for multi-database routing (length: %d chars)", len(transcript))
@@ -81,6 +87,7 @@ class ClaudeMultiAnalyzer:
                 existing_topics=existing_topics or [],
                 transcript_stats=transcript_stats,
                 known_contacts=known_contacts,
+                person_context=person_context,
             )
 
             last_error: Optional[Exception] = None
@@ -234,6 +241,7 @@ class ClaudeMultiAnalyzer:
         existing_topics: List[Dict[str, str]],
         transcript_stats: Dict = None,
         known_contacts: List[Dict[str, str]] = None,
+        person_context: Dict = None,
     ) -> str:
         """Generate the instruction block sent to Claude using centralized prompts."""
         return build_multi_analysis_prompt(
@@ -243,6 +251,7 @@ class ClaudeMultiAnalyzer:
             existing_topics=existing_topics,
             transcript_stats=transcript_stats,
             known_contacts=known_contacts,
+            person_context=person_context,
         )
 
     def _invoke_model(self, prompt: str, model_name: str) -> str:

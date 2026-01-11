@@ -8,6 +8,17 @@ class TranscriptRequest(BaseModel):
     audio_duration_seconds: Optional[float] = None
     language: Optional[str] = None
 
+class PersonContext(BaseModel):
+    """Context about who the meeting is with - helps AI attribute correctly."""
+    confirmed_person_name: Optional[str] = None  # Name from calendar or user confirmation
+    person_confirmed: bool = False  # Whether user explicitly confirmed/corrected
+    contact_id: Optional[str] = None  # Linked contact ID if known
+    previous_meetings_summary: Optional[str] = None  # Brief summary of past interactions
+
+class ProcessTranscriptRequest(BaseModel):
+    """Request body for /process/{transcript_id} endpoint."""
+    person_context: Optional[PersonContext] = None  # Context about meeting participant
+
 class TranscriptProcessRequest(BaseModel):
     transcript_id: str
     

@@ -34,45 +34,59 @@ TOOLS = [
         "name": "execute_sql_write",
         "description": """Execute a write SQL statement (UPDATE, INSERT, DELETE) against the database.
 
-⚠️ REQUIRES USER CONFIRMATION before execution.
-Always show the user exactly what will be changed and ask for explicit confirmation.
+⚠️ REQUIRES USER CONFIRMATION - Always set user_confirmed=false first to show what will change, then call again with user_confirmed=true after user confirms.
 
-Use this when user explicitly asks to:
-- Update records directly
-- Delete records directly  
-- Insert records directly
-- Fix data issues
+WHEN TO USE:
+- User says "update X to Y", "change X", "set X to Y", "fix X"
+- Modifying single fields that specific tools don't handle
+- Bulk updates (with user confirmation)
+- Any direct data manipulation request
 
-For common operations, prefer specific tools:
-- create_task, complete_task, update_task (for tasks)
-- create_contact, update_contact (for contacts)
-- create_meeting, create_reflection (for other entities)
+HOW TO USE (2-step process):
+1. FIRST CALL: Set user_confirmed=false to preview the change
+2. SECOND CALL: After user confirms, call with user_confirmed=true
 
-Only use execute_sql_write when specific tools can't handle the request.
+SQL FORMAT REQUIREMENTS:
+- UPDATE: UPDATE table SET col1='val1', col2='val2' WHERE id='uuid'
+- INSERT: INSERT INTO table (col1, col2) VALUES ('val1', 'val2')
+- DELETE: DELETE FROM table WHERE id='uuid'
+- MUST include WHERE id='uuid' for UPDATE/DELETE (safety requirement)
 
-Tables that can be modified:
+IMPORTANT BEHAVIORS:
+- The tool automatically sets updated_at=now() on updates
+- The tool automatically sets last_sync_source='supabase' for sync-managed tables (this triggers sync to Notion)
+- Use .select() is handled internally - you'll get the updated record back
+
+EXAMPLE - Update application status:
+sql: "UPDATE applications SET status='Applied' WHERE id='550e8400-e29b-41d4-a716-446655440000'"
+description: "Mark Cosmos application as Applied"
+user_confirmed: false (first), then true (after confirmation)
+
+WRITABLE TABLES:
 - contacts, meetings, tasks, journals, reflections
-- applications, linkedin_posts
+- applications, linkedin_posts, books, highlights
 
-Tables that CANNOT be modified (sync-managed):
-- calendar_events, emails (synced from Google)
-- beeper_chats, beeper_messages (synced from Beeper)
-- transcripts (created by audio pipeline)
-""",
+READ-ONLY TABLES (managed by sync - cannot modify):
+- calendar_events, emails, beeper_chats, beeper_messages, transcripts
+
+For common operations, prefer specific tools when available:
+- Tasks: create_task, complete_task, update_task
+- Contacts: create_contact, update_contact
+- Meetings/Reflections: create_meeting, create_reflection""",
         "input_schema": {
             "type": "object",
             "properties": {
                 "sql": {
                     "type": "string",
-                    "description": "The SQL statement to execute (UPDATE, INSERT, DELETE)"
+                    "description": "The SQL statement. Format: UPDATE table SET col='val' WHERE id='uuid'"
                 },
                 "user_confirmed": {
                     "type": "boolean",
-                    "description": "REQUIRED: Must be true to execute. Show user what will change first!"
+                    "description": "Set false first to preview, then true after user confirms"
                 },
                 "description": {
                     "type": "string",
-                    "description": "Human-readable description of what this query does"
+                    "description": "Human-readable description of what this change does"
                 }
             },
             "required": ["sql", "user_confirmed", "description"]

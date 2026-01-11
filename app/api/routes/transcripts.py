@@ -1,8 +1,9 @@
 import logging
+from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.api.dependencies import get_services, get_memory
-from app.api.models import AnalysisResponse, TranscriptRequest
+from app.api.models import AnalysisResponse, TranscriptRequest, ProcessTranscriptRequest
 from app.services.sync_trigger import trigger_syncs_for_records
 from app.features.telegram import (
     send_telegram_message, 
@@ -106,12 +107,33 @@ def _ensure_task_creation(
 
 
 @router.post("/process/{transcript_id}", response_model=AnalysisResponse)
-async def process_transcript(transcript_id: str, background_tasks: BackgroundTasks) -> AnalysisResponse:
-    """Process an existing transcript and persist structured AI output."""
+async def process_transcript(
+    transcript_id: str,
+    background_tasks: BackgroundTasks,
+    request: Optional[ProcessTranscriptRequest] = None
+) -> AnalysisResponse:
+    """
+    Process an existing transcript and persist structured AI output.
+    
+    Args:
+        transcript_id: ID of the transcript to process
+        request: Optional request body with person_context for meeting attribution
+    """
     analyzer, db = get_services()
 
     try:
-        logger.info("Processing stored transcript %s", transcript_id)
+        # Extract person context if provided
+        person_context = None
+        if request and request.person_context:
+            person_context = {
+                "confirmed_person_name": request.person_context.confirmed_person_name,
+                "person_confirmed": request.person_context.person_confirmed,
+                "contact_id": request.person_context.contact_id,
+                "previous_meetings_summary": request.person_context.previous_meetings_summary,
+            }
+            logger.info(f"Processing transcript {transcript_id} with person context: {person_context.get('confirmed_person_name')}")
+        else:
+            logger.info("Processing stored transcript %s", transcript_id)
 
         transcript_record = db.get_transcript(transcript_id)
         if not transcript_record:
@@ -152,6 +174,7 @@ async def process_transcript(transcript_id: str, background_tasks: BackgroundTas
             recording_date=recording_date,
             existing_topics=existing_topics,
             known_contacts=known_contacts,
+            person_context=person_context,  # Pass person context to analyzer
         )
 
         db_records = {
