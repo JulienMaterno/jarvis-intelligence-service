@@ -31,13 +31,14 @@ BRIGHTDATA_BASE_URL = "https://api.brightdata.com/datasets/v3"
 
 # Scraper IDs for different LinkedIn endpoints
 # These are Bright Data's pre-built scraper identifiers
+# To find correct IDs: Go to Bright Data Console → Web Scraper API → LinkedIn
 SCRAPER_IDS = {
     "profile_by_url": "gd_l1viktl72bvl7bjuj0",  # LinkedIn Profile by URL
-    "profiles_by_keyword": "gd_l7q7dkf244hwjntr0",  # LinkedIn Profiles by Keyword
     "company_by_url": "gd_l1vikfnt1wgvvqz95w",  # LinkedIn Company by URL
-    "company_employees": "gd_lyclf27l1hm8oagtho",  # LinkedIn Company Employees
     "company_jobs": "gd_lpfll7v81kap1ke3i6",  # LinkedIn Company Jobs
-    "posts_by_profile": "gd_m0r9v8k2hqr5hcd1o5",  # LinkedIn Posts by Profile
+    "posts_by_profile": "gd_m0r9v8k2hqr5hcd1o5",  # LinkedIn Posts by Profile URL
+    # Note: Profile search by name/keyword requires a different scraper
+    # that may need separate setup in Bright Data console
 }
 
 
@@ -257,31 +258,23 @@ class LinkedInProvider(BaseProvider):
     
     async def _search_profiles(self, params: Dict[str, Any]) -> ProviderResult:
         """
-        Search for LinkedIn profiles by keyword.
+        Search for LinkedIn profiles by name.
         
-        Params:
-            keyword: Search term (name, title, company, etc.)
-            limit: Max results (default 10, max 100)
-            get_full_data: Whether to return full profile data (slower, costs more)
+        NOTE: This feature requires a separate scraper setup in Bright Data console.
+        Currently, only URL-based profile lookups are supported.
+        
+        To enable name search:
+        1. Go to Bright Data Console → Web Scraper API
+        2. Find "LinkedIn Profile Discovery by Name" 
+        3. Get the scraper ID and add it to SCRAPER_IDS
         """
-        keyword = params.get("keyword")
-        if not keyword:
-            return ProviderResult.failure("Missing required parameter: keyword")
-        
-        limit = min(params.get("limit", 10), 100)
-        get_full_data = params.get("get_full_data", False)
-        
-        inputs = [{
-            "keyword": keyword,
-            "limit": limit,
-            "get_full_data": get_full_data
-        }]
-        
-        # Use async for large searches
-        if limit > 20 or get_full_data:
-            return await self._trigger_async(SCRAPER_IDS["profiles_by_keyword"], inputs)
-        else:
-            return await self._scrape_sync(SCRAPER_IDS["profiles_by_keyword"], inputs)
+        return ProviderResult.failure(
+            "Profile search by name not yet configured. "
+            "Use linkedin_get_profiles with profile URLs instead.\n\n"
+            "To find LinkedIn profiles, you can:\n"
+            "1. Use web_search to find LinkedIn URLs\n"
+            "2. Then use linkedin_get_profiles with those URLs"
+        )
     
     async def _get_company(self, params: Dict[str, Any]) -> ProviderResult:
         """

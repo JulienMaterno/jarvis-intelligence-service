@@ -6,10 +6,14 @@ Brave is privacy-focused, high-quality, and cost-effective.
 
 Sign up: https://brave.com/search/api/
 Pricing: Free tier (2000 queries/month), then ~$3/1000 queries
+
+RATE LIMIT: 1 request per second on free tier
 """
 
 import os
 import logging
+import asyncio
+import time
 import httpx
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +27,10 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_NEWS_URL = "https://api.search.brave.com/res/v1/news/search"
 
+# Rate limiting: 1 request per second
+_last_request_time: float = 0.0
+_rate_limit_lock = asyncio.Lock()
+
 
 class WebSearchProvider(BaseProvider):
     """
@@ -32,6 +40,7 @@ class WebSearchProvider(BaseProvider):
     - General web search
     - News search
     - Result snippets and URLs
+    - Built-in rate limiting (1 req/sec)
     
     Cost: ~$0.003 per query (after free tier)
     """
@@ -48,6 +57,16 @@ class WebSearchProvider(BaseProvider):
     def is_configured(self) -> bool:
         """Check if Brave API key is configured."""
         return bool(self.api_key)
+    
+    async def _rate_limit(self):
+        """Ensure we don't exceed 1 request per second."""
+        global _last_request_time
+        async with _rate_limit_lock:
+            now = time.time()
+            elapsed = now - _last_request_time
+            if elapsed < 1.0:
+                await asyncio.sleep(1.0 - elapsed)
+            _last_request_time = time.time()
     
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -102,6 +121,9 @@ class WebSearchProvider(BaseProvider):
         
         num_results = min(params.get("num_results", 10), 20)
         
+        # Rate limit: 1 request per second
+        await self._rate_limit()
+        
         client = await self._get_client()
         
         request_params = {
@@ -154,6 +176,9 @@ class WebSearchProvider(BaseProvider):
             return ProviderResult.failure("Missing required parameter: query")
         
         num_results = min(params.get("num_results", 10), 20)
+        
+        # Rate limit: 1 request per second
+        await self._rate_limit()
         
         client = await self._get_client()
         
