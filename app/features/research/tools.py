@@ -59,16 +59,23 @@ EXAMPLES:
     },
     {
         "name": "linkedin_search_people",
-        "description": """Search LinkedIn for people matching keywords like name, title, company.
+        "description": """Search LinkedIn for people matching keywords like name, title, company, location.
 
-⚠️ CURRENT LIMITATION: Name-based search is not yet configured. 
-Use this workflow instead:
-1. Use web_search to find LinkedIn profile URLs (e.g., "John Smith LinkedIn profile")
-2. Use linkedin_get_profiles with the discovered URLs
+USE WHEN:
+- User wants to find people by criteria (e.g., "Founders in Ho Chi Minh City")
+- Looking for professionals with specific skills or titles
+- Need to discover potential contacts, leads, or experts
+- User asks "find me [person type] at [company/location]"
 
-This tool will return an error until the Bright Data "Profile Discovery" scraper is configured.
+SEARCH TIPS:
+- Be specific: "CTO fintech Singapore" works better than just "CTO"
+- Include name if known: "John Smith product manager"
+- Combine criteria: "Software Engineer AI startup HCMC"
+- Include company: "VP Engineering at Google"
 
-FUTURE: Once configured, will support searches like "CTO fintech Singapore".""",
+RETURNS: Full LinkedIn profiles including name, title, company, experience, education, and more.
+
+⚠️ COST: ~$0.05-0.50 per search (Brave + Bright Data combined). Results are cached.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -78,8 +85,8 @@ FUTURE: Once configured, will support searches like "CTO fintech Singapore".""",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Number of results (default 10, max 50)",
-                    "default": 10
+                    "description": "Number of profiles to return (default 5, max 10)",
+                    "default": 5
                 }
             },
             "required": ["query"]

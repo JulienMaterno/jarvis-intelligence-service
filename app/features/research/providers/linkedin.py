@@ -2,7 +2,7 @@
 LinkedIn Research Provider via Bright Data Web Scraper API
 
 Provides LinkedIn data collection capabilities:
-- Profile search by keywords
+- Profile search by keywords (via Brave Search + Bright Data)
 - Profile details by URL
 - Company information
 - Job listings
@@ -16,10 +16,14 @@ API Reference: https://docs.brightdata.com/datasets/scrapers/scrapers-library/qu
 """
 
 import os
+import re
 import logging
+import asyncio
+import time
 import httpx
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from .base import BaseProvider, ProviderResult, ProviderStatus
 
@@ -29,6 +33,14 @@ logger = logging.getLogger("Jarvis.Research.LinkedIn")
 BRIGHTDATA_API_KEY = os.getenv("BRIGHTDATA_API_KEY", "")
 BRIGHTDATA_BASE_URL = "https://api.brightdata.com/datasets/v3"
 
+# Brave Search API (for finding LinkedIn URLs)
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
+
+# Rate limiting for Brave (1 req/sec on free tier)
+_brave_last_request: float = 0.0
+_brave_rate_lock = asyncio.Lock()
+
 # Scraper IDs for different LinkedIn endpoints
 # These are Bright Data's pre-built scraper identifiers
 # To find correct IDs: Go to Bright Data Console → Web Scraper API → LinkedIn
@@ -37,8 +49,6 @@ SCRAPER_IDS = {
     "company_by_url": "gd_l1vikfnt1wgvvqz95w",  # LinkedIn Company by URL
     "company_jobs": "gd_lpfll7v81kap1ke3i6",  # LinkedIn Company Jobs
     "posts_by_profile": "gd_m0r9v8k2hqr5hcd1o5",  # LinkedIn Posts by Profile URL
-    # Note: Profile search by name/keyword requires a different scraper
-    # that may need separate setup in Bright Data console
 }
 
 
@@ -124,12 +134,32 @@ class LinkedInProvider(BaseProvider):
         try:
             response = await client.post(
                 f"{BRIGHTDATA_BASE_URL}/scrape",
-                params={"dataset_id": scraper_id, "include_errors": str(include_errors).lower()},
+                params={
+                    "dataset_id": scraper_id, 
+                    "include_errors": str(include_errors).lower(),
+                    "format": "json"  # Explicitly request JSON array format
+                },
                 json=inputs
             )
             
             if response.status_code == 200:
-                data = response.json()
+                # Handle both JSON array and NDJSON formats
+                text = response.text.strip()
+                try:
+                    # Try parsing as JSON array first
+                    data = response.json()
+                except Exception:
+                    # Fall back to NDJSON (newline-separated JSON)
+                    import json
+                    data = []
+                    for line in text.split('\n'):
+                        line = line.strip()
+                        if line:
+                            try:
+                                data.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                continue
+                
                 return ProviderResult.success(
                     data=data,
                     scraper_id=scraper_id,
@@ -258,23 +288,150 @@ class LinkedInProvider(BaseProvider):
     
     async def _search_profiles(self, params: Dict[str, Any]) -> ProviderResult:
         """
-        Search for LinkedIn profiles by name.
+        Search for LinkedIn profiles by name, title, company, etc.
         
-        NOTE: This feature requires a separate scraper setup in Bright Data console.
-        Currently, only URL-based profile lookups are supported.
+        Uses a two-step approach:
+        1. Brave Search to find LinkedIn profile URLs
+        2. Bright Data to get full profile details
         
-        To enable name search:
-        1. Go to Bright Data Console → Web Scraper API
-        2. Find "LinkedIn Profile Discovery by Name" 
-        3. Get the scraper ID and add it to SCRAPER_IDS
+        Params:
+            query: Search query (name, title, company, location, etc.)
+            limit: Max number of profiles to return (default 5)
+            get_full_profiles: Whether to fetch full profile data (default True)
+        
+        Examples:
+            - "Bill Gates" → Find Bill Gates' LinkedIn
+            - "CTO fintech Singapore" → Find CTOs in fintech in Singapore
+            - "Software Engineer Google" → Find software engineers at Google
         """
-        return ProviderResult.failure(
-            "Profile search by name not yet configured. "
-            "Use linkedin_get_profiles with profile URLs instead.\n\n"
-            "To find LinkedIn profiles, you can:\n"
-            "1. Use web_search to find LinkedIn URLs\n"
-            "2. Then use linkedin_get_profiles with those URLs"
+        query = params.get("query", params.get("keyword", ""))
+        if not query:
+            return ProviderResult.failure("Missing required parameter: query")
+        
+        limit = min(params.get("limit", 5), 10)  # Cap at 10 to control costs
+        get_full_profiles = params.get("get_full_profiles", True)
+        
+        # Check if Brave is configured
+        if not BRAVE_API_KEY:
+            return ProviderResult.failure(
+                "BRAVE_API_KEY not configured. Required for LinkedIn profile search."
+            )
+        
+        try:
+            # Step 1: Use Brave Search to find LinkedIn URLs
+            search_query = f'{query} site:linkedin.com/in'
+            linkedin_urls = await self._brave_search_linkedin_urls(search_query, limit * 2)
+            
+            if not linkedin_urls:
+                return ProviderResult.success(
+                    data=[],
+                    query=query,
+                    message="No LinkedIn profiles found for this query"
+                )
+            
+            # Limit to requested amount
+            linkedin_urls = linkedin_urls[:limit]
+            
+            if not get_full_profiles:
+                # Return just the URLs (quick mode)
+                return ProviderResult.success(
+                    data=[{"url": url, "username": self._extract_username(url)} for url in linkedin_urls],
+                    query=query,
+                    count=len(linkedin_urls),
+                    full_profiles=False
+                )
+            
+            # Step 2: Get full profile data from Bright Data
+            profile_inputs = [{"url": url} for url in linkedin_urls]
+            
+            result = await self._scrape_sync(
+                SCRAPER_IDS["profile_by_url"],
+                profile_inputs
+            )
+            
+            if result.status == ProviderStatus.SUCCESS:
+                profiles = result.data if isinstance(result.data, list) else [result.data]
+                # Filter out any error entries
+                profiles = [p for p in profiles if isinstance(p, dict) and p.get("name")]
+                
+                return ProviderResult.success(
+                    data=profiles,
+                    query=query,
+                    count=len(profiles),
+                    full_profiles=True,
+                    urls_searched=linkedin_urls
+                )
+            else:
+                return result
+                
+        except Exception as e:
+            logger.error(f"LinkedIn search error: {e}")
+            return ProviderResult.failure(str(e))
+    
+    async def _brave_search_linkedin_urls(self, query: str, count: int = 10) -> List[str]:
+        """
+        Search Brave for LinkedIn profile URLs.
+        
+        Applies rate limiting (1 req/sec for free tier).
+        """
+        global _brave_last_request
+        
+        # Rate limit: 1 request per second
+        async with _brave_rate_lock:
+            now = time.time()
+            elapsed = now - _brave_last_request
+            if elapsed < 1.0:
+                await asyncio.sleep(1.0 - elapsed)
+            _brave_last_request = time.time()
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    BRAVE_URL,
+                    params={"q": query, "count": count},
+                    headers={
+                        "Accept": "application/json",
+                        "X-Subscription-Token": BRAVE_API_KEY
+                    }
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(f"Brave search failed: {response.status_code}")
+                    return []
+                
+                data = response.json()
+                results = data.get("web", {}).get("results", [])
+                
+                # Extract LinkedIn profile URLs
+                linkedin_urls = []
+                for result in results:
+                    url = result.get("url", "")
+                    if self._is_linkedin_profile_url(url):
+                        linkedin_urls.append(url)
+                
+                return linkedin_urls
+                
+        except Exception as e:
+            logger.error(f"Brave search error: {e}")
+            return []
+    
+    def _is_linkedin_profile_url(self, url: str) -> bool:
+        """Check if URL is a LinkedIn personal profile (not company, job, etc.)."""
+        if not url:
+            return False
+        url_lower = url.lower()
+        return (
+            "linkedin.com/in/" in url_lower
+            and "/posts" not in url_lower
+            and "/articles" not in url_lower
+            and "?miniProfile" not in url_lower
         )
+    
+    def _extract_username(self, url: str) -> str:
+        """Extract username from LinkedIn URL."""
+        match = re.search(r'linkedin\.com/in/([^/?]+)', url, re.IGNORECASE)
+        return match.group(1) if match else ""
+    
     
     async def _get_company(self, params: Dict[str, Any]) -> ProviderResult:
         """
