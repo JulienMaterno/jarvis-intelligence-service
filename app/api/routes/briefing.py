@@ -475,19 +475,19 @@ async def schedule_hourly_briefings():
             Determine if event is a real meeting worth briefing for.
             
             A real meeting either:
-            1. Has at least one attendee besides yourself (email without 'self': True)
-            2. OR title contains meeting indicators: "&", "<>", " x ", " X ", "|"
+            1. Has at least one attendee besides yourself
+            2. Title contains meeting indicators: "&", "<>", " x ", " X ", "|"
+            3. Title looks like a person's name (short, capitalized, no non-meeting words)
             
             Filters out:
-            - Solo calendar blocks
+            - Solo calendar blocks ("Focus", "Work", "Block", "Lunch", "Break")
             - Birthday reminders
-            - Focus time / work blocks
+            - Generic events ("Meeting", "Call", "Sync")
             """
             title = event.get("summary", "") or ""
             attendees = event.get("attendees") or []
             
             # Check title for meeting indicators
-            # " x " or " X " need spaces to avoid matching words like "next" or "text"
             meeting_title_markers = ["&", "<>", " x ", " X ", "|"]
             has_meeting_marker = any(marker in title for marker in meeting_title_markers)
             
@@ -497,11 +497,35 @@ async def schedule_hourly_briefings():
             # Check for external attendees (not self)
             external_attendees = [
                 a for a in attendees 
-                if not a.get("self", False)  # Not yourself
+                if not a.get("self", False)
             ]
             
             if len(external_attendees) > 0:
                 return True
+            
+            # NEW: Check if title looks like a person's name
+            # Short titles (1-3 words) that are capitalized and don't contain
+            # common non-meeting words are likely 1-on-1 meetings
+            non_meeting_words = [
+                "focus", "block", "lunch", "break", "work", "deep", "gym", 
+                "travel", "flight", "commute", "prep", "admin", "review",
+                "birthday", "anniversary", "holiday", "vacation", "pto",
+                "meeting", "call", "sync", "standup", "daily", "weekly"
+            ]
+            
+            title_lower = title.lower().strip()
+            words = title.split()
+            
+            # Skip if title contains non-meeting words
+            if any(word in title_lower for word in non_meeting_words):
+                return False
+            
+            # If 1-3 words and looks like a name (capitalized), treat as meeting
+            if 1 <= len(words) <= 3:
+                # Check if words are capitalized (like names)
+                if all(word[0].isupper() for word in words if word):
+                    logger.info(f"[Hourly Schedule] Detected probable person name in title: '{title}'")
+                    return True
             
             return False
         

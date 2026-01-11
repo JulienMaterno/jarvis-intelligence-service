@@ -31,6 +31,54 @@ async def _handle_research_tool(tool_name: str, tool_input: Dict[str, Any]) -> D
 
 TOOLS = [
     {
+        "name": "execute_sql_write",
+        "description": """Execute a write SQL statement (UPDATE, INSERT, DELETE) against the database.
+
+⚠️ REQUIRES USER CONFIRMATION before execution.
+Always show the user exactly what will be changed and ask for explicit confirmation.
+
+Use this when user explicitly asks to:
+- Update records directly
+- Delete records directly  
+- Insert records directly
+- Fix data issues
+
+For common operations, prefer specific tools:
+- create_task, complete_task, update_task (for tasks)
+- create_contact, update_contact (for contacts)
+- create_meeting, create_reflection (for other entities)
+
+Only use execute_sql_write when specific tools can't handle the request.
+
+Tables that can be modified:
+- contacts, meetings, tasks, journals, reflections
+- applications, linkedin_posts
+
+Tables that CANNOT be modified (sync-managed):
+- calendar_events, emails (synced from Google)
+- beeper_chats, beeper_messages (synced from Beeper)
+- transcripts (created by audio pipeline)
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "The SQL statement to execute (UPDATE, INSERT, DELETE)"
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "REQUIRED: Must be true to execute. Show user what will change first!"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Human-readable description of what this query does"
+                }
+            },
+            "required": ["sql", "user_confirmed", "description"]
+        }
+    },
+    {
         "name": "query_database",
         "description": """Execute a read-only SQL query against the knowledge database.
 Use this for novel/complex queries that specific tools can't handle. For common operations, prefer specific tools like get_applications, search_contacts, get_tasks.
@@ -1889,7 +1937,9 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
         last_user_message: The most recent user message (for confirmation checks)
     """
     try:
-        if tool_name == "query_database":
+        if tool_name == "execute_sql_write":
+            return _execute_sql_write(tool_input)
+        elif tool_name == "query_database":
             return _query_database(tool_input.get("sql", ""))
         elif tool_name == "search_contacts":
             return _search_contacts(tool_input.get("query", ""), tool_input.get("limit", 5))
@@ -2050,6 +2100,206 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
     except Exception as e:
         logger.error(f"Tool execution error [{tool_name}]: {e}")
         return {"error": str(e)}
+
+
+def _execute_sql_write(input: Dict) -> Dict[str, Any]:
+    """Execute a write SQL statement with confirmation requirement.
+    
+    This allows UPDATE, INSERT, DELETE operations but REQUIRES user confirmation.
+    """
+    sql = input.get("sql", "").strip()
+    user_confirmed = input.get("user_confirmed", False)
+    description = input.get("description", "")
+    
+    if not sql:
+        return {"error": "SQL statement is required"}
+    
+    sql_upper = sql.upper()
+    
+    # Determine operation type
+    if sql_upper.startswith("UPDATE"):
+        operation = "UPDATE"
+    elif sql_upper.startswith("INSERT"):
+        operation = "INSERT"
+    elif sql_upper.startswith("DELETE"):
+        operation = "DELETE"
+    else:
+        return {"error": "Only UPDATE, INSERT, or DELETE statements are allowed. For SELECT, use query_database."}
+    
+    # Block extremely dangerous operations
+    dangerous = ["DROP", "TRUNCATE", "ALTER", "GRANT", "REVOKE", "CREATE"]
+    for keyword in dangerous:
+        if keyword in sql_upper:
+            return {"error": f"Query contains forbidden keyword: {keyword}"}
+    
+    # Extract table name
+    import re
+    if operation == "UPDATE":
+        table_match = re.search(r'UPDATE\s+(\w+)', sql, re.IGNORECASE)
+    elif operation == "INSERT":
+        table_match = re.search(r'INTO\s+(\w+)', sql, re.IGNORECASE)
+    else:  # DELETE
+        table_match = re.search(r'FROM\s+(\w+)', sql, re.IGNORECASE)
+    
+    if not table_match:
+        return {"error": "Could not parse table name from query"}
+    
+    table_name = table_match.group(1).lower()
+    
+    # Tables that can be modified
+    writable_tables = [
+        "contacts", "meetings", "tasks", "journals", "reflections",
+        "applications", "linkedin_posts", "books", "highlights"
+    ]
+    
+    # Tables that should NOT be modified (sync-managed)
+    readonly_tables = [
+        "calendar_events", "emails", "beeper_chats", "beeper_messages",
+        "transcripts", "sync_logs", "sync_state", "pipeline_logs"
+    ]
+    
+    if table_name in readonly_tables:
+        return {
+            "error": f"Table '{table_name}' is read-only (managed by sync services)",
+            "hint": "This data is synced from external sources and should not be modified directly."
+        }
+    
+    if table_name not in writable_tables:
+        return {
+            "error": f"Table '{table_name}' is not in the allowed write list",
+            "allowed_tables": writable_tables
+        }
+    
+    # REQUIRE CONFIRMATION
+    if not user_confirmed:
+        return {
+            "status": "confirmation_required",
+            "operation": operation,
+            "table": table_name,
+            "sql": sql,
+            "description": description,
+            "message": f"⚠️ This will {operation} data in the '{table_name}' table. Please confirm you want to proceed.",
+            "instructions": "Ask the user to confirm, then call execute_sql_write again with user_confirmed=true"
+        }
+    
+    # Execute the write operation
+    try:
+        # For actual SQL execution, we need to use the RPC function
+        # First, let's try using the Supabase Python client methods
+        
+        if operation == "UPDATE":
+            # Parse simple UPDATE statements
+            # UPDATE table SET col1=val1, col2=val2 WHERE condition
+            set_match = re.search(r'SET\s+(.+?)\s+WHERE', sql, re.IGNORECASE)
+            where_match = re.search(r'WHERE\s+(.+?)(?:;|$)', sql, re.IGNORECASE)
+            
+            if not set_match or not where_match:
+                return {"error": "UPDATE must have SET and WHERE clauses. Format: UPDATE table SET col=val WHERE id='xxx'"}
+            
+            # For safety, require WHERE clause with id
+            where_clause = where_match.group(1).strip()
+            if 'id' not in where_clause.lower():
+                return {"error": "UPDATE must include id in WHERE clause for safety"}
+            
+            # Parse the id value
+            id_match = re.search(r"id\s*=\s*'([^']+)'", where_clause, re.IGNORECASE)
+            if not id_match:
+                return {"error": "Could not parse id from WHERE clause. Format: WHERE id='uuid'"}
+            
+            record_id = id_match.group(1)
+            
+            # Parse SET clause into dict
+            set_clause = set_match.group(1).strip()
+            update_data = {}
+            for part in set_clause.split(','):
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    key = key.strip()
+                    value = value.strip().strip("'\"")
+                    update_data[key] = value
+            
+            result = supabase.table(table_name).update(update_data).eq("id", record_id).execute()
+            
+            return {
+                "status": "success",
+                "operation": operation,
+                "table": table_name,
+                "updated_id": record_id,
+                "fields_updated": list(update_data.keys()),
+                "rows_affected": len(result.data) if result.data else 0
+            }
+            
+        elif operation == "DELETE":
+            # Parse DELETE FROM table WHERE id='xxx'
+            where_match = re.search(r'WHERE\s+(.+?)(?:;|$)', sql, re.IGNORECASE)
+            
+            if not where_match:
+                return {"error": "DELETE must have WHERE clause. Format: DELETE FROM table WHERE id='xxx'"}
+            
+            where_clause = where_match.group(1).strip()
+            if 'id' not in where_clause.lower():
+                return {"error": "DELETE must include id in WHERE clause for safety"}
+            
+            id_match = re.search(r"id\s*=\s*'([^']+)'", where_clause, re.IGNORECASE)
+            if not id_match:
+                return {"error": "Could not parse id from WHERE clause. Format: WHERE id='uuid'"}
+            
+            record_id = id_match.group(1)
+            
+            # For contacts, use soft delete
+            if table_name == "contacts":
+                from datetime import datetime, timezone
+                result = supabase.table(table_name).update({
+                    "deleted_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", record_id).execute()
+                return {
+                    "status": "success",
+                    "operation": "soft_delete",
+                    "table": table_name,
+                    "deleted_id": record_id,
+                    "note": "Contact was soft-deleted (can be restored)"
+                }
+            else:
+                result = supabase.table(table_name).delete().eq("id", record_id).execute()
+                return {
+                    "status": "success",
+                    "operation": operation,
+                    "table": table_name,
+                    "deleted_id": record_id
+                }
+                
+        elif operation == "INSERT":
+            # Parse INSERT INTO table (cols) VALUES (vals)
+            cols_match = re.search(r'\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)', sql, re.IGNORECASE)
+            
+            if not cols_match:
+                return {"error": "INSERT format: INSERT INTO table (col1, col2) VALUES ('val1', 'val2')"}
+            
+            columns = [c.strip() for c in cols_match.group(1).split(',')]
+            values = [v.strip().strip("'\"") for v in cols_match.group(2).split(',')]
+            
+            if len(columns) != len(values):
+                return {"error": "Number of columns must match number of values"}
+            
+            insert_data = dict(zip(columns, values))
+            
+            result = supabase.table(table_name).insert(insert_data).execute()
+            
+            return {
+                "status": "success",
+                "operation": operation,
+                "table": table_name,
+                "inserted_id": result.data[0].get("id") if result.data else None,
+                "data": result.data[0] if result.data else None
+            }
+        
+    except Exception as e:
+        logger.error(f"SQL write execution error: {e}")
+        return {
+            "status": "error",
+            "error": str(e)[:300],
+            "hint": "Check SQL syntax. For complex operations, break into simpler queries."
+        }
 
 
 def _query_database(sql: str) -> Dict[str, Any]:
