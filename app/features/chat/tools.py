@@ -2218,16 +2218,39 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
                     value = value.strip().strip("'\"")
                     update_data[key] = value
             
-            result = supabase.table(table_name).update(update_data).eq("id", record_id).execute()
+            # Always update the updated_at timestamp
+            update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
             
-            return {
-                "status": "success",
-                "operation": operation,
-                "table": table_name,
-                "updated_id": record_id,
-                "fields_updated": list(update_data.keys()),
-                "rows_affected": len(result.data) if result.data else 0
-            }
+            # For sync-managed tables, mark as local change to prevent overwrite
+            # This tells the sync service "this was updated locally, push to Notion"
+            sync_managed_tables = ["applications", "meetings", "tasks", "journals", 
+                                   "reflections", "contacts", "linkedin_posts"]
+            if table_name in sync_managed_tables:
+                update_data["last_sync_source"] = "supabase"
+            
+            # Use .select() to get the updated row back (Supabase quirk)
+            result = supabase.table(table_name).update(update_data).eq("id", record_id).select().execute()
+            
+            if result.data and len(result.data) > 0:
+                return {
+                    "status": "success",
+                    "operation": operation,
+                    "table": table_name,
+                    "updated_id": record_id,
+                    "fields_updated": list(update_data.keys()),
+                    "rows_affected": len(result.data),
+                    "updated_record": result.data[0],  # Return the actual updated data for verification
+                    "sync_note": "Set last_sync_source='supabase' to preserve changes during next sync" if table_name in sync_managed_tables else None
+                }
+            else:
+                # No rows matched - likely wrong ID
+                return {
+                    "status": "warning",
+                    "operation": operation,
+                    "table": table_name,
+                    "message": f"No rows matched id='{record_id}'. Check the UUID is correct.",
+                    "rows_affected": 0
+                }
             
         elif operation == "DELETE":
             # Parse DELETE FROM table WHERE id='xxx'
