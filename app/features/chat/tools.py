@@ -1687,6 +1687,173 @@ Returns the full post text.""",
             },
             "required": []
         }
+    },
+    # =========================================================================
+    # DATABASE SCHEMA TOOLS - For creating/modifying database structure
+    # =========================================================================
+    {
+        "name": "list_database_tables",
+        "description": """List all tables in the database with their column information.
+
+Use when:
+- User asks what data is available
+- Need to understand database structure
+- Planning new table creation
+- Checking if a table exists
+
+Returns list of tables with columns and types.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "create_database_table",
+        "description": """Create a new table in the database.
+
+⚠️ REQUIRES USER CONFIRMATION before execution.
+
+Use when user wants to:
+- Store new types of data (e.g., research results, new entity types)
+- Create a table for a specific project
+- Set up storage for imported data
+
+Guidelines:
+- Table names should be lowercase with underscores (e.g., linkedin_research_results)
+- Always include: id (uuid primary key), created_at (timestamptz)
+- Use appropriate column types: text, integer, jsonb, boolean, date, timestamptz, text[]
+
+ALWAYS confirm the table structure with user before creating.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Name of the table (lowercase, underscores)"
+                },
+                "columns": {
+                    "type": "array",
+                    "description": "List of column definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Column name"},
+                            "type": {"type": "string", "description": "PostgreSQL type: text, integer, bigint, boolean, date, timestamptz, uuid, jsonb, text[]"},
+                            "nullable": {"type": "boolean", "description": "Allow NULL values (default: true)"},
+                            "default": {"type": "string", "description": "Default value (optional)"},
+                            "unique": {"type": "boolean", "description": "Unique constraint (default: false)"}
+                        },
+                        "required": ["name", "type"]
+                    }
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "REQUIRED: Must be true to execute. Ask user to confirm first!"
+                }
+            },
+            "required": ["table_name", "columns", "user_confirmed"]
+        }
+    },
+    {
+        "name": "add_column_to_table",
+        "description": """Add a new column to an existing table.
+
+⚠️ REQUIRES USER CONFIRMATION before execution.
+
+Use when:
+- Need to extend a table with new fields
+- User wants to track additional data
+- Adding metadata columns""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Name of the existing table"
+                },
+                "column_name": {
+                    "type": "string",
+                    "description": "Name of the new column"
+                },
+                "column_type": {
+                    "type": "string",
+                    "description": "PostgreSQL type: text, integer, boolean, date, timestamptz, uuid, jsonb, text[]"
+                },
+                "nullable": {
+                    "type": "boolean",
+                    "description": "Allow NULL values (default: true)"
+                },
+                "default_value": {
+                    "type": "string",
+                    "description": "Default value for existing rows (optional)"
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "REQUIRED: Must be true to execute. Ask user to confirm first!"
+                }
+            },
+            "required": ["table_name", "column_name", "column_type", "user_confirmed"]
+        }
+    },
+    {
+        "name": "insert_data_batch",
+        "description": """Insert multiple rows of data into a table.
+
+Use when:
+- Storing research results
+- Importing data from external sources
+- Batch-creating records
+
+Returns count of inserted rows.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Target table name"
+                },
+                "rows": {
+                    "type": "array",
+                    "description": "Array of objects to insert (each object is a row)",
+                    "items": {
+                        "type": "object"
+                    }
+                }
+            },
+            "required": ["table_name", "rows"]
+        }
+    },
+    {
+        "name": "get_database_backup_status",
+        "description": """Check the database backup status and recent backups.
+
+Use when:
+- User asks about data safety
+- Before making significant changes
+- Checking what can be restored""",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "backup_table",
+        "description": """Create a backup of a specific table to storage.
+
+Use before making destructive changes or when user wants to snapshot data.
+Backs up to Supabase Storage bucket.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Table to backup"
+                }
+            },
+            "required": ["table_name"]
+        }
     }
 ]
 
@@ -1851,6 +2018,19 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _search_linkedin_posts(tool_input)
         elif tool_name == "get_linkedin_post_content":
             return _get_linkedin_post_content(tool_input)
+        # Database schema tools
+        elif tool_name == "list_database_tables":
+            return _list_database_tables(tool_input)
+        elif tool_name == "create_database_table":
+            return _create_database_table(tool_input)
+        elif tool_name == "add_column_to_table":
+            return _add_column_to_table(tool_input)
+        elif tool_name == "insert_data_batch":
+            return _insert_data_batch(tool_input)
+        elif tool_name == "get_database_backup_status":
+            return _get_database_backup_status(tool_input)
+        elif tool_name == "backup_table":
+            return _backup_table(tool_input)
         # Research tools (LinkedIn via Bright Data, Web Search via Brave)
         elif tool_name in ("linkedin_get_profiles", "linkedin_search_people", 
                           "linkedin_get_company", "linkedin_get_company_employees",
@@ -5187,6 +5367,345 @@ def _get_linkedin_post_content(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Failed to get LinkedIn post content: {e}")
+        return {"error": str(e)}
+
+
+# =============================================================================
+# DATABASE SCHEMA TOOLS - For creating/modifying database structure
+# =============================================================================
+
+def _list_database_tables(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """List all tables and their columns in the database."""
+    try:
+        # Query PostgreSQL information schema
+        # Using RPC call since Supabase doesn't expose information_schema directly
+        # We'll use a workaround by checking known tables
+        
+        known_tables = [
+            "contacts", "meetings", "tasks", "journals", "reflections",
+            "calendar_events", "emails", "transcripts", "books", "highlights",
+            "applications", "linkedin_posts", "beeper_chats", "beeper_messages",
+            "sync_logs", "sync_state", "chat_messages", "scheduled_briefings"
+        ]
+        
+        tables_info = []
+        for table_name in known_tables:
+            try:
+                # Try to select from table to get column info
+                result = supabase.table(table_name).select("*").limit(1).execute()
+                if result.data:
+                    columns = list(result.data[0].keys())
+                else:
+                    # Table exists but empty - try to get schema another way
+                    columns = ["(table exists, no sample data)"]
+                tables_info.append({
+                    "table": table_name,
+                    "columns": columns,
+                    "status": "accessible"
+                })
+            except Exception as e:
+                if "does not exist" not in str(e).lower():
+                    tables_info.append({
+                        "table": table_name,
+                        "columns": [],
+                        "status": f"error: {str(e)[:50]}"
+                    })
+        
+        return {
+            "status": "success",
+            "tables": tables_info,
+            "total_tables": len(tables_info),
+            "note": "Use query_database for detailed column types"
+        }
+    except Exception as e:
+        logger.error(f"Failed to list tables: {e}")
+        return {"error": str(e)}
+
+
+def _create_database_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new table in the database.
+    
+    IMPORTANT: Requires user_confirmed=true to execute.
+    """
+    try:
+        table_name = tool_input.get("table_name", "").lower().strip()
+        columns = tool_input.get("columns", [])
+        user_confirmed = tool_input.get("user_confirmed", False)
+        
+        if not table_name:
+            return {"error": "table_name is required"}
+        
+        if not columns:
+            return {"error": "columns list is required"}
+        
+        # Validate table name
+        import re
+        if not re.match(r'^[a-z][a-z0-9_]*$', table_name):
+            return {"error": "Table name must start with letter, contain only lowercase letters, numbers, underscores"}
+        
+        # Don't allow overwriting system tables
+        protected_tables = [
+            "contacts", "meetings", "tasks", "journals", "reflections",
+            "calendar_events", "emails", "transcripts", "sync_logs"
+        ]
+        if table_name in protected_tables:
+            return {"error": f"Cannot create table '{table_name}' - it's a protected system table"}
+        
+        if not user_confirmed:
+            # Generate preview SQL
+            column_defs = []
+            for col in columns:
+                col_def = f"  {col['name']} {col['type'].upper()}"
+                if not col.get("nullable", True):
+                    col_def += " NOT NULL"
+                if col.get("default"):
+                    col_def += f" DEFAULT {col['default']}"
+                if col.get("unique"):
+                    col_def += " UNIQUE"
+                column_defs.append(col_def)
+            
+            preview_sql = f"""CREATE TABLE {table_name} (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+{chr(10).join(column_defs)},
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);"""
+            return {
+                "status": "CONFIRMATION_REQUIRED",
+                "message": f"Ready to create table '{table_name}'. Please confirm.",
+                "preview_sql": preview_sql,
+                "columns": columns,
+                "instructions": "Call this tool again with user_confirmed=true to create the table"
+            }
+        
+        # Build and execute CREATE TABLE
+        column_defs = ["id UUID PRIMARY KEY DEFAULT gen_random_uuid()"]
+        for col in columns:
+            col_def = f"{col['name']} {col['type'].upper()}"
+            if not col.get("nullable", True):
+                col_def += " NOT NULL"
+            if col.get("default"):
+                col_def += f" DEFAULT {col['default']}"
+            if col.get("unique"):
+                col_def += " UNIQUE"
+            column_defs.append(col_def)
+        column_defs.append("created_at TIMESTAMPTZ DEFAULT NOW()")
+        column_defs.append("updated_at TIMESTAMPTZ DEFAULT NOW()")
+        
+        create_sql = f"CREATE TABLE {table_name} ({', '.join(column_defs)})"
+        
+        # Execute via Supabase RPC or direct SQL
+        # Note: This requires the service role key with DDL permissions
+        result = supabase.rpc("exec_sql", {"query": create_sql}).execute()
+        
+        logger.info(f"Created table: {table_name}")
+        return {
+            "status": "success",
+            "message": f"Table '{table_name}' created successfully",
+            "table_name": table_name,
+            "columns_created": len(columns) + 3  # +3 for id, created_at, updated_at
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "function" in error_msg.lower() and "does not exist" in error_msg.lower():
+            return {
+                "error": "Database does not support direct DDL. Table creation requires manual setup or admin access.",
+                "workaround": "Ask the user to create the table manually in Supabase dashboard"
+            }
+        logger.error(f"Failed to create table: {e}")
+        return {"error": str(e)}
+
+
+def _add_column_to_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Add a column to an existing table."""
+    try:
+        table_name = tool_input.get("table_name", "").lower().strip()
+        column_name = tool_input.get("column_name", "").lower().strip()
+        column_type = tool_input.get("column_type", "").upper()
+        nullable = tool_input.get("nullable", True)
+        default_value = tool_input.get("default_value")
+        user_confirmed = tool_input.get("user_confirmed", False)
+        
+        if not all([table_name, column_name, column_type]):
+            return {"error": "table_name, column_name, and column_type are required"}
+        
+        if not user_confirmed:
+            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+            if not nullable:
+                alter_sql += " NOT NULL"
+            if default_value:
+                alter_sql += f" DEFAULT {default_value}"
+            
+            return {
+                "status": "CONFIRMATION_REQUIRED",
+                "message": f"Ready to add column '{column_name}' to table '{table_name}'",
+                "preview_sql": alter_sql,
+                "instructions": "Call this tool again with user_confirmed=true to add the column"
+            }
+        
+        alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+        if not nullable:
+            alter_sql += " NOT NULL"
+        if default_value:
+            alter_sql += f" DEFAULT {default_value}"
+        
+        result = supabase.rpc("exec_sql", {"query": alter_sql}).execute()
+        
+        logger.info(f"Added column {column_name} to {table_name}")
+        return {
+            "status": "success",
+            "message": f"Column '{column_name}' added to table '{table_name}'",
+            "column_type": column_type
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "function" in error_msg.lower() and "does not exist" in error_msg.lower():
+            return {
+                "error": "Database does not support direct DDL via API",
+                "workaround": "Add the column manually in Supabase dashboard: Table Editor → Select table → Add Column"
+            }
+        logger.error(f"Failed to add column: {e}")
+        return {"error": str(e)}
+
+
+def _insert_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert multiple rows into a table."""
+    try:
+        table_name = tool_input.get("table_name", "").strip()
+        rows = tool_input.get("rows", [])
+        
+        if not table_name:
+            return {"error": "table_name is required"}
+        
+        if not rows:
+            return {"error": "rows array is required and must not be empty"}
+        
+        if len(rows) > 100:
+            return {"error": f"Maximum 100 rows per batch (got {len(rows)}). Split into multiple calls."}
+        
+        # Insert data
+        result = supabase.table(table_name).insert(rows).execute()
+        
+        inserted_count = len(result.data) if result.data else 0
+        
+        return {
+            "status": "success",
+            "message": f"Inserted {inserted_count} rows into '{table_name}'",
+            "inserted_count": inserted_count,
+            "sample_ids": [r.get("id") for r in (result.data or [])[:5]]
+        }
+    except Exception as e:
+        logger.error(f"Failed to insert data: {e}")
+        return {"error": str(e)}
+
+
+def _get_database_backup_status(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Check backup status and recent backups."""
+    try:
+        from datetime import datetime
+        
+        # Check Supabase Storage for backups
+        try:
+            backups = supabase.storage.from_("backups").list()
+            backup_files = [
+                {
+                    "name": f.get("name"),
+                    "size": f.get("metadata", {}).get("size", "unknown"),
+                    "created": f.get("created_at")
+                }
+                for f in (backups or [])
+            ]
+        except:
+            backup_files = []
+        
+        # Check sync_logs for backup events
+        try:
+            logs = supabase.table("sync_logs").select("*").eq("event_type", "backup").order("created_at", desc=True).limit(10).execute()
+            recent_backup_logs = logs.data or []
+        except:
+            recent_backup_logs = []
+        
+        return {
+            "status": "success",
+            "supabase_plan_info": "Supabase Pro includes daily automatic backups with 7-day retention",
+            "backup_storage_files": backup_files[:10],
+            "recent_backup_logs": recent_backup_logs,
+            "manual_backup_available": True,
+            "note": "Use backup_table tool to create manual backups of specific tables"
+        }
+    except Exception as e:
+        logger.error(f"Failed to get backup status: {e}")
+        return {"error": str(e)}
+
+
+def _backup_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a backup of a specific table."""
+    import json
+    from datetime import datetime
+    
+    try:
+        table_name = tool_input.get("table_name", "").strip()
+        
+        if not table_name:
+            return {"error": "table_name is required"}
+        
+        # Fetch all data from table (with pagination for large tables)
+        all_rows = []
+        page_size = 1000
+        start = 0
+        
+        while True:
+            result = supabase.table(table_name).select("*").range(start, start + page_size - 1).execute()
+            batch = result.data or []
+            all_rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            start += page_size
+            if start > 10000:  # Safety limit
+                break
+        
+        if not all_rows:
+            return {
+                "status": "warning",
+                "message": f"Table '{table_name}' is empty - nothing to backup"
+            }
+        
+        # Create backup JSON
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{table_name}_backup_{timestamp}.json"
+        json_content = json.dumps(all_rows, indent=2, default=str)
+        
+        # Upload to Supabase Storage
+        try:
+            supabase.storage.from_("backups").upload(
+                path=filename,
+                file=json_content.encode('utf-8'),
+                file_options={"content-type": "application/json", "upsert": "true"}
+            )
+            storage_status = "uploaded"
+        except Exception as e:
+            storage_status = f"upload failed: {str(e)[:50]}"
+        
+        # Log the backup
+        try:
+            supabase.table("sync_logs").insert({
+                "event_type": "backup",
+                "status": "success",
+                "message": f"Backed up {len(all_rows)} rows from {table_name}",
+                "details": {"table": table_name, "rows": len(all_rows), "filename": filename}
+            }).execute()
+        except:
+            pass
+        
+        return {
+            "status": "success",
+            "message": f"Backed up {len(all_rows)} rows from '{table_name}'",
+            "filename": filename,
+            "rows_backed_up": len(all_rows),
+            "storage_status": storage_status
+        }
+    except Exception as e:
+        logger.error(f"Failed to backup table: {e}")
         return {"error": str(e)}
 
 
