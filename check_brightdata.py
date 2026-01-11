@@ -1,10 +1,18 @@
 import httpx
 import json
+import os
+
+# Get API key from environment
+api_key = os.getenv("BRIGHTDATA_API_KEY")
+if not api_key:
+    print("ERROR: Set BRIGHTDATA_API_KEY environment variable")
+    print("  PowerShell: $env:BRIGHTDATA_API_KEY='your-key'")
+    exit(1)
 
 # List available datasets
 r = httpx.get(
     'https://api.brightdata.com/datasets/v3/datasets',
-    headers={'Authorization': 'Bearer 8b632e7e-bda6-4d2b-91fd-25de30d60c9d'}
+    headers={'Authorization': f'Bearer {api_key}'}
 )
 print(f'Status: {r.status_code}')
 if r.status_code == 200:

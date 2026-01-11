@@ -2,8 +2,9 @@
 Test script for Research Tools (LinkedIn + Brave Search)
 
 Run with:
-  $env:BRIGHTDATA_API_KEY="8b632e7e-bda6-4d2b-91fd-25de30d60c9d"
-  $env:BRAVE_API_KEY="BSAVfJa07GUBQ8eQ_AHhD4MwB8a2ojF"
+  # Set your API keys from Secret Manager or environment
+  # $env:BRIGHTDATA_API_KEY="your-key-here"
+  # $env:BRAVE_API_KEY="your-key-here"
   python test_research.py
 """
 
@@ -11,11 +12,11 @@ import asyncio
 import os
 import json
 
-# Set keys if not in environment
+# Check for required environment variables
 if not os.getenv("BRIGHTDATA_API_KEY"):
-    os.environ["BRIGHTDATA_API_KEY"] = "8b632e7e-bda6-4d2b-91fd-25de30d60c9d"
+    print("WARNING: BRIGHTDATA_API_KEY not set. Set via: $env:BRIGHTDATA_API_KEY='your-key'")
 if not os.getenv("BRAVE_API_KEY"):
-    os.environ["BRAVE_API_KEY"] = "BSAVfJa07GUBQ8eQ_AHhD4MwB8a2ojF"
+    print("WARNING: BRAVE_API_KEY not set. Set via: $env:BRAVE_API_KEY='your-key'")
 
 from app.features.research import get_research_service
 

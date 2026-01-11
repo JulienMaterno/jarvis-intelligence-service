@@ -1430,7 +1430,7 @@ Do NOT tell the user you deleted something unless status is "deleted".""",
     },
     {
         "name": "search_conversations",
-        "description": """Search through past conversation history with Bertan.
+        "description": """Search through past conversation history with Aaron.
 
 Use when user asks:
 - "What did we talk about last week?"
@@ -1900,7 +1900,9 @@ def _query_database(sql: str) -> Dict[str, Any]:
             "contacts", "meetings", "tasks", "journals", "reflections",
             "calendar_events", "emails", "transcripts", "beeper_chats",
             "beeper_messages", "books", "highlights", "sync_logs",
-            "applications", "linkedin_posts"
+            "applications", "linkedin_posts", "linkedin_connections",
+            "mem0_memories", "messages", "chat_messages", "agents", "users",
+            "sync_state", "pipeline_logs"
         ]
         
         if table_name.lower() not in allowed_tables:
