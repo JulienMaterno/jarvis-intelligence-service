@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 # Import config to ensure .env is loaded
 from app.core.config import settings
 
-from app.features.chat.tools import TOOLS, execute_tool
+from app.features.chat.tools import TOOLS, execute_tool, get_all_tools
 from app.features.memory import get_memory_service
 
 # =============================================================================
@@ -153,6 +153,17 @@ AVAILABLE TOOLS:
 - **Email sending**: draft and send emails (with user confirmation)
 - **Messaging (Beeper)**: send messages via WhatsApp, Telegram, LinkedIn, etc.
 - **Sync trigger**: trigger immediate data sync when needed
+- **Research (LinkedIn)**: profile lookups, company info, employee lists, job postings (via Bright Data - costs per query)
+- **Web Search**: search the internet for current information (via Tavily/SERP)
+
+RESEARCH TOOLS (⚠️ Cost-per-query APIs - use sparingly):
+Only use these when user EXPLICITLY asks for web research or LinkedIn information:
+- **linkedin_get_profile**: Get LinkedIn profile by URL (~$0.01-0.05)
+- **linkedin_search_profiles**: Search for people on LinkedIn (~$0.02-0.10)
+- **linkedin_get_company**: Get company info from LinkedIn (~$0.01-0.05)
+- **web_search**: Search the web (~$0.001-0.01)
+- **research_person**: Comprehensive person research (combines LinkedIn + web)
+- **research_company**: Comprehensive company research (combines LinkedIn + web)
 
 MESSAGING DATA STRATEGY (IMPORTANT - READ THIS):
 Messages from WhatsApp, Telegram, LinkedIn, etc. are synced to the database every 15 minutes.
@@ -857,13 +868,16 @@ a genuine intellectual exchange, not robotic task completion.
             tool_call_count = 0
 
             # Tool loop with streaming
+            # Get all tools including research tools (if configured)
+            all_tools = get_all_tools()
+            
             while tool_call_count < MAX_TOOL_CALLS:
                 # Log the request parameters for debugging
                 logger.info(f"Calling Anthropic streaming API:")
                 logger.info(f"  Model: {model}")
                 logger.info(f"  Max tokens: 8000")
                 logger.info(f"  Messages count: {len(messages)}")
-                logger.info(f"  Tools count: {len(TOOLS)}")
+                logger.info(f"  Tools count: {len(all_tools)}")
 
                 # Use Anthropic's streaming API
                 try:
@@ -871,7 +885,7 @@ a genuine intellectual exchange, not robotic task completion.
                         model=model,
                         max_tokens=8000,
                         system=system_prompt,
-                        tools=TOOLS,
+                        tools=all_tools,
                         messages=messages
                     ) as stream:
                         # Stream text chunks in real-time

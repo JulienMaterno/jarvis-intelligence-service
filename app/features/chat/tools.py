@@ -15,6 +15,17 @@ logger = logging.getLogger("Jarvis.Chat.Tools")
 
 
 # =============================================================================
+# RESEARCH TOOLS (LinkedIn, Web Search)
+# Lazy import to avoid circular dependencies
+# =============================================================================
+
+async def _handle_research_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle research tool calls (LinkedIn, Web Search)."""
+    from app.features.research import handle_research_tool
+    return await handle_research_tool(tool_name, tool_input)
+
+
+# =============================================================================
 # TOOL DEFINITIONS (for Claude)
 # =============================================================================
 
@@ -1681,6 +1692,16 @@ Returns the full post text.""",
 
 
 # =============================================================================
+# RESEARCH TOOLS (Added dynamically to avoid module-load circular imports)
+# =============================================================================
+
+def get_all_tools() -> List[Dict[str, Any]]:
+    """Get all tools including dynamically loaded research tools."""
+    from app.features.research import RESEARCH_TOOLS
+    return TOOLS + RESEARCH_TOOLS
+
+
+# =============================================================================
 # TOOL IMPLEMENTATIONS
 # =============================================================================
 
@@ -1830,6 +1851,12 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _search_linkedin_posts(tool_input)
         elif tool_name == "get_linkedin_post_content":
             return _get_linkedin_post_content(tool_input)
+        # Research tools (LinkedIn via Bright Data, Web Search)
+        elif tool_name in ("linkedin_get_profile", "linkedin_search_profiles", 
+                          "linkedin_get_company", "linkedin_get_company_jobs",
+                          "web_search", "research_person", "research_company",
+                          "get_research_status"):
+            return _run_async(_handle_research_tool(tool_name, tool_input))
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
