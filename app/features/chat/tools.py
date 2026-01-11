@@ -619,7 +619,11 @@ Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is
     },
     {
         "name": "delete_task",
-        "description": "Delete a task. Use this when the user wants to remove a task that's no longer needed.",
+        "description": """Delete a task. Use this when the user wants to remove a task that's no longer needed.
+
+⚠️ REQUIRES USER CONFIRMATION before execution.
+Always confirm with the user before deleting: "Are you sure you want to delete the task '[task title]'?"
+""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -630,9 +634,13 @@ Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is
                 "task_id": {
                     "type": "string",
                     "description": "Or task ID directly"
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "REQUIRED: Must be true to execute. Ask user to confirm first!"
                 }
             },
-            "required": []
+            "required": ["user_confirmed"]
         }
     },
     {
@@ -2918,8 +2926,9 @@ def _delete_task(input: Dict) -> Dict[str, Any]:
     try:
         task_title = input.get("task_title", "").strip()
         task_id = input.get("task_id", "").strip()
+        user_confirmed = input.get("user_confirmed", False)
         
-        # Find the task
+        # Find the task first
         task = None
         if task_id:
             result = supabase.table("tasks").select("*").eq("id", task_id).is_("deleted_at", "null").execute()
@@ -2934,6 +2943,20 @@ def _delete_task(input: Dict) -> Dict[str, Any]:
         
         if not task:
             return {"error": "Task not found"}
+        
+        # Check confirmation BEFORE deleting
+        if not user_confirmed:
+            return {
+                "needs_confirmation": True,
+                "task_to_delete": {
+                    "id": task["id"],
+                    "title": task.get("title"),
+                    "status": task.get("status"),
+                    "due_date": task.get("due_date")
+                },
+                "message": f"⚠️ Please confirm deletion of task: '{task.get('title')}'",
+                "instructions": "Ask user to confirm, then call delete_task again with user_confirmed=true"
+            }
         
         # Soft delete the task
         supabase.table("tasks").update({
@@ -5627,11 +5650,12 @@ def _get_database_backup_status(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         
         return {
             "status": "success",
-            "supabase_plan_info": "Supabase Pro includes daily automatic backups with 7-day retention",
+            "supabase_plan_info": "⚠️ FREE TIER - No automatic backups! Only Pro plan ($25/month) includes daily backups.",
             "backup_storage_files": backup_files[:10],
             "recent_backup_logs": recent_backup_logs,
             "manual_backup_available": True,
-            "note": "Use backup_table tool to create manual backups of specific tables"
+            "warning": "YOU ARE ON FREE TIER - Use backup_table tool regularly to create manual backups!",
+            "recommendation": "Consider upgrading to Supabase Pro for automatic daily backups with 7-day retention"
         }
     except Exception as e:
         logger.error(f"Failed to get backup status: {e}")

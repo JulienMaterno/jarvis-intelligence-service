@@ -158,6 +158,23 @@ async def search_contacts(q: str, limit: int = 5):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _is_valid_meeting_title(title: str) -> bool:
+    """Check if a meeting title looks like a real meeting name."""
+    if not title:
+        return False
+    # Skip titles that are mostly numbers/spaces (likely garbage data)
+    alphanumeric = sum(1 for c in title if c.isalpha())
+    if alphanumeric < 3:  # Need at least 3 letters
+        return False
+    # Skip titles that contain math-like expressions
+    if any(x in title.lower() for x in [' mit ', ' bei ', ' durch ', ' base ', ' differenz ']):
+        # Looks like German math notes, not a meeting title
+        numbers = sum(1 for c in title if c.isdigit())
+        if numbers > 3:  # More than 3 digits = probably not a meeting
+            return False
+    return True
+
+
 @router.get("/contacts/{contact_id}/history")
 async def get_contact_history(contact_id: str) -> Dict[str, Any]:
     """
@@ -173,7 +190,10 @@ async def get_contact_history(contact_id: str) -> Dict[str, Any]:
             "id, title, date, summary, topics_discussed"
         ).eq("contact_id", contact_id).is_(
             "deleted_at", "null"
-        ).order("date", desc=True).limit(10).execute()
+        ).order("date", desc=True).limit(20).execute()  # Get more to filter
+        
+        # Filter out garbage meeting titles
+        meetings = [m for m in (meetings_result.data or []) if _is_valid_meeting_title(m.get('title', ''))][:10]
         
         # Get open tasks from meetings with this contact
         meeting_ids = [m['id'] for m in meetings_result.data] if meetings_result.data else []
@@ -201,7 +221,7 @@ async def get_contact_history(contact_id: str) -> Dict[str, Any]:
             emails_with_direction.append(email_data)
         
         return {
-            "meetings": meetings_result.data or [],
+            "meetings": meetings,  # Use filtered meetings list
             "open_tasks": open_tasks,
             "recent_emails": emails_with_direction,
         }

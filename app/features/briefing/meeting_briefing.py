@@ -501,11 +501,10 @@ UPCOMING MEETING:
 Generate a brief, actionable meeting briefing. Include:
 1. A quick reminder of your relationship with this person (if any history)
 2. What you discussed in your last meeting, recent emails, or recent WhatsApp/LinkedIn messages
-3. Recent communication patterns across all channels (emails, messages, calendar events)
-4. Any relevant insights from your AI memory about this person or relationship
-5. 2-3 suggested conversation topics or questions to ask
-6. Any follow-ups you should mention
-7. If there are pending messages to respond to, mention it
+3. Any relevant insights from your AI memory about this person or relationship
+4. 2-3 suggested conversation topics or questions to ask
+5. Any follow-ups you should mention
+6. If there are pending messages to respond to, mention it
 
 Keep it concise and practical. Use bullet points. No more than 300 words.
 If there's no history with this person, focus on suggested ice-breakers based on any available info."""
