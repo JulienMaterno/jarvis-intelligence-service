@@ -1432,6 +1432,43 @@ First search for the incorrect memory, then correct it.""",
         }
     },
     {
+        "name": "remember_behavior",
+        "description": """Learn how to behave better from user feedback.
+
+Use when user says things like:
+- "Don't do that again"
+- "Please don't make so many tool calls"
+- "Next time, ask me first before doing X"
+- "In the future, always confirm before sending messages"
+- "Stop repeating yourself"
+- "You should batch operations instead of doing them one by one"
+
+This stores behavioral guidelines that will inform future conversations.
+The memory is tagged as 'behavior' type and will be retrieved when similar situations arise.
+
+Examples of good behavior memories:
+- "Always ask for confirmation before sending external messages"
+- "Batch database operations instead of making individual calls"
+- "Don't use web search for simple questions the user can answer"
+- "When updating multiple records, use update_data_batch tool"
+- "If a tool fails, explain the error clearly before retrying"
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "behavior": {
+                    "type": "string",
+                    "description": "The behavior guideline to remember (phrased as a rule, e.g., 'Always ask before sending messages')"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional: what situation triggered this learning (e.g., 'User was frustrated when I made 17 individual API calls')"
+                }
+            },
+            "required": ["behavior"]
+        }
+    },
+    {
         "name": "search_memories",
         "description": """Search what Jarvis remembers about a topic.
 
@@ -1458,8 +1495,8 @@ You can filter by type using the 'type' parameter.""",
                 },
                 "type": {
                     "type": "string",
-                    "enum": ["fact", "preference", "insight", "relationship", "interaction"],
-                    "description": "Filter by memory type"
+                    "enum": ["fact", "preference", "insight", "relationship", "interaction", "behavior"],
+                    "description": "Filter by memory type (behavior = learned guidelines for Jarvis)"
                 },
                 "limit": {
                     "type": "integer",
@@ -2113,6 +2150,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
         # Memory management tools
         elif tool_name == "remember_fact":
             return _remember_fact(tool_input)
+        elif tool_name == "remember_behavior":
+            return _remember_behavior(tool_input)
         elif tool_name == "correct_memory":
             return _correct_memory(tool_input)
         elif tool_name == "search_memories":
@@ -5141,6 +5180,7 @@ def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         "relationship": MemoryType.RELATIONSHIP,
         "interaction": MemoryType.INTERACTION,
         "insight": MemoryType.INSIGHT,
+        "behavior": MemoryType.BEHAVIOR,
     }
     memory_type = type_mapping.get(memory_type_str, MemoryType.FACT)
     
@@ -5208,6 +5248,89 @@ def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
             "status": "error",
             "error": f"Failed to remember: {str(e)}",
             "fact": fact
+        }
+
+
+def _remember_behavior(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Store a behavioral guideline in long-term memory."""
+    from app.features.memory import get_memory_service, MemoryType
+    
+    behavior = tool_input.get("behavior", "").strip()
+    context = tool_input.get("context", "").strip()
+    
+    if not behavior:
+        return {"error": "No behavior provided to remember"}
+    
+    # Format the memory content with context if provided
+    if context:
+        content = f"[BEHAVIOR RULE] {behavior}\n[CONTEXT] {context}"
+    else:
+        content = f"[BEHAVIOR RULE] {behavior}"
+    
+    try:
+        memory_service = get_memory_service()
+        
+        # Add memory with BEHAVIOR type and metadata
+        result = _run_async(
+            memory_service.add(
+                content=content,
+                memory_type=MemoryType.BEHAVIOR,
+                metadata={
+                    "source": "user_feedback",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "behavior_rule": behavior,
+                    "context": context or None
+                }
+            )
+        )
+        
+        # Handle different result types
+        if isinstance(result, dict):
+            status = result.get("status", "unknown")
+            event = result.get("event", "UNKNOWN")
+            memory_id = result.get("id")
+            
+            if status == "success":
+                return {
+                    "status": "learned",
+                    "memory_id": memory_id,
+                    "event": event,
+                    "behavior": behavior,
+                    "context": context or None,
+                    "message": f"✅ Behavior learned: '{behavior}'"
+                }
+            elif status == "deduplicated":
+                return {
+                    "status": "already_known",
+                    "behavior": behavior,
+                    "message": f"ℹ️ Similar behavior rule already exists: '{behavior}'"
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "error": f"Failed to learn behavior: {status}",
+                    "behavior": behavior
+                }
+        elif result:  # Legacy: string memory_id returned
+            return {
+                "status": "learned",
+                "memory_id": result,
+                "behavior": behavior,
+                "message": f"✅ Behavior learned: '{behavior}'"
+            }
+        else:
+            return {
+                "status": "failed",
+                "error": "Failed to store behavior - no result returned",
+                "behavior": behavior
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to remember behavior: {e}")
+        return {
+            "status": "error",
+            "error": f"Failed to learn behavior: {str(e)}",
+            "behavior": behavior
         }
 
 

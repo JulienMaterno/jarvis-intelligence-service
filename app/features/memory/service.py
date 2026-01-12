@@ -81,6 +81,7 @@ class MemoryType(Enum):
     INSIGHT = "insight"  # Patterns and observations
     PREFERENCE = "preference"  # User preferences
     RELATIONSHIP = "relationship"  # Info about contacts/relationships
+    BEHAVIOR = "behavior"  # How Jarvis should behave: "Don't make unnecessary tool calls"
 
 
 class MemoryService:

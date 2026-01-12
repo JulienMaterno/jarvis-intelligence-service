@@ -460,6 +460,68 @@ class ChatService:
         )
         # Get memory service
         self.memory = get_memory_service()
+        # Cache behavior rules at startup (refreshed each conversation)
+        self._behavior_rules_cache: Optional[str] = None
+        self._behavior_rules_loaded: bool = False
+    
+    async def _get_behavior_rules(self) -> str:
+        """
+        Load all behavior rules from memory to include in system prompt.
+        
+        Behavior rules are guidelines the user has taught Jarvis, like:
+        - "Always ask before sending external messages"
+        - "Batch database operations"
+        - "Don't use web search for simple questions"
+        
+        These are always included in the system prompt.
+        """
+        from app.features.memory import MemoryType
+        
+        # Return cached if already loaded this session
+        if self._behavior_rules_loaded and self._behavior_rules_cache is not None:
+            return self._behavior_rules_cache
+        
+        try:
+            # Search for behavior memories specifically
+            # Using a generic query that will match behavior rules
+            memories = await self.memory.search(
+                query="behavior rule guideline how to act",
+                limit=20,
+                memory_type=MemoryType.BEHAVIOR
+            )
+            
+            if not memories:
+                self._behavior_rules_cache = ""
+                self._behavior_rules_loaded = True
+                return ""
+            
+            # Format behavior rules clearly
+            lines = ["\n**LEARNED BEHAVIOR RULES (follow these guidelines):**"]
+            for mem in memories:
+                memory_text = mem.get("memory", "")
+                if memory_text:
+                    # Clean up the [BEHAVIOR RULE] prefix if present
+                    if "[BEHAVIOR RULE]" in memory_text:
+                        rule = memory_text.split("[BEHAVIOR RULE]")[-1].split("[CONTEXT]")[0].strip()
+                    else:
+                        rule = memory_text
+                    if rule:
+                        lines.append(f"• {rule}")
+            
+            context = "\n".join(lines) if len(lines) > 1 else ""
+            self._behavior_rules_cache = context
+            self._behavior_rules_loaded = True
+            
+            if context:
+                logger.info(f"Loaded {len(memories)} behavior rules for conversation")
+            
+            return context
+            
+        except Exception as e:
+            logger.warning(f"Could not load behavior rules: {e}")
+            self._behavior_rules_cache = ""
+            self._behavior_rules_loaded = True
+            return ""
     
     async def _get_memory_context(self, message: str, conversation_id: Optional[str] = None, force_refresh: bool = False) -> str:
         """
@@ -743,8 +805,8 @@ class ChatService:
             logger.debug(f"Error extracting finding: {e}")
             return None
     
-    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "") -> str:
-        """Build system prompt with current date/time/location, memory, journal, and Letta context."""
+    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "") -> str:
+        """Build system prompt with current date/time/location, memory, journal, Letta context, and behavior rules."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -771,7 +833,11 @@ class ChatService:
             user_location=f"{location_str} ({timezone_str})"
         )
 
-        # Append Letta episodic context first (conversation history, topics, decisions)
+        # Append behavior rules FIRST (most important - these are learned guidelines)
+        if behavior_rules:
+            base_prompt += behavior_rules
+
+        # Append Letta episodic context (conversation history, topics, decisions)
         if letta_context:
             base_prompt += letta_context
 
@@ -863,20 +929,22 @@ a genuine intellectual exchange, not robotic task completion.
                 self._get_memory_context(request.message, conversation_id=request.conversation_id)
             )
             letta_task = asyncio.create_task(self._get_letta_context())
+            behavior_task = asyncio.create_task(self._get_behavior_rules())
             
             # Journal context is sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
             
             # Wait for async tasks (in parallel) with timeout
             try:
-                memory_context, letta_context = await asyncio.wait_for(
-                    asyncio.gather(memory_task, letta_task, return_exceptions=True),
+                memory_context, letta_context, behavior_rules = await asyncio.wait_for(
+                    asyncio.gather(memory_task, letta_task, behavior_task, return_exceptions=True),
                     timeout=2.0  # 2 second max for context gathering
                 )
             except asyncio.TimeoutError:
                 logger.warning("Context gathering timed out after 2s, proceeding without")
                 memory_context = ""
                 letta_context = ""
+                behavior_rules = ""
             
             # Handle exceptions from gather
             if isinstance(memory_context, Exception):
@@ -885,11 +953,14 @@ a genuine intellectual exchange, not robotic task completion.
             if isinstance(letta_context, Exception):
                 logger.warning(f"Letta context failed: {letta_context}")
                 letta_context = ""
+            if isinstance(behavior_rules, Exception):
+                logger.warning(f"Behavior rules failed: {behavior_rules}")
+                behavior_rules = ""
             
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
 
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
 
             model = request.model or MODEL_ID
@@ -996,20 +1067,22 @@ a genuine intellectual exchange, not robotic task completion.
                 self._get_memory_context(request.message, conversation_id=request.conversation_id)
             )
             letta_task = asyncio.create_task(self._get_letta_context())
+            behavior_task = asyncio.create_task(self._get_behavior_rules())
             
             # Journal context is sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
             
             # Wait for async tasks (in parallel) with timeout
             try:
-                memory_context, letta_context = await asyncio.wait_for(
-                    asyncio.gather(memory_task, letta_task, return_exceptions=True),
+                memory_context, letta_context, behavior_rules = await asyncio.wait_for(
+                    asyncio.gather(memory_task, letta_task, behavior_task, return_exceptions=True),
                     timeout=2.0  # 2 second max for context gathering
                 )
             except asyncio.TimeoutError:
                 logger.warning("Context gathering timed out after 2s, proceeding without")
                 memory_context = ""
                 letta_context = ""
+                behavior_rules = ""
             
             # Handle exceptions from gather
             if isinstance(memory_context, Exception):
@@ -1018,12 +1091,15 @@ a genuine intellectual exchange, not robotic task completion.
             if isinstance(letta_context, Exception):
                 logger.warning(f"Letta context failed: {letta_context}")
                 letta_context = ""
+            if isinstance(behavior_rules, Exception):
+                logger.warning(f"Behavior rules failed: {behavior_rules}")
+                behavior_rules = ""
             
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
             
-            # Build dynamic system prompt with current context, journals, Letta, and memory
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context)
+            # Build dynamic system prompt with current context, journals, Letta, behavior rules, and memory
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules)
 
             # Add client-specific response style instructions (telegram vs web)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
