@@ -23,7 +23,8 @@ logger = logging.getLogger("Jarvis.Research.WebSearch")
 
 
 # API configuration
-BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+# Strip whitespace to handle secrets with trailing newlines
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "").strip()
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_NEWS_URL = "https://api.search.brave.com/res/v1/news/search"
 

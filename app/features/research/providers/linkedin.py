@@ -30,11 +30,12 @@ from .base import BaseProvider, ProviderResult, ProviderStatus
 logger = logging.getLogger("Jarvis.Research.LinkedIn")
 
 # Bright Data API configuration
-BRIGHTDATA_API_KEY = os.getenv("BRIGHTDATA_API_KEY", "")
+# Strip whitespace to handle secrets with trailing newlines
+BRIGHTDATA_API_KEY = os.getenv("BRIGHTDATA_API_KEY", "").strip()
 BRIGHTDATA_BASE_URL = "https://api.brightdata.com/datasets/v3"
 
 # Brave Search API (for finding LinkedIn URLs)
-BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "").strip()
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 
 # Rate limiting for Brave (1 req/sec on free tier)
