@@ -40,7 +40,21 @@ BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 
 # Rate limiting for Brave (1 req/sec on free tier)
 _brave_last_request: float = 0.0
-_brave_rate_lock = asyncio.Lock()
+_brave_rate_lock: Optional[asyncio.Lock] = None
+
+def _get_brave_lock() -> asyncio.Lock:
+    """Get or create the rate limit lock in the current event loop."""
+    global _brave_rate_lock
+    try:
+        # Check if lock exists and is for current loop
+        if _brave_rate_lock is not None:
+            # Try to use it - will fail if loop changed
+            return _brave_rate_lock
+    except RuntimeError:
+        pass
+    # Create new lock in current event loop
+    _brave_rate_lock = asyncio.Lock()
+    return _brave_rate_lock
 
 # Scraper IDs for different LinkedIn endpoints
 # These are Bright Data's pre-built scraper identifiers
@@ -373,7 +387,7 @@ class LinkedInProvider(BaseProvider):
         global _brave_last_request
         
         # Rate limit: 1 request per second
-        async with _brave_rate_lock:
+        async with _get_brave_lock():
             now = time.time()
             elapsed = now - _brave_last_request
             if elapsed < 1.0:
