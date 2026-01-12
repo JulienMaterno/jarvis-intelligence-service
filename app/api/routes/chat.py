@@ -343,6 +343,31 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                             yield f"data: {json.dumps(result_chunk)}\n\n"
 
                         elif chunk["type"] == "done":
+                            # Send usage statistics before final chunk (for web UI display)
+                            usage_info = chunk.get("usage", {})
+                            if usage_info:
+                                usage_chunk = {
+                                    "id": chat_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created_time,
+                                    "model": request.model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {},
+                                        "finish_reason": None
+                                    }],
+                                    "usage": {
+                                        "prompt_tokens": usage_info.get("input_tokens", 0),
+                                        "completion_tokens": usage_info.get("output_tokens", 0),
+                                        "total_tokens": usage_info.get("input_tokens", 0) + usage_info.get("output_tokens", 0),
+                                        "cache_read_tokens": usage_info.get("cache_read_tokens", 0),
+                                        "cache_creation_tokens": usage_info.get("cache_creation_tokens", 0),
+                                        "cost_usd": usage_info.get("cost_usd", 0),
+                                        "savings_usd": usage_info.get("savings_usd", 0),
+                                    }
+                                }
+                                yield f"data: {json.dumps(usage_chunk)}\n\n"
+                            
                             # Final chunk
                             final_chunk = {
                                 "id": chat_id,

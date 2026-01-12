@@ -95,6 +95,15 @@ COST_PER_1M_OUTPUT = {
     "claude-haiku-4-5-20251001": 4.00,
     "claude-sonnet-4-5-20250929": 15.00,
 }
+# Prompt caching costs (per 1M tokens) - 90% discount on cached reads!
+COST_PER_1M_CACHE_WRITE = {
+    "claude-haiku-4-5-20251001": 1.00,  # 25% more than input
+    "claude-sonnet-4-5-20250929": 3.75,  # 25% more than input
+}
+COST_PER_1M_CACHE_READ = {
+    "claude-haiku-4-5-20251001": 0.08,  # 90% less than input!
+    "claude-sonnet-4-5-20250929": 0.30,  # 90% less than input!
+}
 from app.features.chat.storage import get_chat_storage
 from app.features.letta import get_letta_service
 
@@ -443,6 +452,115 @@ SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(
     current_time="(use get_current_time tool)",
     user_location="Unknown (user can tell you via chat)"
 )
+
+
+# =============================================================================
+# PROMPT CACHING HELPERS (for web chat only)
+# =============================================================================
+
+def _prepare_system_with_cache(system_prompt: str, enable_caching: bool = False) -> list:
+    """
+    Prepare system prompt for Claude API with optional caching.
+    
+    For web chat (multi-turn), we cache the system prompt to save 90% on repeated tokens.
+    System prompt is ~3K tokens, stays constant across a conversation.
+    
+    Args:
+        system_prompt: The full system prompt string
+        enable_caching: Whether to add cache_control breakpoint
+        
+    Returns:
+        List of system message blocks (with or without cache_control)
+    """
+    if not enable_caching:
+        # For Telegram ad-hoc requests, just return plain string
+        return system_prompt
+    
+    # For web chat, return structured format with cache control
+    return [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"}  # 5-min cache (default)
+        }
+    ]
+
+
+def _prepare_tools_with_cache(tools: list, enable_caching: bool = False) -> list:
+    """
+    Prepare tools list for Claude API with optional caching.
+    
+    Tools are ~16K tokens and stay constant across ALL conversations.
+    We cache the last tool to mark the end of the cacheable prefix.
+    
+    Args:
+        tools: List of tool definitions
+        enable_caching: Whether to add cache_control to last tool
+        
+    Returns:
+        Tools list (with or without cache_control on last tool)
+    """
+    if not enable_caching or not tools:
+        return tools
+    
+    # Deep copy to avoid modifying original
+    import copy
+    cached_tools = copy.deepcopy(tools)
+    
+    # Add cache_control to the LAST tool (marks end of cacheable prefix)
+    cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
+    
+    return cached_tools
+
+
+def _calculate_cost_with_cache(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0
+) -> dict:
+    """
+    Calculate cost including prompt caching savings.
+    
+    Returns dict with:
+    - total_cost: Total cost in USD
+    - breakdown: Dict with individual costs
+    - savings: How much was saved via caching
+    """
+    # Input cost (non-cached tokens)
+    uncached_input = input_tokens - cache_read_tokens
+    input_cost = (uncached_input / 1_000_000) * COST_PER_1M_INPUT.get(model, 0.80)
+    
+    # Output cost
+    output_cost = (output_tokens / 1_000_000) * COST_PER_1M_OUTPUT.get(model, 4.00)
+    
+    # Cache costs
+    cache_write_cost = (cache_creation_tokens / 1_000_000) * COST_PER_1M_CACHE_WRITE.get(model, 1.00)
+    cache_read_cost = (cache_read_tokens / 1_000_000) * COST_PER_1M_CACHE_READ.get(model, 0.08)
+    
+    # What it would have cost without caching
+    cost_without_cache = ((input_tokens + cache_creation_tokens) / 1_000_000) * COST_PER_1M_INPUT.get(model, 0.80) + output_cost
+    
+    total_cost = input_cost + output_cost + cache_write_cost + cache_read_cost
+    savings = cost_without_cache - total_cost
+    
+    return {
+        "total_cost": total_cost,
+        "breakdown": {
+            "input": input_cost,
+            "output": output_cost,
+            "cache_write": cache_write_cost,
+            "cache_read": cache_read_cost,
+        },
+        "savings": max(0, savings),
+        "tokens": {
+            "input": input_tokens,
+            "output": output_tokens,
+            "cache_creation": cache_creation_tokens,
+            "cache_read": cache_read_tokens,
+        }
+    }
 
 
 # =============================================================================
@@ -974,10 +1092,28 @@ a genuine intellectual exchange, not robotic task completion.
 
             tools_used = []
             tool_call_count = 0
+            final_stop_reason = None  # Track how the response ended
+            
+            # Track cumulative usage across all API calls in this request
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cache_creation_tokens = 0
+            total_cache_read_tokens = 0
 
             # Tool loop with streaming
             # Get all tools including research tools (if configured)
             all_tools = get_all_tools()
+            
+            # Enable caching for web chat (multi-turn) - saves ~90% on system prompt + tools
+            # Telegram is ad-hoc, so caching doesn't help much
+            enable_caching = request.client_type == "web"
+            
+            # Prepare system prompt and tools with optional caching
+            cached_system = _prepare_system_with_cache(system_prompt, enable_caching)
+            cached_tools = _prepare_tools_with_cache(all_tools, enable_caching)
+            
+            if enable_caching:
+                logger.info(f"🗄️ Prompt caching ENABLED for web chat (saves ~90% on {len(system_prompt)} chars system + {len(all_tools)} tools)")
             
             while tool_call_count < MAX_TOOL_CALLS:
                 # Log the request parameters for debugging
@@ -985,15 +1121,16 @@ a genuine intellectual exchange, not robotic task completion.
                 logger.info(f"  Model: {model}")
                 logger.info(f"  Max tokens: 8000")
                 logger.info(f"  Messages count: {len(messages)}")
-                logger.info(f"  Tools count: {len(all_tools)}")
+                logger.info(f"  Tools count: {len(cached_tools)}")
+                logger.info(f"  Caching: {enable_caching}")
 
                 # Use Anthropic's streaming API
                 try:
                     with self.client.messages.stream(
                         model=model,
                         max_tokens=8000,
-                        system=system_prompt,
-                        tools=all_tools,
+                        system=cached_system,
+                        tools=cached_tools,
                         messages=messages
                     ) as stream:
                         # Stream text chunks in real-time
@@ -1002,6 +1139,13 @@ a genuine intellectual exchange, not robotic task completion.
 
                         # Get the final message after streaming completes
                         response = stream.get_final_message()
+                        
+                        # Track usage from this API call
+                        total_input_tokens += response.usage.input_tokens
+                        total_output_tokens += response.usage.output_tokens
+                        total_cache_creation_tokens += getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+                        total_cache_read_tokens += getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+                        
                 except anthropic.BadRequestError as e:
                     logger.error(f"Anthropic API error: {e}")
                     yield {"type": "error", "message": str(e)}
@@ -1042,12 +1186,46 @@ a genuine intellectual exchange, not robotic task completion.
                     # Add to messages for next iteration
                     messages.append({"role": "assistant", "content": assistant_content})
                     messages.append({"role": "user", "content": tool_results})
+                elif response.stop_reason == "max_tokens":
+                    # Response was truncated due to token limit
+                    final_stop_reason = "max_tokens"
+                    logger.warning(f"⚠️ Response truncated: max_tokens reached ({total_output_tokens} output tokens)")
+                    yield {"type": "warning", "message": "[Response truncated due to length limit - consider asking me to continue]"}
+                    break
                 else:
-                    # Done - no more tool calls
+                    # Done - end_turn or other normal completion
+                    final_stop_reason = response.stop_reason
                     break
 
-            # Final event
-            yield {"type": "done", "tools_used": tools_used}
+            # Calculate final cost with cache savings
+            cost_info = _calculate_cost_with_cache(
+                model=model,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                cache_creation_tokens=total_cache_creation_tokens,
+                cache_read_tokens=total_cache_read_tokens
+            )
+            
+            # Log cost
+            if total_cache_read_tokens > 0:
+                logger.info(f"💵 Streaming cost: ${cost_info['total_cost']:.4f} ({total_input_tokens} in / {total_output_tokens} out) | 🗄️ Cache: {total_cache_read_tokens} read, saved ${cost_info['savings']:.4f}")
+            else:
+                logger.info(f"💵 Streaming cost: ${cost_info['total_cost']:.4f} ({total_input_tokens} in / {total_output_tokens} out)")
+
+            # Final event with usage statistics
+            yield {
+                "type": "done", 
+                "tools_used": tools_used,
+                "stop_reason": final_stop_reason,  # "end_turn", "max_tokens", etc.
+                "usage": {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "cache_creation_tokens": total_cache_creation_tokens,
+                    "cache_read_tokens": total_cache_read_tokens,
+                    "cost_usd": round(cost_info["total_cost"], 6),
+                    "savings_usd": round(cost_info["savings"], 6),
+                }
+            }
 
         except Exception as e:
             logger.exception("Streaming error")
@@ -1134,12 +1312,26 @@ a genuine intellectual exchange, not robotic task completion.
             # Track important tool findings to persist in conversation history
             key_tool_findings = []
             
+            # Get all tools including research tools
+            all_tools = get_all_tools()
+            
+            # Enable caching for web chat (multi-turn) - saves ~90% on system prompt + tools
+            # Telegram is typically ad-hoc single requests, but can still benefit from tool caching
+            enable_caching = request.client_type == "web"
+            
+            # Prepare system prompt and tools with optional caching
+            cached_system = _prepare_system_with_cache(system_prompt, enable_caching)
+            cached_tools = _prepare_tools_with_cache(all_tools, enable_caching)
+            
+            if enable_caching:
+                logger.info(f"🗄️ Prompt caching ENABLED for web chat")
+            
             while tool_call_count < MAX_TOOL_CALLS:
                 response = self.client.messages.create(
                     model=model,  # Use selected model
                     max_tokens=8000,  # Increased for web chat detailed responses
-                    system=system_prompt,  # Use dynamic prompt with date/time/location and client-specific style
-                    tools=TOOLS,
+                    system=cached_system,  # Use dynamic prompt with date/time/location and client-specific style
+                    tools=cached_tools,
                     messages=messages
                 )
                 
@@ -1216,14 +1408,30 @@ a genuine intellectual exchange, not robotic task completion.
                     except Exception as e:
                         logger.warning(f"Failed to save conversation memory: {e}")
                     
-                    # Calculate and log cost using selected model
+                    # Calculate and log cost using selected model, including cache info
                     input_tokens = response.usage.input_tokens
                     output_tokens = response.usage.output_tokens
-                    input_cost = (input_tokens / 1_000_000) * COST_PER_1M_INPUT.get(model, 0.80)
-                    output_cost = (output_tokens / 1_000_000) * COST_PER_1M_OUTPUT.get(model, 4.00)
-                    total_cost = input_cost + output_cost
-
-                    logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | Model: {model}")
+                    
+                    # Get cache metrics if available (only for requests with caching enabled)
+                    cache_creation_tokens = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+                    cache_read_tokens = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+                    
+                    # Calculate cost with cache savings
+                    cost_info = _calculate_cost_with_cache(
+                        model=model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cache_creation_tokens=cache_creation_tokens,
+                        cache_read_tokens=cache_read_tokens
+                    )
+                    total_cost = cost_info["total_cost"]
+                    
+                    if cache_read_tokens > 0:
+                        logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | 🗄️ Cache: {cache_read_tokens} read, saved ${cost_info['savings']:.4f} | Model: {model}")
+                    elif cache_creation_tokens > 0:
+                        logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | 🗄️ Cache: {cache_creation_tokens} written | Model: {model}")
+                    else:
+                        logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | Model: {model}")
                     
                     # Store raw message exchange in Supabase (for audit trail + Letta batch)
                     # This is processed by Letta in batch later (hourly/daily), not per-message
@@ -1232,13 +1440,17 @@ a genuine intellectual exchange, not robotic task completion.
                         await storage.store_exchange(
                             user_message=request.message,
                             assistant_response=final_response,
-                            source="telegram",
+                            source=request.client_type,  # Track source (telegram/web)
                             tools_used=list(set(tools_used)) if tools_used else None,
                             assistant_metadata={
                                 "input_tokens": input_tokens,
                                 "output_tokens": output_tokens,
+                                "cache_creation_tokens": cache_creation_tokens,
+                                "cache_read_tokens": cache_read_tokens,
                                 "cost_usd": round(total_cost, 6),
-                                "model": MODEL_ID,
+                                "savings_usd": round(cost_info["savings"], 6),
+                                "model": model,
+                                "client_type": request.client_type,
                             }
                         )
                     except Exception as e:
