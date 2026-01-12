@@ -124,6 +124,7 @@ class LinkedInProvider(BaseProvider):
         Execute synchronous scrape (blocks until complete).
         Best for single lookups that complete quickly.
         """
+        logger.info(f"LinkedIn scrape_sync: scraper_id={scraper_id}, inputs={inputs}")
         try:
             async with self._create_client() as client:
                 response = await client.post(
@@ -135,6 +136,8 @@ class LinkedInProvider(BaseProvider):
                     },
                     json=inputs
                 )
+                
+                logger.info(f"LinkedIn scrape response: status={response.status_code}, body_preview={response.text[:500] if response.text else 'empty'}")
                 
                 if response.status_code == 200:
                     # Handle both JSON array and NDJSON formats
@@ -154,6 +157,7 @@ class LinkedInProvider(BaseProvider):
                                 except json.JSONDecodeError:
                                     continue
                     
+                    logger.info(f"LinkedIn scrape parsed data: {len(data) if isinstance(data, list) else 'not-list'} items")
                     return ProviderResult.success(
                         data=data,
                         scraper_id=scraper_id,
@@ -166,15 +170,20 @@ class LinkedInProvider(BaseProvider):
                         metadata={"retry_after": response.headers.get("Retry-After")}
                     )
                 else:
+                    logger.error(f"LinkedIn scrape API error: {response.status_code} - {response.text[:500]}")
                     return ProviderResult.failure(
                         f"API error {response.status_code}: {response.text[:200]}"
                     )
                     
         except httpx.TimeoutException:
+            logger.error("LinkedIn scrape timeout")
             return ProviderResult(
                 status=ProviderStatus.TIMEOUT,
                 error="Request timed out. Try async mode for large jobs."
             )
+        except Exception as e:
+            logger.error(f"LinkedIn scrape exception: {e}")
+            raise
     
     async def _trigger_async(
         self,
