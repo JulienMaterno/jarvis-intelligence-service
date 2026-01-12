@@ -68,7 +68,8 @@ class LinkedInProvider(BaseProvider):
     
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or BRIGHTDATA_API_KEY
-        self._client: Optional[httpx.AsyncClient] = None
+        # Note: Don't cache httpx.AsyncClient - it's tied to an event loop
+        # and causes "Event loop is closed" errors when used across threads
     
     @property
     def name(self) -> str:
@@ -79,22 +80,15 @@ class LinkedInProvider(BaseProvider):
         """Check if API key is configured."""
         return bool(self.api_key)
     
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                timeout=60.0,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                }
-            )
-        return self._client
-    
-    async def close(self):
-        """Close HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+    def _create_client(self) -> httpx.AsyncClient:
+        """Create a new HTTP client (fresh for each request)."""
+        return httpx.AsyncClient(
+            timeout=60.0,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+        )
     
     async def _execute(self, operation: str, params: Dict[str, Any]) -> ProviderResult:
         """Execute LinkedIn operation via Bright Data API."""
@@ -130,53 +124,52 @@ class LinkedInProvider(BaseProvider):
         Execute synchronous scrape (blocks until complete).
         Best for single lookups that complete quickly.
         """
-        client = await self._get_client()
-        
         try:
-            response = await client.post(
-                f"{BRIGHTDATA_BASE_URL}/scrape",
-                params={
-                    "dataset_id": scraper_id, 
-                    "include_errors": str(include_errors).lower(),
-                    "format": "json"  # Explicitly request JSON array format
-                },
-                json=inputs
-            )
-            
-            if response.status_code == 200:
-                # Handle both JSON array and NDJSON formats
-                text = response.text.strip()
-                try:
-                    # Try parsing as JSON array first
-                    data = response.json()
-                except Exception:
-                    # Fall back to NDJSON (newline-separated JSON)
-                    import json
-                    data = []
-                    for line in text.split('\n'):
-                        line = line.strip()
-                        if line:
-                            try:
-                                data.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
-                
-                return ProviderResult.success(
-                    data=data,
-                    scraper_id=scraper_id,
-                    input_count=len(inputs)
-                )
-            elif response.status_code == 429:
-                return ProviderResult(
-                    status=ProviderStatus.RATE_LIMITED,
-                    error="Rate limited by Bright Data API",
-                    metadata={"retry_after": response.headers.get("Retry-After")}
-                )
-            else:
-                return ProviderResult.failure(
-                    f"API error {response.status_code}: {response.text[:200]}"
+            async with self._create_client() as client:
+                response = await client.post(
+                    f"{BRIGHTDATA_BASE_URL}/scrape",
+                    params={
+                        "dataset_id": scraper_id, 
+                        "include_errors": str(include_errors).lower(),
+                        "format": "json"  # Explicitly request JSON array format
+                    },
+                    json=inputs
                 )
                 
+                if response.status_code == 200:
+                    # Handle both JSON array and NDJSON formats
+                    text = response.text.strip()
+                    try:
+                        # Try parsing as JSON array first
+                        data = response.json()
+                    except Exception:
+                        # Fall back to NDJSON (newline-separated JSON)
+                        import json
+                        data = []
+                        for line in text.split('\n'):
+                            line = line.strip()
+                            if line:
+                                try:
+                                    data.append(json.loads(line))
+                                except json.JSONDecodeError:
+                                    continue
+                    
+                    return ProviderResult.success(
+                        data=data,
+                        scraper_id=scraper_id,
+                        input_count=len(inputs)
+                    )
+                elif response.status_code == 429:
+                    return ProviderResult(
+                        status=ProviderStatus.RATE_LIMITED,
+                        error="Rate limited by Bright Data API",
+                        metadata={"retry_after": response.headers.get("Retry-After")}
+                    )
+                else:
+                    return ProviderResult.failure(
+                        f"API error {response.status_code}: {response.text[:200]}"
+                    )
+                    
         except httpx.TimeoutException:
             return ProviderResult(
                 status=ProviderStatus.TIMEOUT,
@@ -194,8 +187,6 @@ class LinkedInProvider(BaseProvider):
         Returns snapshot_id immediately, results retrieved later.
         Best for bulk operations or long-running jobs.
         """
-        client = await self._get_client()
-        
         payload = inputs
         params = {"dataset_id": scraper_id}
         
@@ -203,62 +194,62 @@ class LinkedInProvider(BaseProvider):
             params["notify"] = webhook_url
         
         try:
-            response = await client.post(
-                f"{BRIGHTDATA_BASE_URL}/trigger",
-                params=params,
-                json=payload
-            )
-            
-            if response.status_code in (200, 202):
-                data = response.json()
-                snapshot_id = data.get("snapshot_id")
-                return ProviderResult(
-                    status=ProviderStatus.PENDING,
-                    data={"snapshot_id": snapshot_id},
-                    metadata={"scraper_id": scraper_id, "async": True}
+            async with self._create_client() as client:
+                response = await client.post(
+                    f"{BRIGHTDATA_BASE_URL}/trigger",
+                    params=params,
+                    json=payload
                 )
-            else:
-                return ProviderResult.failure(
-                    f"API error {response.status_code}: {response.text[:200]}"
-                )
+                
+                if response.status_code in (200, 202):
+                    data = response.json()
+                    snapshot_id = data.get("snapshot_id")
+                    return ProviderResult(
+                        status=ProviderStatus.PENDING,
+                        data={"snapshot_id": snapshot_id},
+                        metadata={"scraper_id": scraper_id, "async": True}
+                    )
+                else:
+                    return ProviderResult.failure(
+                        f"API error {response.status_code}: {response.text[:200]}"
+                    )
                 
         except Exception as e:
             return ProviderResult.failure(str(e))
     
     async def get_snapshot_status(self, snapshot_id: str) -> ProviderResult:
         """Check status and retrieve results of async job."""
-        client = await self._get_client()
-        
         try:
-            response = await client.get(
-                f"{BRIGHTDATA_BASE_URL}/snapshots/{snapshot_id}"
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                status = data.get("status")
+            async with self._create_client() as client:
+                response = await client.get(
+                    f"{BRIGHTDATA_BASE_URL}/snapshots/{snapshot_id}"
+                )
                 
-                if status == "ready":
-                    return ProviderResult.success(data, snapshot_id=snapshot_id)
-                elif status == "running":
-                    return ProviderResult(
-                        status=ProviderStatus.PENDING,
-                        data=data,
-                        metadata={"snapshot_id": snapshot_id}
-                    )
-                elif status == "failed":
-                    return ProviderResult.failure(
-                        data.get("error", "Job failed"),
-                        snapshot_id=snapshot_id
-                    )
+                if response.status_code == 200:
+                    data = response.json()
+                    status = data.get("status")
+                    
+                    if status == "ready":
+                        return ProviderResult.success(data, snapshot_id=snapshot_id)
+                    elif status == "running":
+                        return ProviderResult(
+                            status=ProviderStatus.PENDING,
+                            data=data,
+                            metadata={"snapshot_id": snapshot_id}
+                        )
+                    elif status == "failed":
+                        return ProviderResult.failure(
+                            data.get("error", "Job failed"),
+                            snapshot_id=snapshot_id
+                        )
+                    else:
+                        return ProviderResult(
+                            status=ProviderStatus.PENDING,
+                            data=data,
+                            metadata={"status": status}
+                        )
                 else:
-                    return ProviderResult(
-                        status=ProviderStatus.PENDING,
-                        data=data,
-                        metadata={"status": status}
-                    )
-            else:
-                return ProviderResult.failure(f"API error: {response.status_code}")
+                    return ProviderResult.failure(f"API error: {response.status_code}")
                 
         except Exception as e:
             return ProviderResult.failure(str(e))

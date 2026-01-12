@@ -48,7 +48,8 @@ class WebSearchProvider(BaseProvider):
     
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or BRAVE_API_KEY
-        self._client: Optional[httpx.AsyncClient] = None
+        # Note: Don't cache httpx.AsyncClient - it's tied to an event loop
+        # and causes "Event loop is closed" errors when used across threads
     
     @property
     def name(self) -> str:
@@ -69,22 +70,15 @@ class WebSearchProvider(BaseProvider):
                 await asyncio.sleep(1.0 - elapsed)
             _last_request_time = time.time()
     
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                headers={
-                    "X-Subscription-Token": self.api_key,
-                    "Accept": "application/json"
-                }
-            )
-        return self._client
-    
-    async def close(self):
-        """Close HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+    def _create_client(self) -> httpx.AsyncClient:
+        """Create a new HTTP client (fresh for each request)."""
+        return httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "X-Subscription-Token": self.api_key,
+                "Accept": "application/json"
+            }
+        )
     
     async def _execute(self, operation: str, params: Dict[str, Any]) -> ProviderResult:
         """Execute web search operation."""
@@ -125,8 +119,6 @@ class WebSearchProvider(BaseProvider):
         # Rate limit: 1 request per second
         await self._rate_limit()
         
-        client = await self._get_client()
-        
         request_params = {
             "q": query,
             "count": num_results,
@@ -139,22 +131,23 @@ class WebSearchProvider(BaseProvider):
             request_params["freshness"] = params["freshness"]
         
         try:
-            response = await client.get(BRAVE_URL, params=request_params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = self._normalize_results(data)
-                return ProviderResult.success(results, raw_response=data)
-            elif response.status_code == 401:
-                return ProviderResult.failure("Invalid Brave API key")
-            elif response.status_code == 429:
-                return ProviderResult(
-                    status=ProviderStatus.RATE_LIMITED,
-                    error="Rate limited. Check your Brave API quota."
-                )
-            else:
-                return ProviderResult.failure(f"Brave API error: {response.status_code}")
+            async with self._create_client() as client:
+                response = await client.get(BRAVE_URL, params=request_params)
                 
+                if response.status_code == 200:
+                    data = response.json()
+                    results = self._normalize_results(data)
+                    return ProviderResult.success(results, raw_response=data)
+                elif response.status_code == 401:
+                    return ProviderResult.failure("Invalid Brave API key")
+                elif response.status_code == 429:
+                    return ProviderResult(
+                        status=ProviderStatus.RATE_LIMITED,
+                        error="Rate limited. Check your Brave API quota."
+                    )
+                else:
+                    return ProviderResult.failure(f"Brave API error: {response.status_code}")
+                    
         except httpx.TimeoutException:
             return ProviderResult(
                 status=ProviderStatus.TIMEOUT,
@@ -181,8 +174,6 @@ class WebSearchProvider(BaseProvider):
         # Rate limit: 1 request per second
         await self._rate_limit()
         
-        client = await self._get_client()
-        
         request_params = {
             "q": query,
             "count": num_results,
@@ -192,15 +183,16 @@ class WebSearchProvider(BaseProvider):
             request_params["freshness"] = params["freshness"]
         
         try:
-            response = await client.get(BRAVE_NEWS_URL, params=request_params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = self._normalize_news_results(data)
-                return ProviderResult.success(results, raw_response=data)
-            else:
-                return ProviderResult.failure(f"Brave News API error: {response.status_code}")
+            async with self._create_client() as client:
+                response = await client.get(BRAVE_NEWS_URL, params=request_params)
                 
+                if response.status_code == 200:
+                    data = response.json()
+                    results = self._normalize_news_results(data)
+                    return ProviderResult.success(results, raw_response=data)
+                else:
+                    return ProviderResult.failure(f"Brave News API error: {response.status_code}")
+                    
         except Exception as e:
             return ProviderResult.failure(str(e))
     
