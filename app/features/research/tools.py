@@ -257,6 +257,8 @@ USE WHEN:
 
 async def _linkedin_get_profiles(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     """Get LinkedIn profile(s) by URL - supports batch."""
+    import json
+    
     service = get_research_service()
     
     if not service.linkedin.is_configured:
@@ -266,8 +268,22 @@ async def _linkedin_get_profiles(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     urls = tool_input.get("urls", [])
+    
+    # Handle various input formats from Claude
     if isinstance(urls, str):
-        urls = [urls]  # Handle single URL passed as string
+        # Try to parse as JSON array first (Claude sometimes stringifies arrays)
+        try:
+            parsed = json.loads(urls)
+            if isinstance(parsed, list):
+                urls = parsed
+            else:
+                urls = [urls]  # Single URL as string
+        except json.JSONDecodeError:
+            urls = [urls]  # Single URL as string
+    
+    # Ensure we have a flat list of strings
+    if urls and isinstance(urls[0], list):
+        urls = urls[0]  # Unwrap nested list
     
     if not urls:
         return {"error": "No URLs provided"}
