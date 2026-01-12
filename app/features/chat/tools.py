@@ -4943,20 +4943,52 @@ def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
 # =============================================================================
 
 def _run_async(coro):
-    """Safely run async code from sync context."""
+    """Safely run async code from sync context.
+    
+    This handles the case where we're called from an async context (FastAPI)
+    but need to run async code synchronously (Claude tool execution).
+    
+    The key challenge is that httpx.AsyncClient creates connections tied to
+    an event loop. If we use asyncio.run(), it closes the loop before the
+    client cleanup completes, causing "Event loop is closed" errors.
+    
+    Solution: Create a new event loop, run the coroutine, and let it complete
+    fully (including cleanup) before closing.
+    """
     import asyncio
+    import concurrent.futures
+    
+    def run_in_new_loop(coro):
+        """Run coroutine in a new event loop, ensuring proper cleanup."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            # Give pending tasks time to complete
+            try:
+                # Cancel any pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                # Wait for cancellation to complete
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+            finally:
+                loop.close()
+    
     try:
-        # Try to get the running loop (if in async context)
-        loop = asyncio.get_running_loop()
-        # We're in an async context - use nest_asyncio or create task
-        # For simplicity, create a new thread
-        import concurrent.futures
+        # Check if we're in an async context
+        asyncio.get_running_loop()
+        # We are - run in a separate thread to avoid blocking
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, coro)
-            return future.result(timeout=30)
+            future = executor.submit(run_in_new_loop, coro)
+            return future.result(timeout=60)  # Increased timeout for API calls
     except RuntimeError:
-        # No running loop - safe to use asyncio.run
-        return asyncio.run(coro)
+        # No running loop - safe to run directly
+        return run_in_new_loop(coro)
 
 
 def _remember_fact(tool_input: Dict[str, Any]) -> Dict[str, Any]:
