@@ -1895,6 +1895,56 @@ Returns count of inserted rows.""",
         }
     },
     {
+        "name": "update_data_batch",
+        "description": """Update multiple records in a single operation. MUCH more efficient than individual execute_sql_write calls!
+
+⚠️ ALWAYS USE THIS for bulk updates instead of calling execute_sql_write multiple times!
+
+WORKFLOW:
+1. First, query to get the IDs you need (use query_database or search_* tools)
+2. Build the updates array with id + fields to update
+3. Call this tool ONCE with all updates
+4. Requires user_confirmed=true (ask user to confirm once for all updates)
+
+Example - Update 5 applications:
+{
+  "table_name": "applications",
+  "updates": [
+    {"id": "uuid-1", "status": "Applied", "notes": "Submitted today"},
+    {"id": "uuid-2", "status": "Rejected", "notes": "Age cutoff"},
+    {"id": "uuid-3", "status": "To Apply", "eligibility_notes": "Eligible!"}
+  ],
+  "user_confirmed": true
+}
+
+WRITABLE TABLES: contacts, meetings, tasks, journals, reflections, applications, linkedin_posts, books, highlights""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Target table name"
+                },
+                "updates": {
+                    "type": "array",
+                    "description": "Array of update objects. Each MUST have 'id' plus fields to update.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "Record UUID (required)"}
+                        },
+                        "required": ["id"]
+                    }
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "Set false first to preview, then true after user confirms ALL updates"
+                }
+            },
+            "required": ["table_name", "updates", "user_confirmed"]
+        }
+    },
+    {
         "name": "get_database_backup_status",
         "description": """Check the database backup status and recent backups.
 
@@ -2099,6 +2149,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _add_column_to_table(tool_input)
         elif tool_name == "insert_data_batch":
             return _insert_data_batch(tool_input)
+        elif tool_name == "update_data_batch":
+            return _update_data_batch(tool_input)
         elif tool_name == "get_database_backup_status":
             return _get_database_backup_status(tool_input)
         elif tool_name == "backup_table":
@@ -2354,6 +2406,12 @@ def _query_database(sql: str) -> Dict[str, Any]:
     Note: Full SQL execution is not available. This tool parses simple SELECT queries
     and converts them to Supabase table queries. For complex queries, use the
     specific tools like search_contacts, get_tasks, search_meetings, etc.
+    
+    SUPPORTED:
+    - SELECT * FROM table LIMIT n
+    - SELECT cols FROM table WHERE col = 'value' LIMIT n
+    - SELECT * FROM table WHERE col LIKE '%value%' OR col ILIKE '%value%' LIMIT n
+    - SELECT * FROM table WHERE col IN ('val1', 'val2') LIMIT n
     """
     import re
     
@@ -2369,9 +2427,6 @@ def _query_database(sql: str) -> Dict[str, Any]:
             return {"error": f"Query contains forbidden keyword: {keyword}"}
     
     try:
-        # Parse simple queries like: SELECT * FROM table_name LIMIT n
-        # or: SELECT columns FROM table_name WHERE condition LIMIT n
-        
         # Extract table name
         from_match = re.search(r'FROM\s+(\w+)', sql, re.IGNORECASE)
         if not from_match:
@@ -2392,7 +2447,7 @@ def _query_database(sql: str) -> Dict[str, Any]:
         if table_name.lower() not in allowed_tables:
             return {"error": f"Table '{table_name}' is not accessible. Allowed: {', '.join(allowed_tables)}"}
         
-        # Extract columns (simplified - just use *)
+        # Extract columns
         select_match = re.search(r'SELECT\s+(.+?)\s+FROM', sql, re.IGNORECASE)
         columns = "*"
         if select_match:
@@ -2405,34 +2460,112 @@ def _query_database(sql: str) -> Dict[str, Any]:
         limit = int(limit_match.group(1)) if limit_match else 20
         limit = min(limit, 100)  # Cap at 100
         
-        # Execute query
-        query = supabase.table(table_name).select(columns).limit(limit)
+        # Start building query
+        query = supabase.table(table_name).select(columns)
         
-        # Try to parse simple WHERE clauses
-        where_match = re.search(r'WHERE\s+(.+?)(?:ORDER|LIMIT|$)', sql, re.IGNORECASE)
+        # Parse WHERE clause
+        where_match = re.search(r'WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|$)', sql, re.IGNORECASE | re.DOTALL)
         if where_match:
-            # For now, just note that WHERE was requested but not fully supported
-            logger.info(f"WHERE clause detected but not fully parsed: {where_match.group(1)}")
+            where_clause = where_match.group(1).strip()
+            
+            # Handle OR conditions (use Supabase .or_())
+            or_parts = re.split(r'\s+OR\s+', where_clause, flags=re.IGNORECASE)
+            
+            if len(or_parts) > 1:
+                # Multiple OR conditions - build Supabase filter string
+                filter_parts = []
+                for part in or_parts:
+                    parsed = _parse_where_condition(part.strip())
+                    if parsed:
+                        filter_parts.append(parsed)
+                
+                if filter_parts:
+                    query = query.or_(",".join(filter_parts))
+            else:
+                # Single condition or AND conditions
+                and_parts = re.split(r'\s+AND\s+', where_clause, flags=re.IGNORECASE)
+                
+                for part in and_parts:
+                    parsed = _parse_where_condition(part.strip())
+                    if parsed:
+                        col, op, val = _extract_condition_parts(part.strip())
+                        if col and val is not None:
+                            if op == "eq":
+                                query = query.eq(col, val)
+                            elif op == "ilike":
+                                query = query.ilike(col, val)
+                            elif op == "like":
+                                query = query.like(col, val)
+                            elif op == "in":
+                                query = query.in_(col, val)
         
         # Order by created_at desc by default for most tables
-        if table_name.lower() in ["meetings", "tasks", "journals", "reflections", "emails", "beeper_messages"]:
+        if table_name.lower() in ["meetings", "tasks", "journals", "reflections", "emails", "beeper_messages", "applications"]:
             query = query.order("created_at", desc=True)
         
-        result = query.execute()
+        result = query.limit(limit).execute()
         
         return {
             "data": result.data[:limit] if result.data else [],
             "count": len(result.data) if result.data else 0,
             "table": table_name,
-            "note": "For complex queries, use specific tools like search_contacts, get_tasks, search_meetings, etc."
+            "query_info": f"Queried {table_name} with limit {limit}"
         }
         
     except Exception as e:
         logger.error(f"Query execution error: {e}")
         return {
             "error": f"Query failed: {str(e)[:200]}",
-            "hint": "Try using specific tools: search_contacts, get_tasks, search_meetings, get_journals, get_beeper_inbox, etc."
+            "hint": "Try using specific tools: search_contacts, get_tasks, search_meetings, get_applications, get_journals, etc.",
+            "suggestion": "For better results, use search_applications with a query string instead of raw SQL"
         }
+
+
+def _parse_where_condition(condition: str) -> Optional[str]:
+    """Parse a single WHERE condition into Supabase filter format."""
+    import re
+    
+    # Handle ILIKE: col ILIKE '%value%'
+    ilike_match = re.search(r"(\w+)\s+ILIKE\s+'([^']+)'", condition, re.IGNORECASE)
+    if ilike_match:
+        col, val = ilike_match.groups()
+        return f"{col}.ilike.{val}"
+    
+    # Handle LIKE: col LIKE '%value%'
+    like_match = re.search(r"(\w+)\s+LIKE\s+'([^']+)'", condition, re.IGNORECASE)
+    if like_match:
+        col, val = like_match.groups()
+        return f"{col}.like.{val}"
+    
+    # Handle equals: col = 'value'
+    eq_match = re.search(r"(\w+)\s*=\s*'([^']+)'", condition)
+    if eq_match:
+        col, val = eq_match.groups()
+        return f"{col}.eq.{val}"
+    
+    return None
+
+
+def _extract_condition_parts(condition: str) -> tuple:
+    """Extract column, operator, and value from a condition."""
+    import re
+    
+    # Handle ILIKE
+    ilike_match = re.search(r"(\w+)\s+ILIKE\s+'([^']+)'", condition, re.IGNORECASE)
+    if ilike_match:
+        return (ilike_match.group(1), "ilike", ilike_match.group(2))
+    
+    # Handle LIKE
+    like_match = re.search(r"(\w+)\s+LIKE\s+'([^']+)'", condition, re.IGNORECASE)
+    if like_match:
+        return (like_match.group(1), "like", like_match.group(2))
+    
+    # Handle equals
+    eq_match = re.search(r"(\w+)\s*=\s*'([^']+)'", condition)
+    if eq_match:
+        return (eq_match.group(1), "eq", eq_match.group(2))
+    
+    return (None, None, None)
 
 
 def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
@@ -5916,6 +6049,117 @@ def _add_column_to_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 "workaround": "Add the column manually in Supabase dashboard: Table Editor → Select table → Add Column"
             }
         logger.error(f"Failed to add column: {e}")
+        return {"error": str(e)}
+
+
+def _update_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Update multiple records in a single operation."""
+    from datetime import datetime, timezone
+    
+    try:
+        table_name = tool_input.get("table_name", "").strip()
+        updates = tool_input.get("updates", [])
+        user_confirmed = tool_input.get("user_confirmed", False)
+        
+        if not table_name:
+            return {"error": "table_name is required"}
+        
+        if not updates:
+            return {"error": "updates array is required and must not be empty"}
+        
+        if len(updates) > 100:
+            return {"error": f"Maximum 100 updates per batch (got {len(updates)}). Split into multiple calls."}
+        
+        # Validate all updates have IDs
+        for i, update in enumerate(updates):
+            if not update.get("id"):
+                return {"error": f"Update #{i+1} missing required 'id' field"}
+        
+        # Tables that can be modified
+        writable_tables = [
+            "contacts", "meetings", "tasks", "journals", "reflections",
+            "applications", "linkedin_posts", "books", "highlights"
+        ]
+        
+        if table_name not in writable_tables:
+            return {
+                "error": f"Table '{table_name}' is not writable",
+                "allowed_tables": writable_tables
+            }
+        
+        # REQUIRE CONFIRMATION
+        if not user_confirmed:
+            # Generate preview
+            preview = []
+            for update in updates[:10]:  # Show first 10
+                record_id = update.get("id")
+                fields = {k: v for k, v in update.items() if k != "id"}
+                preview.append({
+                    "id": record_id[:8] + "...",  # Truncate UUID for readability
+                    "fields_to_update": list(fields.keys()),
+                    "sample_values": {k: str(v)[:50] for k, v in list(fields.items())[:3]}
+                })
+            
+            return {
+                "status": "confirmation_required",
+                "table": table_name,
+                "total_updates": len(updates),
+                "preview": preview,
+                "message": f"⚠️ This will UPDATE {len(updates)} records in '{table_name}'. Please confirm you want to proceed.",
+                "instructions": "Ask the user to confirm ALL updates, then call update_data_batch again with user_confirmed=true"
+            }
+        
+        # Execute all updates
+        sync_managed_tables = ["applications", "meetings", "tasks", "journals", 
+                               "reflections", "contacts", "linkedin_posts"]
+        
+        results = []
+        errors = []
+        
+        for update in updates:
+            record_id = update.get("id")
+            fields = {k: v for k, v in update.items() if k != "id"}
+            
+            # Always update timestamp
+            fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Mark for sync
+            if table_name in sync_managed_tables:
+                fields["last_sync_source"] = "supabase"
+            
+            try:
+                result = supabase.table(table_name).update(fields).eq("id", record_id).select().execute()
+                
+                if result.data and len(result.data) > 0:
+                    results.append({
+                        "id": record_id,
+                        "status": "updated",
+                        "fields": list(fields.keys())
+                    })
+                else:
+                    errors.append({
+                        "id": record_id,
+                        "error": "No matching record found"
+                    })
+            except Exception as e:
+                errors.append({
+                    "id": record_id,
+                    "error": str(e)
+                })
+        
+        return {
+            "status": "success" if not errors else "partial_success",
+            "table": table_name,
+            "updated_count": len(results),
+            "failed_count": len(errors),
+            "results": results[:20],  # Limit output size
+            "errors": errors[:10] if errors else None,
+            "message": f"✅ Updated {len(results)}/{len(updates)} records in '{table_name}'" + 
+                       (f" ({len(errors)} failed)" if errors else "")
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to batch update: {e}")
         return {"error": str(e)}
 
 
