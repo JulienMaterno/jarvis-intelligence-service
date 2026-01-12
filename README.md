@@ -13,19 +13,48 @@ This service is the **single source of intelligence**. Other services are specia
 
 ## 🌟 Features
 
+### Core Capabilities
 - **Multi-Output Analysis**: Extract meetings, journals, reflections, and tasks from a single transcript
 - **Smart Reflection Routing**: Automatically appends to existing topics via `topic_key` matching
 - **Language Translation**: Transcripts in German/Turkish → English output
 - **Contact Linking**: Auto-matches mentioned people to CRM contacts
 - **Telegram Notifications**: Sends processing results to user
-- **Evening Journal Prompts**: Generates personalized prompts with day context
-- **Meeting Briefings**: Auto-generates context before meetings (contact history, past meetings, emails)
+
+### Conversational AI (Chat)
+- **Natural Language Interface**: Ask questions, create records, search data
+- **40+ Built-in Tools**: Database queries, task management, calendar, messaging
+- **Prompt Caching**: 90% cost savings on repeated web chat requests
+- **Memory System**: Mem0 integration for long-term context
+- **Behavior Learning**: `remember_behavior` tool to teach new patterns
+
+### Research Tools (Paid APIs)
+- **LinkedIn Research**: Profile lookup, people search, company info (Bright Data)
+- **Web Search**: General and news search (Brave Search API)
+- **Batch Support**: Process multiple LinkedIn URLs efficiently
+
+### Productivity Features
+- **Evening Journal Prompts**: Personalized prompts with ActivityWatch data
+- **Meeting Briefings**: Auto-generates context before meetings
 - **Task Extraction**: Creates actionable tasks from any analyzed content
+- **Email Drafts**: Create, list, send Gmail drafts
+- **Calendar Management**: Create, update, reschedule events
+
+### Messaging Integration
+- **Unified Inbox**: WhatsApp, LinkedIn, Telegram, Slack via Beeper
+- **Send Messages**: With user confirmation workflow
+- **Chat History**: Search and retrieve message history
 
 ## 🧠 AI Models
 
-- **Primary**: `claude-sonnet-4-5-20250929` (Anthropic)
-- **Fallback**: `claude-haiku-4-5-20251001`
+| Purpose | Model | Cost/1M Tokens |
+|---------|-------|----------------|
+| **Chat (Haiku)** | `claude-haiku-4-5-20251001` | $0.80 in / $4.00 out |
+| **Analysis (Sonnet)** | `claude-sonnet-4-5-20250929` | $3.00 in / $15.00 out |
+
+### Prompt Caching (Web Chat)
+- **First message**: Writes ~19K tokens to cache (25% premium)
+- **Follow-up messages**: Reads from cache at **90% discount**
+- **Cache TTL**: 5 minutes (ephemeral)
 
 ## 📁 Project Structure
 
@@ -38,11 +67,12 @@ jarvis-intelligence-service/
 │   │   ├── models.py          # Pydantic models
 │   │   └── routes/
 │   │       ├── transcripts.py # /process, /analyze
+│   │       ├── chat.py        # /chat, /chat/completions (OpenAI-compatible)
 │   │       ├── journaling.py  # /journal/evening-prompt
 │   │       ├── contacts.py    # Contact CRUD + linking
 │   │       ├── emails.py      # Email processing
 │   │       ├── calendar.py    # Calendar integration
-│   │       ├── briefing.py    # Meeting briefings (scheduled + on-demand)
+│   │       ├── briefing.py    # Meeting briefings
 │   │       └── health.py      # Health check endpoints
 │   │
 │   ├── services/
@@ -50,13 +80,21 @@ jarvis-intelligence-service/
 │   │   ├── database.py        # SupabaseMultiDatabase
 │   │   └── sync_trigger.py    # Triggers sync service
 │   │
-│   ├── features/              # Modular feature modules
+│   ├── features/
 │   │   ├── analysis/
 │   │   │   └── prompts.py     # Centralized LLM prompts
 │   │   ├── briefing/
-│   │   │   └── meeting_briefing.py  # Pre-meeting context generation
-│   │   ├── journaling/
-│   │   │   └── evening_prompts.py   # Evening journal prompt logic
+│   │   │   └── meeting_briefing.py
+│   │   ├── chat/
+│   │   │   ├── service.py     # ChatService with streaming
+│   │   │   ├── tools.py       # 40+ tool implementations
+│   │   │   └── storage.py     # Chat history persistence
+│   │   ├── memory/
+│   │   │   └── service.py     # Mem0 integration
+│   │   ├── research/
+│   │   │   ├── service.py     # Unified research service
+│   │   │   ├── tools.py       # LinkedIn + web search tools
+│   │   │   └── providers/     # LinkedIn (Bright Data), Web (Brave)
 │   │   └── telegram/
 │   │       └── notifications.py
 │   │
@@ -83,12 +121,21 @@ uvicorn main:app --reload --port 8000
 
 **Environment Variables:**
 ```ini
+# Required
 ANTHROPIC_API_KEY=sk-ant-...
 SUPABASE_URL=https://...
 SUPABASE_KEY=eyJ...
 TELEGRAM_BOT_URL=https://jarvis-telegram-bot-...
 SYNC_SERVICE_URL=https://jarvis-sync-service-...
 DEFAULT_TELEGRAM_CHAT_ID=123456789
+
+# Optional - Research Tools
+BRIGHTDATA_API_KEY=...        # LinkedIn research (Bright Data)
+BRAVE_API_KEY=...             # Web search (Brave Search API)
+BEEPER_BRIDGE_URL=https://... # Beeper messaging bridge
+
+# Optional - Memory
+MEM0_API_KEY=...              # Mem0 cloud (or use local pgvector)
 ```
 
 ### Deployment (Automated via GitHub)
@@ -97,6 +144,7 @@ DEFAULT_TELEGRAM_CHAT_ID=123456789
 
 - **Cloud Build Trigger**: `jarvis-intelligence-service-deploy`
 - **Branch**: `^master$`
+- **Region**: `asia-southeast1`
 - **Build Config**: `cloudbuild.yaml`
 - **Secrets**: Google Secret Manager (injected at runtime)
 
@@ -158,8 +206,22 @@ git add -A && git commit -m "Your changes" && git push origin master
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/chat` | POST | Send chat message to AI |
+| `/api/v1/chat` | POST | Send chat message (non-streaming) |
+| `/api/v1/chat/stream` | POST | Send chat message (streaming SSE) |
 | `/api/v1/chat/usage` | GET | Get chat usage statistics |
+| `/api/v1/chat/conversations` | GET | List all conversations |
+| `/api/v1/chat/conversations/{id}` | GET | Get conversation history |
+| `/api/v1/chat/conversations` | DELETE | Clear all conversations |
+| `/api/v1/chat/conversations/{id}` | DELETE | Delete specific conversation |
+
+### Research Tools (via Chat)
+
+Available as Claude tools during chat conversations:
+- `search_web` - Search the web via Brave Search API
+- `get_linkedin_person_profile` - Full LinkedIn profile lookup
+- `get_linkedin_company_profile` - Company information
+- `search_linkedin_people` - Find people by criteria
+- `get_recent_linkedin_posts` - Get recent posts by LinkedIn URL
 
 ### Beeper (Unified Messaging)
 
