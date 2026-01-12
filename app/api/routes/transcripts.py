@@ -124,6 +124,7 @@ async def process_transcript(
     try:
         # Extract person context if provided
         person_context = None
+        user_notes = None
         if request and request.person_context:
             person_context = {
                 "confirmed_person_name": request.person_context.confirmed_person_name,
@@ -132,7 +133,13 @@ async def process_transcript(
                 "previous_meetings_summary": request.person_context.previous_meetings_summary,
             }
             logger.info(f"Processing transcript {transcript_id} with person context: {person_context.get('confirmed_person_name')}")
-        else:
+        
+        # Extract user notes if provided (from /note command during meeting)
+        if request and request.user_notes:
+            user_notes = request.user_notes
+            logger.info(f"Processing transcript {transcript_id} with {len(user_notes)} user note(s)")
+        
+        if not person_context and not user_notes:
             logger.info("Processing stored transcript %s", transcript_id)
 
         transcript_record = db.get_transcript(transcript_id)
@@ -160,6 +167,15 @@ async def process_transcript(
         transcript_text = transcript_record.get("full_text", "")
         filename = transcript_record.get("source_file", "unknown")
         recording_date = None  # Delegate date inference to analyzer when absent
+
+        # Prepend user notes to transcript if provided (critical context from the user)
+        if user_notes:
+            notes_header = "USER NOTES (added by the user during the meeting - treat as authoritative context):\n"
+            for i, note in enumerate(user_notes, 1):
+                notes_header += f"  Note {i}: {note}\n"
+            notes_header += "\nTRANSCRIPT:\n"
+            transcript_text = notes_header + transcript_text
+            logger.info(f"Prepended {len(user_notes)} user note(s) to transcript")
 
         existing_topics = db.get_existing_reflection_topics()
         

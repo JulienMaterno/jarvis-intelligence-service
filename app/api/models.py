@@ -18,6 +18,7 @@ class PersonContext(BaseModel):
 class ProcessTranscriptRequest(BaseModel):
     """Request body for /process/{transcript_id} endpoint."""
     person_context: Optional[PersonContext] = None  # Context about meeting participant
+    user_notes: Optional[List[str]] = None  # Notes added by user during meeting via /note command
 
 class TranscriptProcessRequest(BaseModel):
     transcript_id: str
