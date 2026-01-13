@@ -180,7 +180,10 @@ def build_activity_context(data: ActivityData) -> str:
             email_lines.append(f"- {subject} (from: {sender})")
         sections.append(f"MEANINGFUL EMAILS ({len(data.emails)}):\n" + "\n".join(email_lines))
     
-    # Book Highlights - NEW!
+    # Book Highlights - Show what was actually read TODAY
+    # NOTE: We intentionally EXCLUDE "finished books" and "currently reading" here
+    # because that data is static (same books appear every day until finished).
+    # Highlights are the actual reading activity that happened TODAY.
     if data.highlights:
         highlight_lines = []
         for h in data.highlights[:8]:
@@ -197,43 +200,11 @@ def build_activity_context(data: ActivityData) -> str:
                     highlight_lines.append(f"  Your note: {note[:100]}")
         
         if highlight_lines:
-            sections.append(f"BOOK HIGHLIGHTS ({len(data.highlights)}):\n" + "\n".join(highlight_lines))
+            sections.append(f"BOOK HIGHLIGHTS FROM TODAY ({len(data.highlights)}):\n" + "\n".join(highlight_lines))
     
-    # Reading Progress - NEW!
-    if data.reading:
-        reading_lines = []
-        
-        currently_reading = data.reading.get("currently_reading", [])
-        if currently_reading:
-            for book in currently_reading[:3]:
-                title = book.get("title", "Unknown")
-                progress = book.get("progress_percent", 0)
-                author = book.get("author", "")
-                line = f"- Currently reading: {title}"
-                if author:
-                    line += f" by {author}"
-                line += f" ({progress}% complete)"
-                reading_lines.append(line)
-        
-        # Only books finished TODAY (not last 7 days)
-        finished_today = data.reading.get("finished_today", [])
-        if finished_today:
-            for book in finished_today[:2]:
-                title = book.get("title", "Unknown")
-                rating = book.get("rating")
-                line = f"- Finished today: {title}"
-                if rating:
-                    line += f" (rated {rating}/5)"
-                reading_lines.append(line)
-        
-        started_today = data.reading.get("started_today", [])
-        if started_today:
-            for book in started_today[:2]:
-                title = book.get("title", "Unknown")
-                reading_lines.append(f"- Started new book: {title}")
-        
-        if reading_lines:
-            sections.append("READING ACTIVITY:\n" + "\n".join(reading_lines))
+    # NOTE: We intentionally SKIP data.reading (currently_reading, finished_today)
+    # This data is static and causes the AI to repeat "finished X book" every day.
+    # If there are no highlights, it means no reading activity happened TODAY.
     
     # Screen Time
     if data.screen_time:
@@ -418,13 +389,8 @@ def format_telegram_message(
         if book_highlights:
             stats.append(f"📚 {book_highlights} highlights")
         
-        # Include reading progress inline
-        if reading:
-            currently_reading = reading.get("currently_reading", [])
-            for book in currently_reading[:1]:  # Just one book
-                progress = book.get('progress_percent', 0)
-                if progress > 0:
-                    stats.append(f"📖 {book.get('title', 'Reading')}: {progress}%")
+        # NOTE: Removed "currently reading" progress - it's static and repetitive
+        # Only highlights (actual reading TODAY) are shown above
         
         if stats:
             lines.append("**Your Day:** " + " • ".join(stats))

@@ -44,27 +44,26 @@ def build_multi_analysis_prompt(
         }
     
     # Scale summary length based on transcript length
+    # IMPORTANT: Keep summaries as CLEAN PROSE, not bullet-heavy
     word_count = transcript_stats.get("word_count", len(transcript.split()))
     if word_count > 15000:
-        summary_guidance = "12-20 sentences (this is a LONG recording - be comprehensive)"
-        content_guidance = "Capture 80-90% of substance - this is a long recording that deserves detailed documentation"
+        summary_guidance = "2-3 paragraphs of flowing prose. Cover main themes comprehensively but AVOID bullet points in summary."
+        content_guidance = "Capture key substance in CLEAN PROSE. Use topics_discussed for details, NOT the summary."
     elif word_count > 8000:
-        summary_guidance = "8-12 sentences (medium-length recording)"
-        content_guidance = "Capture 75-85% of substance"
+        summary_guidance = "2 paragraphs of flowing prose. Focus on what was discussed and decided."
+        content_guidance = "Capture main points in clean prose. Details go in topics_discussed."
     elif word_count > 3000:
-        summary_guidance = "5-8 sentences"
-        content_guidance = "Capture 70-80% of substance"
+        summary_guidance = "1 paragraph (5-8 sentences). Clean prose, no bullets."
+        content_guidance = "Be concise. Specific details go in topics_discussed array."
     elif word_count < 50:
-        # Very short - likely a quick task/reminder
-        summary_guidance = "1-2 sentences MAXIMUM (this is a VERY SHORT recording - likely a quick reminder)"
-        content_guidance = "Focus primarily on TASK EXTRACTION - short recordings are often quick reminders or notes-to-self"
+        summary_guidance = "1-2 sentences MAX. This is a quick note."
+        content_guidance = "Focus on TASK EXTRACTION - short recordings are quick reminders."
     elif word_count < 150:
-        # Short recording
-        summary_guidance = "2-3 sentences (short recording - be concise)"
-        content_guidance = "Capture the core intent - prioritize task extraction for short notes"
+        summary_guidance = "2-3 sentences. Keep it brief."
+        content_guidance = "Capture core intent. Prioritize task extraction."
     else:
-        summary_guidance = "3-5 sentences"
-        content_guidance = "Capture 60-70% of substance"
+        summary_guidance = "1 paragraph (3-5 sentences). Clean prose."
+        content_guidance = "Be concise and clear."
     
     # Build existing reflections context with IDs for AI-driven routing
     if existing_topics:
@@ -276,17 +275,17 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
   
   "meetings": [
     {{
-      "title": "Brief descriptive title - e.g., 'Coffee Chat with [Person Name]' (max 60 chars, IN ENGLISH)",
+      "title": "Meeting with [Person Name] (max 50 chars, IN ENGLISH, clean and simple)",
       "date": "{recording_date}",
-      "location": "Location if mentioned, otherwise null",
+      "location": "Online",
       "person_name": "Name of THE OTHER PERSON Aaron met with (NOT Aaron)",
-      "summary": "Comprehensive summary ({summary_guidance}, IN ENGLISH) - {content_guidance}",
+      "summary": "Clean paragraph summary ({summary_guidance}, IN ENGLISH). NO bullet points here - just flowing prose that captures the conversation essence.",
       "topics_discussed": [
-        {{"topic": "Topic name", "details": ["Point 1", "Point 2", "Point 3"]}}
+        {{"topic": "Topic Name (concise, 3-6 words)", "details": ["Key point 1 - one sentence max", "Key point 2", "Key point 3"]}}
       ],
       "people_mentioned": ["Other names mentioned in conversation"],
       "follow_up_conversation": [
-        {{"topic": "Thing to ask next time", "context": "Why it matters", "date_if_known": null}}
+        {{"topic": "Thing to discuss next time (brief)", "context": "One sentence context"}}
       ]
     }}
   ],

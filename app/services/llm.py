@@ -257,14 +257,22 @@ class ClaudeMultiAnalyzer:
     def _invoke_model(self, prompt: str, model_name: str) -> str:
         """Send the prompt to Claude and return raw text output."""
         
-        # Scale max_tokens based on prompt size (longer input needs longer output)
+        # Scale max_tokens based on prompt size
+        # 16K tokens for very long transcripts (90+ min meetings)
+        # But keep it short for quick notes to save cost and ensure concise output
         prompt_length = len(prompt)
-        if prompt_length > 100000:
-            max_tokens = 8000  # Very long transcript needs comprehensive output
+        if prompt_length > 150000:
+            max_tokens = 16000  # Very long transcript (90+ min) - need comprehensive output
+        elif prompt_length > 100000:
+            max_tokens = 12000  # Long transcript (60-90 min)
         elif prompt_length > 50000:
-            max_tokens = 6000
+            max_tokens = 8000   # Medium transcript (30-60 min)
+        elif prompt_length > 20000:
+            max_tokens = 6000   # Shorter transcript (10-30 min)
+        elif prompt_length > 5000:
+            max_tokens = 4000   # Brief meeting/note
         else:
-            max_tokens = 4000
+            max_tokens = 2000   # Very short note - keep response concise
 
         response = self.client.messages.create(
             model=model_name,
@@ -292,13 +300,21 @@ class ClaudeMultiAnalyzer:
         Uses the async Anthropic client for non-blocking API calls.
         """
         # Scale max_tokens based on prompt size
+        # 16K tokens for very long transcripts (90+ min meetings)
+        # But keep it short for quick notes to save cost and ensure concise output
         prompt_length = len(prompt)
-        if prompt_length > 100000:
-            max_tokens = 8000
+        if prompt_length > 150000:
+            max_tokens = 16000  # Very long transcript (90+ min) - need comprehensive output
+        elif prompt_length > 100000:
+            max_tokens = 12000  # Long transcript (60-90 min)
         elif prompt_length > 50000:
-            max_tokens = 6000
+            max_tokens = 8000   # Medium transcript (30-60 min)
+        elif prompt_length > 20000:
+            max_tokens = 6000   # Shorter transcript (10-30 min)
+        elif prompt_length > 5000:
+            max_tokens = 4000   # Brief meeting/note
         else:
-            max_tokens = 4000
+            max_tokens = 2000   # Very short note - keep response concise
 
         response = await self.async_client.messages.create(
             model=model_name,
