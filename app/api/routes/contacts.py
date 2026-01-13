@@ -2,7 +2,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 
 from app.api.dependencies import get_database
 from app.api.models import (
@@ -14,6 +15,19 @@ from app.api.models import (
 
 router = APIRouter(tags=["Contacts"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Contacts")
+
+
+class EnrichContactRequest(BaseModel):
+    """Request to enrich a contact with LinkedIn data."""
+    linkedin_url: Optional[str] = None  # Override URL if different from database
+
+
+class EnrichContactsRequest(BaseModel):
+    """Request to enrich multiple contacts."""
+    contact_ids: Optional[List[str]] = None
+    all_with_linkedin: bool = False
+    force: bool = False
+    limit: int = 10
 
 
 def _build_contact_name(first_name: Optional[str], last_name: Optional[str]) -> str:
@@ -326,4 +340,102 @@ async def get_contact_summary(contact_id: str) -> ContactSummaryResponse:
         raise
     except Exception as exc:
         logger.exception("Failed to build summary for contact %s", contact_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# LinkedIn Enrichment Endpoints
+# =============================================================================
+
+@router.post("/contacts/{contact_id}/enrich-linkedin")
+async def enrich_contact_linkedin(contact_id: str, request: EnrichContactRequest = None):
+    """
+    Enrich a single contact with LinkedIn profile data.
+    
+    This fetches the LinkedIn profile and stores:
+    - linkedin_data: Full structured profile data (JSONB)
+    - profile_content: Human-readable summary for RAG (TEXT)
+    - profile_enriched_at: Timestamp of enrichment
+    """
+    db = get_database()
+    
+    try:
+        # Get the contact
+        contact = db.client.table("contacts").select("*").eq("id", contact_id).single().execute()
+        if not contact.data:
+            raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
+        
+        # Get LinkedIn URL
+        linkedin_url = (request.linkedin_url if request else None) or contact.data.get("linkedin_url")
+        if not linkedin_url:
+            raise HTTPException(status_code=400, detail="Contact has no LinkedIn URL and none provided")
+        
+        name = f"{contact.data.get('first_name', '')} {contact.data.get('last_name', '')}".strip()
+        logger.info(f"Enriching contact {name} with LinkedIn: {linkedin_url}")
+        
+        # Import enrichment functions
+        from enrich_contacts import enrich_contact as do_enrich, get_linkedin_provider, format_profile_content
+        
+        # Get LinkedIn provider
+        provider = await get_linkedin_provider()
+        if not provider:
+            raise HTTPException(status_code=503, detail="LinkedIn provider not configured (missing BRIGHTDATA_API_KEY)")
+        
+        # Enrich the contact
+        result = await do_enrich(contact.data, provider, db.client)
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
+        
+        return {
+            "status": "success",
+            "contact_id": contact_id,
+            "name": name,
+            "headline": result.get("headline"),
+            "company": result.get("company"),
+            "profile_content_length": result.get("profile_content_length", 0)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"Failed to enrich contact {contact_id}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/contacts/enrich-batch")
+async def enrich_contacts_batch(request: EnrichContactsRequest, background_tasks: BackgroundTasks):
+    """
+    Enrich multiple contacts with LinkedIn data.
+    
+    Can be called with:
+    - contact_ids: List of specific contact IDs
+    - all_with_linkedin: True to enrich all contacts with linkedin_url
+    - force: True to re-enrich already enriched contacts
+    - limit: Max number to process (default 10)
+    
+    Returns immediately and runs enrichment in background.
+    """
+    try:
+        # Import enrichment function
+        from enrich_contacts import enrich_contacts as do_batch_enrich
+        
+        async def run_enrichment():
+            result = await do_batch_enrich(
+                contact_ids=request.contact_ids,
+                all_with_linkedin=request.all_with_linkedin,
+                force=request.force,
+                limit=request.limit
+            )
+            logger.info(f"Batch enrichment complete: {result}")
+        
+        background_tasks.add_task(run_enrichment)
+        
+        return {
+            "status": "started",
+            "message": f"Enrichment started in background (limit: {request.limit})"
+        }
+        
+    except Exception as exc:
+        logger.exception("Failed to start batch enrichment")
         raise HTTPException(status_code=500, detail=str(exc))
