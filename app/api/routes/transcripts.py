@@ -185,9 +185,13 @@ async def process_transcript(
         
         # Fetch recent calendar events to help identify meeting participants
         # This helps correct misheard names (e.g., "Hoy" -> "Hieu" if calendar shows meeting with Hieu)
-        recent_calendar_events = db.get_recent_calendar_events(hours_back=3)
-        if recent_calendar_events:
-            logger.info(f"Found {len(recent_calendar_events)} recent calendar events for context")
+        try:
+            recent_calendar_events = db.get_recent_calendar_events(hours_back=3)
+            if recent_calendar_events:
+                logger.info(f"Found {len(recent_calendar_events)} recent calendar events for context")
+        except Exception as e:
+            logger.warning(f"Could not fetch calendar events (method may not be deployed): {e}")
+            recent_calendar_events = []
         
         # Use async analyzer for non-blocking LLM call
         analysis = await analyzer.analyze_transcript_async(
