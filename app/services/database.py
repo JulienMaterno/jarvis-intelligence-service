@@ -9,6 +9,16 @@ from app.core.database import supabase
 
 logger = logging.getLogger('Jarvis.Intelligence.Database')
 
+
+def get_database():
+    """
+    Get a Supabase database instance.
+    
+    Returns the singleton SupabaseMultiDatabase instance for database operations.
+    """
+    return SupabaseMultiDatabase()
+
+
 class SupabaseMultiDatabase:
     """Handle operations across multiple Supabase tables."""
     
