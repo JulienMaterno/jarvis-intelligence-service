@@ -1446,6 +1446,8 @@ class SupabaseMultiDatabase:
         helping AI correct misheard names (e.g., "Hoy" -> "Hieu" if there was
         a meeting with Hieu on the calendar).
         
+        Version: 2026-01-13-fix
+        
         Returns: List of dicts with event summary and attendee names/emails
         """
         from datetime import datetime, timedelta, timezone
