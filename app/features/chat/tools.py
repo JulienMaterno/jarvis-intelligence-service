@@ -2093,7 +2093,7 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
         elif tool_name == "query_database":
             return _query_database(tool_input.get("sql", ""))
         elif tool_name == "query_knowledge":
-            return await _query_knowledge(
+            return _query_knowledge(
                 tool_input.get("query", ""),
                 tool_input.get("content_types"),
                 tool_input.get("limit", 10)
@@ -2663,22 +2663,32 @@ def _extract_condition_parts(condition: str) -> tuple:
     return (None, None, None)
 
 
-async def _query_knowledge(
+def _query_knowledge(
     query: str,
     content_types: Optional[List[str]] = None,
     limit: int = 10
 ) -> Dict[str, Any]:
     """Search the knowledge base using semantic search."""
     try:
+        import asyncio
         from app.features.knowledge import semantic_search
         from app.core.database import supabase
         
-        results = await semantic_search(
-            query=query,
-            db=supabase,
-            source_types=content_types,
-            limit=limit
-        )
+        # Run async function in sync context
+        try:
+            loop = asyncio.get_running_loop()
+            # We're inside an async context, need to use a different approach
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                results = pool.submit(
+                    asyncio.run,
+                    semantic_search(query=query, db=supabase, source_types=content_types, limit=limit)
+                ).result()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            results = asyncio.run(
+                semantic_search(query=query, db=supabase, source_types=content_types, limit=limit)
+            )
         
         if not results:
             return {

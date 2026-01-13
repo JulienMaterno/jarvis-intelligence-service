@@ -173,6 +173,19 @@ class LinkedInProvider(BaseProvider):
                         scraper_id=scraper_id,
                         input_count=len(inputs)
                     )
+                elif response.status_code == 202:
+                    # Async mode - BrightData returns snapshot_id for polling
+                    data = response.json()
+                    snapshot_id = data.get("snapshot_id")
+                    logger.info(f"BrightData returned async mode, snapshot_id: {snapshot_id}")
+                    
+                    if snapshot_id:
+                        # Poll for results with exponential backoff
+                        return await self._poll_snapshot(snapshot_id, max_attempts=12, initial_delay=5)
+                    else:
+                        return ProviderResult.failure(
+                            f"BrightData returned 202 but no snapshot_id: {data}"
+                        )
                 elif response.status_code == 429:
                     return ProviderResult(
                         status=ProviderStatus.RATE_LIMITED,
@@ -193,6 +206,89 @@ class LinkedInProvider(BaseProvider):
         except Exception as e:
             logger.error(f"LinkedIn scrape exception: {e}")
             raise
+    
+    async def _poll_snapshot(
+        self,
+        snapshot_id: str,
+        max_attempts: int = 12,
+        initial_delay: float = 5.0
+    ) -> ProviderResult:
+        """
+        Poll for snapshot results with exponential backoff.
+        
+        Args:
+            snapshot_id: BrightData snapshot ID
+            max_attempts: Maximum polling attempts (default 12 = ~5 min total)
+            initial_delay: Initial delay between polls in seconds
+        
+        Returns:
+            ProviderResult with data when ready, or failure after timeout
+        """
+        delay = initial_delay
+        
+        for attempt in range(max_attempts):
+            logger.info(f"Polling snapshot {snapshot_id} (attempt {attempt + 1}/{max_attempts})")
+            
+            try:
+                async with self._create_client() as client:
+                    response = await client.get(
+                        f"{BRIGHTDATA_BASE_URL}/snapshot/{snapshot_id}",
+                        params={"format": "json"}
+                    )
+                    
+                    if response.status_code == 200:
+                        # Snapshot ready - parse results
+                        text = response.text.strip()
+                        try:
+                            data = response.json()
+                        except Exception:
+                            # Fall back to NDJSON
+                            import json
+                            data = []
+                            for line in text.split('\n'):
+                                line = line.strip()
+                                if line:
+                                    try:
+                                        data.append(json.loads(line))
+                                    except json.JSONDecodeError:
+                                        continue
+                        
+                        logger.info(f"Snapshot {snapshot_id} ready, got {len(data) if isinstance(data, list) else 1} results")
+                        return ProviderResult.success(
+                            data=data,
+                            snapshot_id=snapshot_id
+                        )
+                    
+                    elif response.status_code == 202:
+                        # Still processing - wait and retry
+                        status_data = response.json()
+                        status = status_data.get("status", "running")
+                        logger.info(f"Snapshot {snapshot_id} status: {status}, waiting {delay}s...")
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 1.5, 30)  # Exponential backoff, max 30s
+                        continue
+                    
+                    elif response.status_code == 404:
+                        return ProviderResult.failure(
+                            f"Snapshot {snapshot_id} not found"
+                        )
+                    
+                    else:
+                        logger.warning(f"Snapshot poll error: {response.status_code} - {response.text[:200]}")
+                        return ProviderResult.failure(
+                            f"Snapshot poll error: {response.status_code}"
+                        )
+                        
+            except Exception as e:
+                logger.error(f"Snapshot poll exception: {e}")
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.5, 30)
+                continue
+        
+        # Max attempts reached
+        return ProviderResult.failure(
+            f"Snapshot {snapshot_id} timed out after {max_attempts} attempts"
+        )
     
     async def _trigger_async(
         self,
