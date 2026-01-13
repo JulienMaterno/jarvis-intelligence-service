@@ -16,6 +16,7 @@ def build_multi_analysis_prompt(
     transcript_stats: Dict = None,
     known_contacts: List[Dict[str, str]] = None,
     person_context: Dict = None,
+    calendar_context: List[Dict] = None,
 ) -> str:
     """
     Build the main analysis prompt for Claude.
@@ -161,8 +162,39 @@ Based on Aaron's calendar, this appears to be a meeting with: **{confirmed_name}
 - Note any follow-up items from previous discussions
 """
 
+    # Build calendar context for name correction (if no explicit person_context)
+    calendar_context_section = ""
+    if calendar_context and not (person_context and person_context.get("confirmed_person_name")):
+        # Only show calendar context if we don't already have confirmed person
+        event_lines = []
+        for event in calendar_context[:5]:  # Top 5 recent events
+            summary = event.get("summary", "")
+            attendees = event.get("attendee_names", [])
+            if attendees:
+                attendee_str = ", ".join(attendees[:3])
+                event_lines.append(f'  - "{summary}" with {attendee_str}')
+            elif summary:
+                event_lines.append(f'  - "{summary}"')
+        
+        if event_lines:
+            calendar_context_section = f"""
+**📅 RECENT CALENDAR EVENTS (for name correction):**
+Aaron had these events in the last few hours. If the transcript mentions names that SOUND SIMILAR 
+to people in these events, the calendar name is likely correct (speech recognition often mishears names).
+
+{chr(10).join(event_lines)}
+
+EXAMPLE CORRECTIONS:
+- If calendar shows "meeting with Hieu" and transcript says "Hoy" or "Hugh" → Use "Hieu"
+- If calendar shows "coffee with Alinta" and transcript says "a Linta" → Use "Alinta"
+- But if a name is clearly different from calendar attendees, it might be someone else discussed
+
+**CRITICAL:** Cross-reference the calendar to identify who Aaron actually MET WITH vs who they DISCUSSED.
+"""
+
     return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
 {person_context_section}
+{calendar_context_section}
 **⚠️ CRITICAL: TRANSCRIPTION ERROR CORRECTION**
 The transcript was created by automatic speech recognition which often makes mistakes. You must INTELLIGENTLY CORRECT errors using context:
 {contacts_context}

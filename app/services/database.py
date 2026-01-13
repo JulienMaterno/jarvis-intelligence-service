@@ -1437,3 +1437,64 @@ class SupabaseMultiDatabase:
         except Exception as e:
             logger.error(f"Error fetching contacts for transcription: {e}")
             return []
+
+    def get_recent_calendar_events(self, hours_back: int = 3) -> List[Dict]:
+        """
+        Get recent calendar events to help identify who user was meeting.
+        
+        This is used to cross-reference voice memo timing with calendar events,
+        helping AI correct misheard names (e.g., "Hoy" -> "Hieu" if there was
+        a meeting with Hieu on the calendar).
+        
+        Returns: List of dicts with event summary and attendee names/emails
+        """
+        from datetime import datetime, timedelta, timezone
+        
+        try:
+            now = datetime.now(timezone.utc)
+            window_start = (now - timedelta(hours=hours_back)).isoformat()
+            window_end = now.isoformat()
+            
+            result = self.client.table("calendar_events").select(
+                "id, summary, start_time, end_time, attendees"
+            ).gte(
+                "start_time", window_start
+            ).lte(
+                "end_time", window_end
+            ).order(
+                "start_time", desc=True
+            ).limit(10).execute()
+            
+            events = []
+            for e in result.data or []:
+                attendee_names = []
+                for attendee in e.get("attendees", []) or []:
+                    # Skip self (the user's email)
+                    if attendee.get("self"):
+                        continue
+                    
+                    email = attendee.get("email", "")
+                    # Extract name from email if displayName not available
+                    name = attendee.get("displayName")
+                    if not name and email:
+                        # "hieu.tran@domain.com" -> "Hieu Tran"
+                        local_part = email.split("@")[0]
+                        name_parts = local_part.replace(".", " ").replace("_", " ").split()
+                        name = " ".join(p.capitalize() for p in name_parts)
+                    
+                    if name:
+                        attendee_names.append(name)
+                
+                events.append({
+                    "summary": e.get("summary", ""),
+                    "start_time": e.get("start_time", ""),
+                    "attendee_names": attendee_names,
+                })
+            
+            if events:
+                logger.info(f"Found {len(events)} recent calendar events for context")
+            return events
+            
+        except Exception as e:
+            logger.error(f"Error fetching recent calendar events: {e}")
+            return []

@@ -183,6 +183,12 @@ async def process_transcript(
         known_contacts = db.get_contacts_for_transcription(limit=200)
         logger.info(f"Fetched {len(known_contacts)} contacts for transcription correction")
         
+        # Fetch recent calendar events to help identify meeting participants
+        # This helps correct misheard names (e.g., "Hoy" -> "Hieu" if calendar shows meeting with Hieu)
+        recent_calendar_events = db.get_recent_calendar_events(hours_back=3)
+        if recent_calendar_events:
+            logger.info(f"Found {len(recent_calendar_events)} recent calendar events for context")
+        
         # Use async analyzer for non-blocking LLM call
         analysis = await analyzer.analyze_transcript_async(
             transcript=transcript_text,
@@ -191,6 +197,7 @@ async def process_transcript(
             existing_topics=existing_topics,
             known_contacts=known_contacts,
             person_context=person_context,  # Pass person context to analyzer
+            calendar_context=recent_calendar_events,  # Pass calendar events for name correction
         )
 
         db_records = {
