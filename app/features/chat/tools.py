@@ -198,6 +198,56 @@ IMPORTANT: Only SELECT queries allowed. Use specific tools when available.""",
         }
     },
     {
+        "name": "query_knowledge",
+        "description": """Search the knowledge base using semantic (AI-powered) search.
+        
+This tool searches across ALL of Aaron's data using vector embeddings:
+- Emails (body text)
+- LinkedIn posts (content)
+- Beeper messages (WhatsApp, LinkedIn, etc.)
+- Transcripts (meeting notes, voice memos)
+- Applications (grants, fellowships)
+- Documents (notes, files)
+- And more...
+
+USE THIS WHEN:
+- User asks "what do I know about X"
+- Looking for information across multiple sources
+- Finding past conversations, emails, or notes about a topic
+- Semantic/meaning-based search (not just keyword matching)
+
+COMPARED TO query_database:
+- query_database = SQL for structured queries (exact filters, counts, dates)
+- query_knowledge = Semantic search for finding relevant content by meaning
+
+RETURNS: Top matching content chunks with source type, text, and relevance score.
+
+EXAMPLE QUERIES:
+- "conversations about funding" → finds emails, messages, meeting notes about funding
+- "what did I discuss with John" → finds all content mentioning John
+- "longevity research ideas" → finds notes, posts, reflections about longevity""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language search query"
+                },
+                "content_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional filter by type: emails, linkedin_posts, beeper_messages, transcripts, applications, documents, contacts, meetings, journals, reflections"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (default: 10)",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
         "name": "search_contacts",
         "description": "Search for contacts by name, company, or any field. Returns matching contacts with their details.",
         "input_schema": {
@@ -2042,6 +2092,12 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _execute_sql_write(tool_input)
         elif tool_name == "query_database":
             return _query_database(tool_input.get("sql", ""))
+        elif tool_name == "query_knowledge":
+            return await _query_knowledge(
+                tool_input.get("query", ""),
+                tool_input.get("content_types"),
+                tool_input.get("limit", 10)
+            )
         elif tool_name == "search_contacts":
             return _search_contacts(tool_input.get("query", ""), tool_input.get("limit", 5))
         elif tool_name == "get_contact_history":
@@ -2605,6 +2661,59 @@ def _extract_condition_parts(condition: str) -> tuple:
         return (eq_match.group(1), "eq", eq_match.group(2))
     
     return (None, None, None)
+
+
+async def _query_knowledge(
+    query: str,
+    content_types: Optional[List[str]] = None,
+    limit: int = 10
+) -> Dict[str, Any]:
+    """Search the knowledge base using semantic search."""
+    try:
+        from app.features.knowledge import semantic_search
+        from app.core.database import supabase
+        
+        results = await semantic_search(
+            query=query,
+            db=supabase,
+            source_types=content_types,
+            limit=limit
+        )
+        
+        if not results:
+            return {
+                "status": "success",
+                "query": query,
+                "count": 0,
+                "results": [],
+                "note": "No matching content found. Try different keywords or check if content has been indexed."
+            }
+        
+        # Format results for tool output
+        formatted_results = []
+        for r in results:
+            formatted_results.append({
+                "source_type": r.get("source_type", "unknown"),
+                "text": r.get("content", "")[:500],  # Truncate for readability
+                "score": round(r.get("similarity", 0), 3),
+                "source_id": r.get("source_id"),
+                "metadata": r.get("metadata", {})
+            })
+        
+        return {
+            "status": "success",
+            "query": query,
+            "count": len(formatted_results),
+            "results": formatted_results
+        }
+        
+    except Exception as e:
+        logger.error(f"Knowledge query error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "hint": "Knowledge base may not be indexed yet. Run RAG indexing first."
+        }
 
 
 def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:

@@ -19,6 +19,8 @@ from app.features.knowledge.chunker import (
     chunk_linkedin_post,
     chunk_book,
     chunk_highlight,
+    chunk_email,
+    chunk_beeper_message,
 )
 
 logger = logging.getLogger("Jarvis.Knowledge.Indexer")
@@ -560,6 +562,204 @@ async def index_reflection(reflection_id: str, db, force: bool = False) -> int:
     )
 
 
+async def index_email(email_id: str, db, force: bool = False) -> int:
+    """
+    Index an email.
+    
+    Emails contain valuable knowledge about communications and decisions.
+    """
+    if not force:
+        existing = db.client.table("knowledge_chunks").select("id").eq(
+            "source_id", email_id
+        ).eq("source_type", "email").limit(1).execute()
+        if existing.data:
+            return 0
+    
+    result = db.client.table("emails").select("*").eq("id", email_id).execute()
+    if not result.data:
+        return 0
+    
+    email = result.data[0]
+    chunk = chunk_email(email)
+    
+    # Skip emails with no meaningful content
+    if len(chunk["content"]) < 50:
+        return 0
+    
+    try:
+        embedding = await get_embedding(chunk["content"])
+        db.client.table("knowledge_chunks").insert({
+            "source_type": "email",
+            "source_id": email_id,
+            "chunk_index": 0,
+            "content": chunk["content"],
+            "content_hash": chunk.get("content_hash"),
+            "embedding": embedding,
+            "metadata": chunk.get("metadata", {})
+        }).execute()
+        return 1
+    except Exception as e:
+        logger.error(f"Failed to index email: {e}")
+        return 0
+
+
+async def index_book(book_id: str, db, force: bool = False) -> int:
+    """Index a book record."""
+    if not force:
+        existing = db.client.table("knowledge_chunks").select("id").eq(
+            "source_id", book_id
+        ).eq("source_type", "book").limit(1).execute()
+        if existing.data:
+            return 0
+    
+    result = db.client.table("books").select("*").eq("id", book_id).execute()
+    if not result.data:
+        return 0
+    
+    book = result.data[0]
+    chunk = chunk_book(book)
+    
+    try:
+        embedding = await get_embedding(chunk["content"])
+        db.client.table("knowledge_chunks").insert({
+            "source_type": "book",
+            "source_id": book_id,
+            "chunk_index": 0,
+            "content": chunk["content"],
+            "content_hash": chunk.get("content_hash"),
+            "embedding": embedding,
+            "metadata": chunk.get("metadata", {})
+        }).execute()
+        return 1
+    except Exception as e:
+        logger.error(f"Failed to index book: {e}")
+        return 0
+
+
+async def index_highlight(highlight_id: str, db, force: bool = False) -> int:
+    """Index a book highlight."""
+    if not force:
+        existing = db.client.table("knowledge_chunks").select("id").eq(
+            "source_id", highlight_id
+        ).eq("source_type", "highlight").limit(1).execute()
+        if existing.data:
+            return 0
+    
+    result = db.client.table("highlights").select("*, books(title)").eq("id", highlight_id).execute()
+    if not result.data:
+        return 0
+    
+    highlight = result.data[0]
+    book_title = highlight.get("books", {}).get("title") if highlight.get("books") else None
+    chunk = chunk_highlight(highlight, book_title)
+    
+    # Skip very short highlights
+    if len(chunk["content"]) < 30:
+        return 0
+    
+    try:
+        embedding = await get_embedding(chunk["content"])
+        db.client.table("knowledge_chunks").insert({
+            "source_type": "highlight",
+            "source_id": highlight_id,
+            "chunk_index": 0,
+            "content": chunk["content"],
+            "content_hash": chunk.get("content_hash"),
+            "embedding": embedding,
+            "metadata": chunk.get("metadata", {})
+        }).execute()
+        return 1
+    except Exception as e:
+        logger.error(f"Failed to index highlight: {e}")
+        return 0
+
+
+async def index_linkedin_post(post_id: str, db, force: bool = False) -> int:
+    """Index a LinkedIn post."""
+    if not force:
+        existing = db.client.table("knowledge_chunks").select("id").eq(
+            "source_id", post_id
+        ).eq("source_type", "linkedin_post").limit(1).execute()
+        if existing.data:
+            return 0
+    
+    result = db.client.table("linkedin_posts").select("*").eq("id", post_id).execute()
+    if not result.data:
+        return 0
+    
+    post = result.data[0]
+    chunk = chunk_linkedin_post(post)
+    
+    try:
+        embedding = await get_embedding(chunk["content"])
+        db.client.table("knowledge_chunks").insert({
+            "source_type": "linkedin_post",
+            "source_id": post_id,
+            "chunk_index": 0,
+            "content": chunk["content"],
+            "content_hash": chunk.get("content_hash"),
+            "embedding": embedding,
+            "metadata": chunk.get("metadata", {})
+        }).execute()
+        return 1
+    except Exception as e:
+        logger.error(f"Failed to index linkedin post: {e}")
+        return 0
+
+
+async def index_beeper_message(message_id: str, db, force: bool = False) -> int:
+    """
+    Index a Beeper chat message.
+    
+    Messages from WhatsApp, LinkedIn, Slack contain valuable relationship context.
+    Groups messages by conversation for better semantic retrieval.
+    """
+    if not force:
+        existing = db.client.table("knowledge_chunks").select("id").eq(
+            "source_id", message_id
+        ).eq("source_type", "beeper_message").limit(1).execute()
+        if existing.data:
+            return 0
+    
+    result = db.client.table("beeper_messages").select("*").eq("id", message_id).execute()
+    if not result.data:
+        return 0
+    
+    message = result.data[0]
+    
+    # Skip very short messages (reactions, "ok", etc.)
+    content = message.get("content", "")
+    if len(content) < 10:
+        return 0
+    
+    # Get chat info for context
+    chat_name = message.get("sender_name", "Unknown")
+    platform = message.get("platform", "chat")
+    
+    chunk = chunk_beeper_message(message, chat_name=chat_name, platform=platform)
+    
+    try:
+        embedding = await get_embedding(chunk["content"])
+        db.client.table("knowledge_chunks").insert({
+            "source_type": "beeper_message",
+            "source_id": message_id,
+            "chunk_index": 0,
+            "content": chunk["content"],
+            "content_hash": chunk.get("content_hash"),
+            "embedding": embedding,
+            "metadata": {
+                **chunk.get("metadata", {}),
+                "platform": platform,
+                "sender_name": message.get("sender_name"),
+                "beeper_chat_id": message.get("beeper_chat_id")
+            }
+        }).execute()
+        return 1
+    except Exception as e:
+        logger.error(f"Failed to index beeper message: {e}")
+        return 0
+
+
 # Table name mapping for reindex_all
 TABLE_NAME_MAP = {
     "transcript": "transcripts",
@@ -574,6 +774,8 @@ TABLE_NAME_MAP = {
     "linkedin_post": "linkedin_posts",
     "book": "books",
     "highlight": "highlights",
+    "email": "emails",
+    "beeper_message": "beeper_messages",
 }
 
 # Indexing function mapping
@@ -586,6 +788,11 @@ INDEX_FUNCTION_MAP = {
     "calendar": lambda id, db: index_calendar_event(id, db, force=True),
     "application": lambda id, db: index_application(id, db, force=True),
     "document": lambda id, db: index_document(id, db, force=True),
+    "email": lambda id, db: index_email(id, db, force=True),
+    "book": lambda id, db: index_book(id, db, force=True),
+    "highlight": lambda id, db: index_highlight(id, db, force=True),
+    "linkedin_post": lambda id, db: index_linkedin_post(id, db, force=True),
+    "beeper_message": lambda id, db: index_beeper_message(id, db, force=True),
 }
 
 
@@ -611,10 +818,12 @@ async def reindex_all(
         from app.services.database import SupabaseMultiDatabase
         db = SupabaseMultiDatabase()
     
-    # Default to all main content types
+    # Default to main content types for daily RAG indexing
+    # Note: books/highlights excluded (not useful), beeper_messages included
     source_types = source_types or [
         "transcript", "meeting", "journal", "reflection", 
-        "contact", "calendar", "application", "document"
+        "contact", "calendar", "application", "document",
+        "email", "linkedin_post", "beeper_message"
     ]
     
     results = {}

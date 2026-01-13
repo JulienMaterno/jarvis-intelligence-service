@@ -618,3 +618,97 @@ def chunk_highlight(highlight: Dict[str, Any], book_title: str = None) -> Dict[s
             "chapter": highlight.get("chapter")
         }
     }
+
+
+def chunk_email(email: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Format an email as a single chunk.
+    
+    Emails contain valuable knowledge about communications, decisions, 
+    and context from conversations.
+    """
+    lines = []
+    
+    # Subject is the most important
+    subject = email.get("subject", "No Subject")
+    lines.append(f"Email: {subject}")
+    
+    # Sender/recipient context
+    if email.get("sender"):
+        lines.append(f"From: {email['sender']}")
+    
+    if email.get("recipient"):
+        lines.append(f"To: {email['recipient']}")
+    
+    if email.get("date"):
+        lines.append(f"Date: {email['date']}")
+    
+    # Body content - this is where the knowledge is
+    if email.get("body_preview"):
+        lines.append(f"\n{email['body_preview']}")
+    elif email.get("snippet"):
+        lines.append(f"\n{email['snippet']}")
+    
+    # Labels can provide context (e.g., "Important", "Work")
+    if email.get("labels"):
+        labels = email["labels"]
+        if isinstance(labels, list):
+            lines.append(f"Labels: {', '.join(labels)}")
+    
+    content = "\n".join(lines)
+    
+    return {
+        "content": content,
+        "content_hash": content_hash(content),
+        "chunk_index": 0,
+        "metadata": {
+            "subject": subject,
+            "sender": email.get("sender"),
+            "recipient": email.get("recipient"),
+            "date": email.get("date"),
+            "thread_id": email.get("thread_id"),
+            "contact_id": email.get("contact_id")  # If linked to a contact
+        }
+    }
+
+
+def chunk_beeper_message(message: Dict[str, Any], chat_name: str = None, platform: str = None) -> Dict[str, Any]:
+    """
+    Format a Beeper/chat message as a single chunk.
+    
+    Messages from WhatsApp, LinkedIn, etc. contain valuable relationship context.
+    """
+    lines = []
+    
+    # Platform and chat context
+    if platform:
+        lines.append(f"[{platform.upper()}]")
+    
+    if chat_name:
+        lines.append(f"Chat: {chat_name}")
+    
+    # Direction
+    direction = "Sent" if message.get("is_outgoing") else "Received"
+    lines.append(f"Direction: {direction}")
+    
+    if message.get("timestamp"):
+        lines.append(f"Time: {message['timestamp']}")
+    
+    # The actual message content
+    if message.get("content"):
+        lines.append(f"\n{message['content']}")
+    
+    content = "\n".join(lines)
+    
+    return {
+        "content": content,
+        "content_hash": content_hash(content),
+        "chunk_index": 0,
+        "metadata": {
+            "platform": platform,
+            "chat_name": chat_name,
+            "is_outgoing": message.get("is_outgoing"),
+            "timestamp": message.get("timestamp"),
+            "contact_id": message.get("contact_id")
+        }
+    }
