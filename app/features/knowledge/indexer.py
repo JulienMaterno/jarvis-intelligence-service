@@ -244,11 +244,25 @@ async def index_meeting(meeting_id: str, db, force: bool = False) -> int:
     if meeting.get("topics_discussed"):
         topics = meeting["topics_discussed"]
         if isinstance(topics, list):
-            content_parts.append(f"Topics: {', '.join(topics)}")
+            # Handle both string and dict formats
+            topic_strs = []
+            for t in topics:
+                if isinstance(t, dict):
+                    topic_strs.append(t.get("topic", str(t)))
+                else:
+                    topic_strs.append(str(t))
+            content_parts.append(f"Topics: {', '.join(topic_strs)}")
     if meeting.get("action_items"):
         items = meeting["action_items"]
         if isinstance(items, list):
-            content_parts.append(f"Action Items: {'; '.join(items)}")
+            # Handle both string and dict formats
+            item_strs = []
+            for item in items:
+                if isinstance(item, dict):
+                    item_strs.append(item.get("item", item.get("text", str(item))))
+                else:
+                    item_strs.append(str(item))
+            content_parts.append(f"Action Items: {'; '.join(item_strs)}")
     
     content = "\n".join(content_parts)
     
@@ -594,8 +608,8 @@ async def reindex_all(
         Dict mapping source_type to {indexed: N, errors: N}
     """
     if db is None:
-        from app.services.database import get_database
-        db = get_database()
+        from app.services.database import SupabaseMultiDatabase
+        db = SupabaseMultiDatabase()
     
     # Default to all main content types
     source_types = source_types or [

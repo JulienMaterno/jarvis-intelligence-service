@@ -37,7 +37,7 @@ class KnowledgeService:
         Initialize the knowledge service.
         
         Args:
-            db: Optional database client. If not provided, will get from services.
+            db: Optional database client. If not provided, will create one.
         """
         self._db = db
         self._initialized = False
@@ -46,8 +46,8 @@ class KnowledgeService:
     def db(self):
         """Lazy-load database client."""
         if self._db is None:
-            from app.services.database import get_database
-            self._db = get_database()
+            from app.services.database import SupabaseMultiDatabase
+            self._db = SupabaseMultiDatabase()
         return self._db
     
     # ==================== SEARCH METHODS ====================
