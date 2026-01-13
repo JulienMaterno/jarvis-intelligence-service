@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
@@ -14,6 +15,10 @@ from app.features.telegram import (
 router = APIRouter(tags=["Transcripts"])
 logger = logging.getLogger("Jarvis.Intelligence.API.Transcripts")
 
+# Default Telegram user/chat ID for clarifications
+TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0"))
+TELEGRAM_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0")) or TELEGRAM_CHAT_ID
+
 
 async def _seed_memory_from_analysis(analysis: dict, source_file: str) -> None:
     """Extract and store memories from transcript analysis."""
@@ -23,6 +28,62 @@ async def _seed_memory_from_analysis(analysis: dict, source_file: str) -> None:
         logger.info("Seeded memories from transcript analysis")
     except Exception as e:
         logger.warning(f"Failed to seed memories: {e}")
+
+
+async def _handle_clarifications_needed(
+    analysis: dict,
+    db_records: dict,
+    transcript_id: str,
+    db
+) -> None:
+    """
+    Handle clarifications needed from the analysis.
+    
+    This:
+    1. Checks if we can resolve from existing DB
+    2. Asks user via Telegram if not
+    3. Stores answers for future reference
+    """
+    clarifications = analysis.get("clarifications_needed", [])
+    if not clarifications:
+        return
+    
+    try:
+        from app.features.clarification.service import handle_clarifications
+        
+        # Determine which record to associate clarifications with
+        record_type = None
+        record_id = None
+        
+        if db_records.get("meeting_ids"):
+            record_type = "meeting"
+            record_id = db_records["meeting_ids"][0]
+        elif db_records.get("reflection_ids"):
+            record_type = "reflection"
+            record_id = db_records["reflection_ids"][0]
+        elif db_records.get("journal_ids"):
+            record_type = "journal"
+            record_id = db_records["journal_ids"][0]
+        
+        result = await handle_clarifications(
+            clarifications=clarifications,
+            record_type=record_type,
+            record_id=record_id,
+            transcript_id=transcript_id,
+            db=db,
+            user_id=TELEGRAM_USER_ID,
+            chat_id=TELEGRAM_CHAT_ID,
+        )
+        
+        logger.info(
+            "Clarification results - Resolved: %d, Pending: %d, Failed: %d",
+            len(result.get("resolved", [])),
+            len(result.get("pending", [])),
+            len(result.get("failed", []))
+        )
+        
+    except Exception as e:
+        logger.error("Failed to handle clarifications: %s", e, exc_info=True)
 
 
 async def _send_processing_notification(db_records: dict, analysis: dict, transcript_text: str = None) -> None:
@@ -360,6 +421,16 @@ async def process_transcript(
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis, transcript_text)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, filename)
+        
+        # Handle clarifications (ask user via Telegram if AI has questions)
+        if analysis.get("clarifications_needed"):
+            background_tasks.add_task(
+                _handle_clarifications_needed,
+                analysis,
+                db_records,
+                transcript_id,
+                db
+            )
         
         # Send meeting feedback for EACH meeting (even if created with journal)
         if db_records["meeting_ids"]:

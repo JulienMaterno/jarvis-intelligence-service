@@ -313,7 +313,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
       "person_name": "Name of THE OTHER PERSON Aaron met with (NOT Aaron)",
       "summary": "Clean paragraph summary ({summary_guidance}, IN ENGLISH). NO bullet points here - just flowing prose that captures the conversation essence.",
       "topics_discussed": [
-        {{"topic": "Topic Name (concise, 3-6 words)", "details": ["Key point 1 - one sentence max", "Key point 2", "Key point 3"]}}
+        {{"topic": "Topic Name (concise, 3-6 words)", "details": ["Use 1-7 key points as needed - not always 3! Match complexity of topic"]}}
       ],
       "people_mentioned": ["Other names mentioned in conversation"],
       "follow_up_conversation": [
@@ -411,6 +411,10 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Create ONE meeting entry for the conversation
    - person_name should be THE OTHER PERSON (not Aaron/the user)
    - Use topics_discussed array to capture different subjects covered
+   - Each topic should have 1-7 detail points - NOT always 3!
+     * Simple topic mentioned briefly → 1-2 details
+     * Complex topic with deep discussion → 5-7 details
+     * Match the depth of the actual conversation
    - Use follow_up_conversation for things to discuss NEXT TIME
 
 5. **JOURNALS** - Create a journal if the recording is about the day:

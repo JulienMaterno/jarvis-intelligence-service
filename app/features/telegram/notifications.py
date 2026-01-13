@@ -91,6 +91,63 @@ async def send_telegram_message(
     return False
 
 
+async def send_clarification_question(
+    clarification_id: str,
+    user_id: int,
+    chat_id: int,
+    item: str,
+    question: str
+) -> bool:
+    """
+    Send a clarification question to the user via Telegram.
+    
+    This uses the /set_pending_clarification endpoint which:
+    1. Sends the question message
+    2. Sets the bot to expect the user's reply as an answer
+    
+    Args:
+        clarification_id: UUID of the pending clarification
+        user_id: Telegram user ID
+        chat_id: Telegram chat ID
+        item: What the question is about (e.g., "Contact: John")
+        question: The actual question to ask
+    
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    if not TELEGRAM_BOT_URL:
+        logger.warning("TELEGRAM_BOT_URL not configured, cannot send clarification")
+        return False
+    
+    url = f"{TELEGRAM_BOT_URL.rstrip('/')}/set_pending_clarification"
+    
+    # Build headers with API key if configured
+    headers = {}
+    if INTERNAL_API_KEY:
+        headers["X-API-Key"] = INTERNAL_API_KEY
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json={
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "clarification_id": clarification_id,
+                "item": item,
+                "question": question
+            }, headers=headers)
+            
+            if response.status_code == 200:
+                logger.info(f"Clarification question sent to user {user_id}: {item}")
+                return True
+            else:
+                logger.error(f"Failed to send clarification: {response.status_code} - {response.text}")
+                return False
+                
+    except Exception as e:
+        logger.error(f"Error sending clarification question: {e}")
+        return False
+
+
 def build_processing_result_message(
     category: str,
     db_records: Dict[str, Any],
