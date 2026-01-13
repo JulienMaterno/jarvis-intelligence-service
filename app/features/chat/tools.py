@@ -15,6 +15,56 @@ logger = logging.getLogger("Jarvis.Chat.Tools")
 
 
 # =============================================================================
+# SERVICE-TO-SERVICE AUTHENTICATION
+# Identity tokens for Cloud Run service-to-service calls
+# =============================================================================
+
+def _get_identity_token(audience: str) -> Optional[str]:
+    """
+    Get Google Cloud identity token for service-to-service authentication.
+    
+    In Cloud Run, this uses the metadata server to get a token.
+    Locally, returns None (calls will fail with 403 on protected endpoints).
+    
+    Args:
+        audience: The URL of the service to authenticate to (e.g., sync service URL)
+    
+    Returns:
+        Identity token string, or None if not running in Cloud Run
+    """
+    import requests
+    try:
+        # Try Cloud Run metadata server (works in Cloud Run)
+        metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+        response = requests.get(
+            metadata_url,
+            params={"audience": audience},
+            headers={"Metadata-Flavor": "Google"},
+            timeout=2
+        )
+        if response.status_code == 200:
+            logger.debug("Got identity token from metadata server")
+            return response.text
+    except requests.exceptions.RequestException:
+        logger.debug("Metadata server not available (not running in Cloud Run)")
+    
+    # Try google-auth library as fallback (for local dev with Application Default Credentials)
+    try:
+        import google.auth.transport.requests
+        import google.oauth2.id_token
+        
+        auth_request = google.auth.transport.requests.Request()
+        token = google.oauth2.id_token.fetch_id_token(auth_request, audience)
+        logger.debug("Got identity token from google-auth library")
+        return token
+    except Exception as e:
+        logger.debug(f"Could not get identity token from google-auth: {e}")
+    
+    logger.warning(f"Could not obtain identity token for {audience} - requests may fail with 403")
+    return None
+
+
+# =============================================================================
 # RESEARCH TOOLS (LinkedIn, Web Search)
 # Lazy import to avoid circular dependencies
 # =============================================================================
@@ -4204,11 +4254,18 @@ def _create_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
     
     sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
     
+    # Get identity token for service-to-service auth
+    identity_token = _get_identity_token(sync_service_url)
+    headers = {"Content-Type": "application/json"}
+    if identity_token:
+        headers["Authorization"] = f"Bearer {identity_token}"
+    
     try:
         # Call the sync service to create the event
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 f"{sync_service_url}/calendar/create",
+                headers=headers,
                 json={
                     "summary": title,
                     "start_time": start_time,
@@ -4266,6 +4323,12 @@ def _update_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
     
     sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
     
+    # Get identity token for service-to-service auth
+    identity_token = _get_identity_token(sync_service_url)
+    headers = {"Content-Type": "application/json"}
+    if identity_token:
+        headers["Authorization"] = f"Bearer {identity_token}"
+    
     try:
         payload = {"event_id": event_id, "send_updates": send_updates}
         if title:
@@ -4282,6 +4345,7 @@ def _update_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 f"{sync_service_url}/calendar/update",
+                headers=headers,
                 json=payload
             )
             
@@ -4336,6 +4400,12 @@ def _decline_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
     
     sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
     
+    # Get identity token for service-to-service auth
+    identity_token = _get_identity_token(sync_service_url)
+    headers = {"Content-Type": "application/json"}
+    if identity_token:
+        headers["Authorization"] = f"Bearer {identity_token}"
+    
     try:
         payload = {"event_id": event_id}
         if comment:
@@ -4344,6 +4414,7 @@ def _decline_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 f"{sync_service_url}/calendar/decline",
+                headers=headers,
                 json=payload
             )
             
