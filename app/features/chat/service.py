@@ -216,7 +216,7 @@ When using query_database, search_*, or any database tool:
 5. **When unsure, re-query** - If the result seems incomplete, query again rather than guessing
 
 Example CORRECT behavior:
-- Tool returns: documents = [{"title": "CV Aaron Putting"}, {"title": "Good Food"}]
+- Tool returns: documents = [{{"title": "CV Aaron Putting"}}, {{"title": "Good Food"}}]
 - You say: "Found 2 documents: CV Aaron Putting, Good Food"
 
 Example WRONG behavior (NEVER do this):
