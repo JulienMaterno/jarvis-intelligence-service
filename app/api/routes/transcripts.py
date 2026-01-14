@@ -268,9 +268,10 @@ async def process_transcript(
                 "confirmed_person_name": request.person_context.confirmed_person_name,
                 "person_confirmed": request.person_context.person_confirmed,
                 "contact_id": request.person_context.contact_id,
+                "person_email": request.person_context.person_email,  # Email from calendar
                 "previous_meetings_summary": request.person_context.previous_meetings_summary,
             }
-            logger.info(f"Processing transcript {transcript_id} with person context: {person_context.get('confirmed_person_name')}")
+            logger.info(f"Processing transcript {transcript_id} with person context: {person_context.get('confirmed_person_name')} <{person_context.get('person_email', 'no email')}>")
         
         # Extract user notes if provided (from /note command during meeting)
         if request and request.user_notes:
@@ -399,12 +400,16 @@ async def process_transcript(
                     logger.info("Created %s tasks from journal tomorrow_focus", len(task_ids))
 
         for meeting in analysis.get("meetings", []):
+            # Get person_email from person_context for enhanced contact matching
+            person_email = person_context.get("person_email") if person_context else None
+            
             m_id, _, contact_match_info = db.create_meeting(
                 meeting_data=meeting,
                 transcript=transcript_text,
                 duration=transcript_record.get("audio_duration_seconds", 0),
                 filename=filename,
                 transcript_id=transcript_id,
+                person_email=person_email,  # Pass email for contact matching
             )
             db_records["meeting_ids"].append(m_id)
 

@@ -260,7 +260,8 @@ class SupabaseMultiDatabase:
         duration: float,
         filename: str,
         transcript_id: str = None,
-        calendar_event_id: str = None
+        calendar_event_id: str = None,
+        person_email: str = None  # Email from calendar attendee for contact matching
     ) -> Tuple[str, str]:
         """
         Create meeting entry in Supabase.
@@ -277,18 +278,35 @@ class SupabaseMultiDatabase:
             people_mentioned = meeting_data.get('people_mentioned', [])
             key_points = meeting_data.get('key_points', [])
             
-            logger.info(f"Creating meeting: {title}")
+            logger.info(f"Creating meeting: {title} (person_email: {person_email})")
             
-            # Find contact by name with suggestions
+            # Find contact by email first (most reliable), then by name
             contact_id = None
             contact_match_info = {
                 "searched_name": person_name,
                 "matched": False,
                 "linked_contact": None,
-                "suggestions": []
+                "suggestions": [],
+                "person_email": person_email  # Store email for contact creation if needed
             }
             
-            if person_name:
+            # Try email first if provided (from calendar attendee)
+            if person_email:
+                contact = self.find_contact_by_email(person_email)
+                if contact:
+                    contact_id = contact.get('id')
+                    contact_match_info["matched"] = True
+                    contact_match_info["linked_contact"] = {
+                        "id": contact.get("id"),
+                        "name": f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip(),
+                        "company": contact.get("company"),
+                        "position": contact.get("position"),
+                        "email": contact.get("email")
+                    }
+                    logger.info(f"Linked meeting to contact by email: {person_email} ({contact_id})")
+            
+            # Fall back to name matching if no email match
+            if not contact_id and person_name:
                 contact, suggestions = self.find_contact_by_name(person_name)
                 if contact:
                     contact_id = contact.get('id')
@@ -297,9 +315,10 @@ class SupabaseMultiDatabase:
                         "id": contact.get("id"),
                         "name": f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip(),
                         "company": contact.get("company"),
-                        "position": contact.get("position")
+                        "position": contact.get("position"),
+                        "email": contact.get("email")
                     }
-                    logger.info(f"Linked meeting to contact: {person_name} ({contact_id})")
+                    logger.info(f"Linked meeting to contact by name: {person_name} ({contact_id})")
                 elif suggestions:
                     contact_match_info["suggestions"] = [
                         {

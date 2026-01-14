@@ -91,25 +91,35 @@ def build_multi_analysis_prompt(
             for topic in existing_topics[:25]
         ])
         topics_context = f"""
-**EXISTING REFLECTIONS IN DATABASE:**
-You must decide whether to APPEND to an existing reflection or CREATE a new one.
+**EXISTING REFLECTIONS IN DATABASE (HIGH-LEVEL BUCKETS):**
 {topics_lines}
 
-**🎯 AI-DRIVEN REFLECTION ROUTING (YOU DECIDE):**
-You have full control over whether content is appended or created new. Consider:
+**🎯 CRITICAL: PREFER APPENDING TO EXISTING BUCKETS!**
+These reflections are HIGH-LEVEL life themes, NOT individual diary entries. 
+Aaron wants to build up comprehensive reflections over time, not scatter them.
 
-1. **USER EXPLICIT INSTRUCTIONS** (HIGHEST PRIORITY):
-   - If user says "create new reflection", "new entry", "start fresh", "don't append" → CREATE NEW
-   - If user says "add to [title]", "continue [topic]", "append to" → APPEND to that specific one
-   - If user mentions a specific number (e.g., "Exploring Out Loud #4") → CREATE NEW with that number
+**STRONG PREFERENCE: APPEND unless user explicitly says "create new"**
+
+**ROUTING DECISION (in order of priority):**
+
+1. **USER EXPLICIT INSTRUCTIONS** (only if clearly stated):
+   - "create new reflection", "new entry", "start fresh" → CREATE NEW
+   - "add to [title]", "continue [topic]", "append to" → APPEND
+   - Numbered series (e.g., "Exploring Out Loud #4") → CREATE NEW with that number
    
-2. **SEMANTIC SIMILARITY** (if no explicit instruction):
-   - Does this content genuinely continue an existing reflection's theme?
-   - Would combining make sense, or would it dilute the existing content?
-   - Is this a new numbered installment (e.g., #4 when #3 exists) → CREATE NEW
+2. **MATCH BY TOPIC_KEY THEME** (DEFAULT - be generous with matching!):
+   - Gym, workout, exercise, running, diet, nutrition → `health-sport-nutrition`
+   - Vietnamese food, customs, local observations, markets → `vietnam-cultural-observations`  
+   - Career moves, job hunting, VC meetings, business → `career-development`
+   - Singapore planning, SE Asia relocation → `singapore-relocation`
+   - Relationships, dating, personal connections → `relationships`
+   - Jarvis system, AI assistant, automation → `project-jarvis`
    
-3. **TO APPEND**: Set `append_to_id` to the existing reflection's ID
-4. **TO CREATE NEW**: Set `append_to_id` to null and provide a new topic_key
+3. **TO APPEND (PREFERRED)**: Set `append_to_id` to the existing reflection's ID
+4. **TO CREATE NEW (RARE)**: Only if genuinely new high-level topic not covered above
+
+**IMPORTANT:** A reflection titled "Health, Sport & Nutrition Journey" should get ALL fitness/diet content.
+Do NOT create "Gym Session Today" - append to the existing health bucket instead!
 """
     else:
         topics_context = """
@@ -506,29 +516,29 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Keep names and proper nouns in original form
    - Preserve meaning and nuance while translating
 
-10. **🚀 PROACTIVE OUTREACH (USE SPARINGLY):**
-    You can proactively message Aaron via Telegram. Only do this when genuinely valuable.
+10. **🚀 PROACTIVE OUTREACH (RESPOND TO DIRECT REQUESTS!):**
+    You can proactively message Aaron via Telegram. Use this for DIRECT REQUESTS.
     
-    **REACH OUT ONLY IF:**
-    - Aaron explicitly asked for research/information on something
-    - There's a clear question he wants answered ("I should look into X")
-    - You notice a pattern that's actually actionable (not just an observation)
-    - There's specific follow-up that would help (not generic "support")
+    **ALWAYS REACH OUT IF:**
+    - Aaron ASKS Jarvis to DO something: "send me a workout", "give me a list", "help me with X"
+    - Aaron explicitly asked for research/information: "look up X", "find out about Y"
+    - There's a clear question he wants answered: "I should look into X"
+    - He requests suggestions, recommendations, or help
     
     **DO NOT REACH OUT FOR:**
-    - Routine meeting notes, task reminders, logistics
+    - Routine meeting notes, task reminders, logistics (unless asked)
     - Emotional content that doesn't need commentary
-    - Observations without actionable value
     - Generic "I noticed you mentioned X" without a concrete offer
     - Things Aaron is just documenting, not asking about
     
     **MESSAGE STYLE:**
+    - If asked for something (workout, list, suggestion) → PROVIDE IT directly
+    - Be specific and actionable
     - Skip warm filler words - get to the point
-    - Be specific about what you can do
-    - Keep it 1-2 sentences max
-    - Only offer research if you'll actually do it
+    - If it's a request for content, include the actual content!
     
     **EXAMPLES:**
+    ✅ "You asked for a leg workout. Here's a quick one: 1) Squats 3x12, 2) Lunges 3x10 each, 3) Romanian deadlifts 3x10, 4) Calf raises 3x15"
     ✅ "You asked about relationship frameworks - want me to research attachment styles, hygiene factors, etc.?"
     ✅ "Re: the running pain - I can look up common causes of abdominal discomfort during exercise if helpful."
     ❌ "I heard you describe that experience at the fish market. It's understandable..." (adds no value)

@@ -13,6 +13,7 @@ class PersonContext(BaseModel):
     confirmed_person_name: Optional[str] = None  # Name from calendar or user confirmation
     person_confirmed: bool = False  # Whether user explicitly confirmed/corrected
     contact_id: Optional[str] = None  # Linked contact ID if known
+    person_email: Optional[str] = None  # Email from calendar attendee (for contact creation)
     previous_meetings_summary: Optional[str] = None  # Brief summary of past interactions
 
 class ProcessTranscriptRequest(BaseModel):
