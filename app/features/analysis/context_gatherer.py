@@ -352,7 +352,15 @@ Return ONLY the JSON, no explanation."""
         if memories:
             context["memories"] = memories
         
-        # 10. RAG SEARCH - Semantic search for related knowledge
+        # 10. DOCUMENTS - CV, profiles, and other reference docs
+        try:
+            documents = self._get_all_documents(limit=10)
+            if documents:
+                context["documents"] = documents
+        except Exception as e:
+            logger.debug(f"Could not fetch documents: {e}")
+        
+        # 11. RAG SEARCH - Semantic search for related knowledge
         rag_context = await self._fetch_rag_context(transcript, entities, topics)
         if rag_context:
             context["knowledge_base"] = rag_context
@@ -623,6 +631,28 @@ Return ONLY the JSON, no explanation."""
             logger.error(f"Error fetching applications: {e}")
             return []
     
+    def _get_all_documents(self, limit: int = 10) -> List[Dict]:
+        """Fetch all documents (CV, profiles, notes, etc.) for context."""
+        try:
+            result = self.db.client.table("documents").select(
+                "id, title, type, content, tags"
+            ).is_(
+                "deleted_at", "null"
+            ).order(
+                "updated_at", desc=True
+            ).limit(limit).execute()
+            
+            return [{
+                "id": d["id"],
+                "title": d.get("title"),
+                "type": d.get("type"),
+                "tags": d.get("tags", [])[:5],
+                "content_preview": d.get("content", "")[:500] if d.get("content") else None,
+            } for d in result.data or []]
+        except Exception as e:
+            logger.error(f"Error fetching documents: {e}")
+            return []
+    
     def _trim_context_to_budget(self, context: Dict) -> Dict:
         """
         Trim context to fit within the context window budget.
@@ -646,7 +676,8 @@ Return ONLY the JSON, no explanation."""
         # Trim in reverse priority order
         trim_order = [
             "relevant_emails",
-            "applications", 
+            "applications",
+            "documents",  # Documents added
             "related_reflections",
             "calendar_events",
             "recent_journals",
