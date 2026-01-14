@@ -194,6 +194,11 @@ MEDIA & CONTENT:
   - id (uuid), full_text (text), source_file, audio_duration (float)
   - language, segments (jsonb), speakers (text[]), model_used
 
+• documents: Personal documents (CV, profiles, notes)
+  - id (uuid), title, type ('cv'|'profile'|'notes'|'application')
+  - content (text - full document content), tags (text[])
+  - notion_page_id, deleted_at, created_at, updated_at
+
 • books: Reading list
   - id (uuid), title, author, status ('reading'|'completed'|'want-to-read'|'abandoned')
   - rating (1-5), current_page, total_pages, summary, notes
