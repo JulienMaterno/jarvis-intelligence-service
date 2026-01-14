@@ -221,149 +221,195 @@ Return ONLY the JSON, no explanation."""
         recording_date: str
     ) -> Dict[str, Any]:
         """
-        Fetch relevant context from all database tables.
+        Fetch relevant context from database tables - SMARTLY.
         
-        This is where the "smarts" come in - we fetch everything that could
-        be relevant based on extracted entities.
+        Only fetches what's actually needed based on:
+        - Content type (journal vs meeting vs task vs reflection)
+        - Mentioned entities (people, topics, companies)
+        - Keywords in transcript
+        
+        This keeps context small and relevant, not bloated.
         """
         if not self.db:
             logger.warning("No database connection, returning empty context")
             return {}
         
         context = {}
+        transcript_lower = transcript.lower()
         
-        # 1. CONTACTS - Fetch contacts matching mentioned names
+        # Detect content type to decide what context is needed
+        content_type = entities.get("content_type", "voice_note")
         person_names = entities.get("person_names", [])
         primary_person = entities.get("primary_person")
+        topics = entities.get("topics", [])
+        companies = entities.get("companies", [])
         
-        contacts = []
+        # Determine what context is actually needed
+        needs_contacts = bool(person_names or primary_person)
+        needs_meetings = needs_contacts or content_type == "meeting"
+        needs_reflections = bool(topics) or content_type == "reflection"
+        needs_tasks = any(kw in transcript_lower for kw in [
+            'task', 'todo', 'need to', 'should', 'must', 'reminder', 'deadline',
+            'finish', 'complete', 'start', 'begin', 'work on'
+        ])
+        needs_journals = content_type == "journal" or any(kw in transcript_lower for kw in [
+            'today', 'yesterday', 'this morning', 'tonight', 'journal', 'diary',
+            'grateful', 'mood', 'feeling'
+        ])
+        needs_calendar = any(kw in transcript_lower for kw in [
+            'meeting', 'call', 'appointment', 'schedule', 'calendar', 'event',
+            'tomorrow', 'next week', 'today'
+        ])
+        needs_applications = any(kw in transcript_lower for kw in [
+            'job', 'application', 'interview', 'role', 'position', 'applied',
+            'grant', 'fellowship', 'program', 'accelerator'
+        ])
+        needs_emails = needs_contacts and any(kw in transcript_lower for kw in [
+            'email', 'mail', 'message', 'sent', 'received', 'reply', 'wrote'
+        ])
+        needs_documents = any(kw in transcript_lower for kw in [
+            'cv', 'resume', 'profile', 'document', 'notes', 'bio', 'background'
+        ])
+        
+        logger.info(f"Smart context: contacts={needs_contacts}, meetings={needs_meetings}, "
+                   f"reflections={needs_reflections}, tasks={needs_tasks}, journals={needs_journals}, "
+                   f"calendar={needs_calendar}, apps={needs_applications}, emails={needs_emails}, "
+                   f"docs={needs_documents}")
+        
         contact_ids = set()
         
-        # First, try to find primary person
-        if primary_person:
-            matched, suggestions = self.db.find_contact_by_name(primary_person)
-            if matched:
-                contacts.append(self._format_contact(matched, is_primary=True))
-                contact_ids.add(matched["id"])
-            elif suggestions:
-                for s in suggestions[:3]:
-                    contacts.append(self._format_contact(s, is_suggestion=True))
-                    contact_ids.add(s["id"])
-        
-        # Then other mentioned names
-        for name in person_names[:10]:  # Limit to top 10 names
-            if name == primary_person:
-                continue
-            matched, suggestions = self.db.find_contact_by_name(name)
-            if matched and matched["id"] not in contact_ids:
-                contacts.append(self._format_contact(matched))
-                contact_ids.add(matched["id"])
-            elif suggestions:
-                for s in suggestions[:2]:
-                    if s["id"] not in contact_ids:
+        # 1. CONTACTS - Only if people mentioned
+        if needs_contacts:
+            contacts = []
+            
+            # First, try to find primary person
+            if primary_person:
+                matched, suggestions = self.db.find_contact_by_name(primary_person)
+                if matched:
+                    contacts.append(self._format_contact(matched, is_primary=True))
+                    contact_ids.add(matched["id"])
+                elif suggestions:
+                    for s in suggestions[:3]:
                         contacts.append(self._format_contact(s, is_suggestion=True))
                         contact_ids.add(s["id"])
+            
+            # Then other mentioned names
+            for name in person_names[:10]:
+                if name == primary_person:
+                    continue
+                matched, suggestions = self.db.find_contact_by_name(name)
+                if matched and matched["id"] not in contact_ids:
+                    contacts.append(self._format_contact(matched))
+                    contact_ids.add(matched["id"])
+                elif suggestions:
+                    for s in suggestions[:2]:
+                        if s["id"] not in contact_ids:
+                            contacts.append(self._format_contact(s, is_suggestion=True))
+                            contact_ids.add(s["id"])
+            
+            context["contacts"] = contacts[:15]
         
-        context["contacts"] = contacts[:15]  # Max 15 contacts
+        # 2. RECENT MEETINGS - Only if contacts found or meeting content
+        if needs_meetings and contact_ids:
+            meetings = []
+            for contact_id in list(contact_ids)[:5]:
+                try:
+                    contact_meetings = self.db.get_contact_interactions(contact_id, limit=3)
+                    for m in contact_meetings:
+                        meetings.append(self._format_meeting(m))
+                except Exception as e:
+                    logger.debug(f"Could not fetch meetings for contact: {e}")
+            context["recent_meetings"] = meetings[:10]
         
-        # 2. RECENT MEETINGS - With the people we found
-        meetings = []
-        for contact_id in list(contact_ids)[:5]:  # Top 5 contacts
+        # 3. REFLECTIONS - Only if topics mentioned
+        if needs_reflections:
+            reflections = []
+            
+            # Always get existing topics for routing (small payload)
             try:
-                contact_meetings = self.db.get_contact_interactions(contact_id, limit=3)
-                for m in contact_meetings:
-                    meetings.append(self._format_meeting(m))
+                existing_reflections = self.db.get_existing_reflection_topics(limit=30)
+                context["existing_reflections"] = existing_reflections
             except Exception as e:
-                logger.debug(f"Could not fetch meetings for contact: {e}")
+                logger.debug(f"Could not fetch existing reflections: {e}")
+                context["existing_reflections"] = []
+            
+            # Search for related reflections by topic
+            for topic in topics[:5]:
+                try:
+                    results = self.db.search_reflections_by_topic(topic, limit=2)
+                    for r in results:
+                        reflections.append(self._format_reflection(r))
+                except Exception as e:
+                    logger.debug(f"Could not search reflections for topic '{topic}': {e}")
+            
+            context["related_reflections"] = reflections[:8]
         
-        context["recent_meetings"] = meetings[:10]  # Max 10 meetings
-        
-        # 3. REFLECTIONS - By topic
-        topics = entities.get("topics", [])
-        reflections = []
-        
-        # Get existing reflection topics for smart routing
-        try:
-            existing_reflections = self.db.get_existing_reflection_topics(limit=30)
-            context["existing_reflections"] = existing_reflections
-        except Exception as e:
-            logger.debug(f"Could not fetch existing reflections: {e}")
-            context["existing_reflections"] = []
-        
-        # Search for related reflections
-        for topic in topics[:5]:
+        # 4. OPEN TASKS - Only if task-related content
+        if needs_tasks:
             try:
-                # Use search if available
-                results = self.db.search_reflections_by_topic(topic, limit=2)
-                for r in results:
-                    reflections.append(self._format_reflection(r))
+                open_tasks = self._get_open_tasks(limit=15)
+                context["open_tasks"] = open_tasks
             except Exception as e:
-                logger.debug(f"Could not search reflections for topic '{topic}': {e}")
+                logger.debug(f"Could not fetch open tasks: {e}")
+                context["open_tasks"] = []
         
-        context["related_reflections"] = reflections[:8]
+        # 5. RECENT JOURNALS - Only if journal content
+        if needs_journals:
+            try:
+                recent_journals = self._get_recent_journals(days=7, limit=3)
+                context["recent_journals"] = recent_journals
+            except Exception as e:
+                logger.debug(f"Could not fetch recent journals: {e}")
+                context["recent_journals"] = []
         
-        # 4. OPEN TASKS - For context on what's already tracked
-        try:
-            open_tasks = self._get_open_tasks(limit=20)
-            context["open_tasks"] = open_tasks
-        except Exception as e:
-            logger.debug(f"Could not fetch open tasks: {e}")
-            context["open_tasks"] = []
+        # 6. CALENDAR EVENTS - Only if schedule-related
+        if needs_calendar:
+            try:
+                calendar_events = self.db.get_recent_calendar_events(hours_back=24)
+                context["calendar_events"] = [self._format_calendar_event(e) for e in calendar_events[:10]]
+            except Exception as e:
+                logger.debug(f"Could not fetch calendar events: {e}")
+                context["calendar_events"] = []
         
-        # 5. RECENT JOURNALS - For continuity
-        try:
-            recent_journals = self._get_recent_journals(days=7, limit=3)
-            context["recent_journals"] = recent_journals
-        except Exception as e:
-            logger.debug(f"Could not fetch recent journals: {e}")
-            context["recent_journals"] = []
-        
-        # 6. CALENDAR EVENTS - Upcoming and recent
-        try:
-            calendar_events = self.db.get_recent_calendar_events(hours_back=24)
-            context["calendar_events"] = [self._format_calendar_event(e) for e in calendar_events[:10]]
-        except Exception as e:
-            logger.debug(f"Could not fetch calendar events: {e}")
-            context["calendar_events"] = []
-        
-        # 7. APPLICATIONS - If job search mentioned
-        if any(kw in transcript.lower() for kw in ['job', 'application', 'interview', 'role', 'position', 'applied']):
+        # 7. APPLICATIONS - Only if job/grant mentioned
+        if needs_applications:
             try:
                 applications = self._get_relevant_applications(limit=10)
                 context["applications"] = applications
             except Exception as e:
                 logger.debug(f"Could not fetch applications: {e}")
-                context["applications"] = []
         
-        # 8. EMAILS - Recent from/to mentioned contacts
-        emails = []
-        for contact_id in list(contact_ids)[:3]:
+        # 8. EMAILS - Only if contacts + email mentioned
+        if needs_emails and contact_ids:
+            emails = []
+            for contact_id in list(contact_ids)[:3]:
+                try:
+                    contact_emails = self.db.get_emails_by_contact(contact_id, limit=3)
+                    for e in contact_emails:
+                        emails.append(self._format_email(e))
+                except Exception as e:
+                    logger.debug(f"Could not fetch emails for contact: {e}")
+            context["relevant_emails"] = emails[:10]
+        
+        # 9. DOCUMENTS - Only if CV/profile mentioned
+        if needs_documents:
             try:
-                contact_emails = self.db.get_emails_by_contact(contact_id, limit=3)
-                for e in contact_emails:
-                    emails.append(self._format_email(e))
+                documents = self._get_all_documents(limit=5)
+                if documents:
+                    context["documents"] = documents
             except Exception as e:
-                logger.debug(f"Could not fetch emails for contact: {e}")
+                logger.debug(f"Could not fetch documents: {e}")
         
-        context["relevant_emails"] = emails[:10]
-        
-        # 9. MEMORIES (Mem0) - Semantic memory about user's life
+        # 10. MEMORIES (Mem0) - Always useful for personal context (lightweight)
         memories = await self._fetch_memories(transcript, entities, topics)
         if memories:
             context["memories"] = memories
         
-        # 10. DOCUMENTS - CV, profiles, and other reference docs
-        try:
-            documents = self._get_all_documents(limit=10)
-            if documents:
-                context["documents"] = documents
-        except Exception as e:
-            logger.debug(f"Could not fetch documents: {e}")
-        
-        # 11. RAG SEARCH - Semantic search for related knowledge
-        rag_context = await self._fetch_rag_context(transcript, entities, topics)
-        if rag_context:
-            context["knowledge_base"] = rag_context
+        # 11. RAG SEARCH - Only for substantial transcripts with topics
+        if len(transcript.split()) > 100 and topics:
+            rag_context = await self._fetch_rag_context(transcript, entities, topics)
+            if rag_context:
+                context["knowledge_base"] = rag_context
         
         return context
     
