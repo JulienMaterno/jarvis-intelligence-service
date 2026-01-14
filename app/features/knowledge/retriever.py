@@ -78,7 +78,7 @@ async def semantic_search(
     # Use RPC function for vector search
     # This assumes we have a match_knowledge_chunks function
     try:
-        result = db.client.rpc("match_knowledge_chunks", {
+        result = db.rpc("match_knowledge_chunks", {
             "query_embedding": query_embedding,
             "match_threshold": similarity_threshold,
             "match_count": limit,
@@ -118,7 +118,7 @@ async def _manual_semantic_search(
     import numpy as np
     
     # Fetch chunks (with filters)
-    query = db.client.table("knowledge_chunks").select(
+    query = db.table("knowledge_chunks").select(
         "id, source_type, source_id, chunk_index, content, metadata, embedding"
     ).is_("deleted_at", "null")
     
