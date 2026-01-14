@@ -1,9 +1,13 @@
 """
 LLM Prompts for transcript analysis.
 Centralized prompt templates for consistent AI behavior.
+
+TWO-STAGE ARCHITECTURE:
+- Stage 1 (Haiku): Entity extraction + context gathering (in context_gatherer.py)
+- Stage 2 (Sonnet): Main analysis with rich context (this file)
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 
 
@@ -17,9 +21,22 @@ def build_multi_analysis_prompt(
     known_contacts: List[Dict[str, str]] = None,
     person_context: Dict = None,
     calendar_context: List[Dict] = None,
+    rich_context: Dict[str, Any] = None,  # NEW: Rich context from Stage 1
 ) -> str:
     """
-    Build the main analysis prompt for Claude.
+    Build the main analysis prompt for Claude (Stage 2).
+    
+    Args:
+        rich_context: Pre-gathered context from Stage 1 (ContextGatherer), including:
+            - extracted_entities: Names, companies, topics detected
+            - contacts: Matched contacts with details
+            - recent_meetings: Past meetings with mentioned people
+            - existing_reflections: For routing decisions
+            - open_tasks: Current task list
+            - recent_journals: For continuity
+            - calendar_events: Upcoming/recent events
+            - relevant_emails: Emails from mentioned contacts
+            - applications: Job applications if relevant
     
     CRITICAL IMPROVEMENTS:
     1. German input → English output (always)
@@ -32,6 +49,7 @@ def build_multi_analysis_prompt(
     8. AI-DRIVEN reflection routing (no code-based fuzzy matching)
     9. SMART TRANSCRIPTION CORRECTION using known contacts
     10. PERSON CONTEXT - Use confirmed person name when provided
+    11. RICH CONTEXT from Stage 1 for better understanding (NEW!)
     """
     
     # Calculate transcript stats for scaling output
@@ -192,9 +210,15 @@ EXAMPLE CORRECTIONS:
 **CRITICAL:** Cross-reference the calendar to identify who Aaron actually MET WITH vs who they DISCUSSED.
 """
 
+    # Build rich context section from Stage 1 (if available)
+    rich_context_section = ""
+    if rich_context:
+        rich_context_section = _build_rich_context_section(rich_context)
+
     return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
 {person_context_section}
 {calendar_context_section}
+{rich_context_section}
 **⚠️ CRITICAL: TRANSCRIPTION ERROR CORRECTION**
 The transcript was created by automatic speech recognition which often makes mistakes. You must INTELLIGENTLY CORRECT errors using context:
 {contacts_context}
@@ -511,3 +535,218 @@ Return JSON:
   "target_id": "reflection-id-to-append-to or null",
   "reason": "Brief explanation"
 }}"""
+
+
+def _build_rich_context_section(rich_context: Dict[str, Any]) -> str:
+    """
+    Build the rich context section from Stage 1 gathered data.
+    
+    This gives Stage 2 (Sonnet) comprehensive context to make smart decisions:
+    - Who is this person? What's their history?
+    - What related tasks/reflections exist?
+    - What happened in recent journals?
+    - What's on the calendar?
+    """
+    sections = []
+    
+    # 1. Extracted entities (what Stage 1 detected)
+    entities = rich_context.get("extracted_entities", {})
+    if entities:
+        entity_summary = []
+        if entities.get("primary_person"):
+            entity_summary.append(f"**Primary person:** {entities['primary_person']}")
+        if entities.get("person_names"):
+            entity_summary.append(f"**People mentioned:** {', '.join(entities['person_names'][:8])}")
+        if entities.get("companies"):
+            entity_summary.append(f"**Companies:** {', '.join(entities['companies'][:5])}")
+        if entities.get("topics"):
+            entity_summary.append(f"**Topics detected:** {', '.join(entities['topics'][:5])}")
+        if entities.get("content_type"):
+            entity_summary.append(f"**Detected type:** {entities['content_type']}")
+        if entities.get("action_intent"):
+            entity_summary.append(f"**Detected intent:** {', '.join(entities['action_intent'])}")
+        
+        if entity_summary:
+            sections.append(f"""**🔍 DETECTED ENTITIES (from pre-analysis):**
+{chr(10).join(entity_summary)}""")
+    
+    # 2. Matched contacts with full details
+    contacts = rich_context.get("contacts", [])
+    if contacts:
+        contact_lines = []
+        for c in contacts[:10]:
+            name = c.get("name", "Unknown")
+            details = []
+            if c.get("company"):
+                details.append(c["company"])
+            if c.get("job_title"):
+                details.append(c["job_title"])
+            if c.get("location"):
+                details.append(c["location"])
+            
+            marker = "⭐" if c.get("is_primary_match") else ("?" if c.get("is_suggestion") else "")
+            detail_str = f" ({', '.join(details)})" if details else ""
+            
+            line = f"  - {marker} **{name}**{detail_str}"
+            if c.get("notes"):
+                line += f"\n    Notes: {c['notes'][:100]}..."
+            contact_lines.append(line)
+        
+        sections.append(f"""**👥 MATCHED CONTACTS IN DATABASE:**
+Use these correct spellings. ⭐ = primary match, ? = suggestion
+{chr(10).join(contact_lines)}""")
+    
+    # 3. Recent meetings with these contacts
+    meetings = rich_context.get("recent_meetings", [])
+    if meetings:
+        meeting_lines = []
+        for m in meetings[:7]:
+            title = m.get("title", "Untitled")
+            date = m.get("date", "")
+            contact = m.get("contact_name", "")
+            summary = m.get("summary", "")[:100]
+            
+            line = f"  - [{date}] {title}"
+            if contact:
+                line += f" (with {contact})"
+            if summary:
+                line += f"\n    {summary}..."
+            meeting_lines.append(line)
+        
+        sections.append(f"""**📅 RECENT MEETINGS (for context):**
+{chr(10).join(meeting_lines)}""")
+    
+    # 4. Open tasks (to avoid duplicates, understand current workload)
+    tasks = rich_context.get("open_tasks", [])
+    if tasks:
+        task_lines = []
+        for t in tasks[:12]:
+            title = t.get("title", "Untitled")
+            due = f" (due: {t['due_date']})" if t.get("due_date") else ""
+            priority = f" [{t['priority']}]" if t.get("priority") else ""
+            project = f" #{t['project']}" if t.get("project") else ""
+            task_lines.append(f"  - {title}{due}{priority}{project}")
+        
+        sections.append(f"""**✅ OPEN TASKS (don't create duplicates!):**
+{chr(10).join(task_lines)}
+**IMPORTANT:** Check this list before creating tasks. If a similar task exists, don't duplicate it.""")
+    
+    # 5. Recent journals (for continuity)
+    journals = rich_context.get("recent_journals", [])
+    if journals:
+        journal_lines = []
+        for j in journals[:3]:
+            date = j.get("date", "")
+            mood = j.get("mood", "")
+            focus = ", ".join(j.get("tomorrow_focus", [])[:3]) if j.get("tomorrow_focus") else ""
+            summary = j.get("summary", "")[:80]
+            
+            line = f"  - **{date}**"
+            if mood:
+                line += f" (mood: {mood})"
+            if focus:
+                line += f"\n    Tomorrow's focus was: {focus}"
+            if summary:
+                line += f"\n    Summary: {summary}..."
+            journal_lines.append(line)
+        
+        sections.append(f"""**📓 RECENT JOURNALS (for continuity):**
+{chr(10).join(journal_lines)}
+If this is a journal, consider referencing/following up on items from recent days.""")
+    
+    # 6. Related reflections (for smart routing)
+    related_reflections = rich_context.get("related_reflections", [])
+    if related_reflections:
+        ref_lines = []
+        for r in related_reflections[:5]:
+            title = r.get("title", "Untitled")
+            topic = r.get("topic_key", "")
+            tags = ", ".join(r.get("tags", [])[:3]) if r.get("tags") else ""
+            preview = r.get("content_preview", "")[:80]
+            
+            line = f"  - **{title}** (topic: {topic})"
+            if tags:
+                line += f" [tags: {tags}]"
+            if preview:
+                line += f"\n    {preview}..."
+            ref_lines.append(line)
+        
+        sections.append(f"""**💭 RELATED REFLECTIONS (consider appending?):**
+{chr(10).join(ref_lines)}
+If this content continues one of these themes, consider appending instead of creating new.""")
+    
+    # 7. Calendar events (broader context than just name correction)
+    calendar = rich_context.get("calendar_events", [])
+    if calendar:
+        event_lines = []
+        for e in calendar[:6]:
+            summary = e.get("summary", "Event")
+            start = e.get("start_time", "")[:16] if e.get("start_time") else ""
+            attendees = ", ".join(e.get("attendees", [])[:3])
+            
+            line = f"  - [{start}] {summary}"
+            if attendees:
+                line += f" (with {attendees})"
+            event_lines.append(line)
+        
+        sections.append(f"""**📆 CALENDAR CONTEXT:**
+{chr(10).join(event_lines)}""")
+    
+    # 8. Relevant emails
+    emails = rich_context.get("relevant_emails", [])
+    if emails:
+        email_lines = []
+        for e in emails[:5]:
+            subject = e.get("subject", "No subject")[:40]
+            sender = e.get("sender", "Unknown")
+            date = e.get("date", "")[:10] if e.get("date") else ""
+            snippet = e.get("snippet", "")[:60]
+            
+            line = f"  - [{date}] From {sender}: {subject}"
+            if snippet:
+                line += f"\n    {snippet}..."
+            email_lines.append(line)
+        
+        sections.append(f"""**📧 RELEVANT EMAILS:**
+{chr(10).join(email_lines)}""")
+    
+    # 9. Job applications (if relevant)
+    applications = rich_context.get("applications", [])
+    if applications:
+        app_lines = []
+        for a in applications[:8]:
+            name = a.get("name", "Application")
+            company = a.get("company", "")
+            status = a.get("status", "")
+            stage = a.get("stage", "")
+            
+            line = f"  - {name}"
+            if company:
+                line += f" @ {company}"
+            if status:
+                line += f" [{status}]"
+            if stage:
+                line += f" ({stage})"
+            app_lines.append(line)
+        
+        sections.append(f"""**💼 ACTIVE JOB APPLICATIONS:**
+{chr(10).join(app_lines)}
+Cross-reference if the transcript mentions job search, interviews, or specific companies.""")
+    
+    # Combine all sections
+    if sections:
+        return f"""
+**🧠 RICH CONTEXT (Pre-gathered from database):**
+The following context was gathered from Aaron's database to help you understand the full picture.
+Use this to:
+1. Correct names (use exact spellings from contacts)
+2. Understand relationships (previous meetings, email history)
+3. Avoid duplicate tasks (check existing tasks)
+4. Route reflections properly (append to existing if related)
+5. Connect dots (calendar events, recent activities)
+
+{chr(10).join(sections)}
+
+---
+"""
+    return ""

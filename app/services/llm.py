@@ -1,4 +1,9 @@
-"""LLM-powered transcript analysis for multi-database routing."""
+"""LLM-powered transcript analysis for multi-database routing.
+
+TWO-STAGE ARCHITECTURE:
+- Stage 1 (Haiku): Entity extraction + context gathering (cheap, fast)
+- Stage 2 (Sonnet): Main analysis with rich context (powerful, comprehensive)
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from anthropic import Anthropic, AsyncAnthropic
 
@@ -57,20 +62,30 @@ class ClaudeMultiAnalyzer:
         known_contacts: Optional[List[Dict[str, str]]] = None,
         person_context: Optional[Dict] = None,
         calendar_context: Optional[List[Dict]] = None,
+        db=None,  # NEW: Database connection for two-stage architecture
+        use_two_stage: bool = True,  # NEW: Enable two-stage processing
     ) -> Dict:
         """
         ASYNC version - Analyze transcript without blocking the event loop.
-        Use this from FastAPI endpoints for non-blocking LLM calls.
+        
+        TWO-STAGE ARCHITECTURE (when use_two_stage=True and db provided):
+        - Stage 1 (Haiku): Extract entities, gather rich context from database
+        - Stage 2 (Sonnet): Main analysis with all context available
         
         Args:
-            known_contacts: List of contacts for smart name correction in transcripts
+            transcript: Raw transcript text
+            filename: Source filename
+            recording_date: Date of recording (ISO format)
+            existing_topics: Existing reflection topics (legacy, used if rich_context not gathered)
+            known_contacts: Contacts for name correction (legacy, used if rich_context not gathered)
             person_context: Context about who the meeting is with (from Screenpipe bridge)
                 - confirmed_person_name: Name from calendar or user confirmation
                 - person_confirmed: Whether user explicitly confirmed this
                 - contact_id: Linked contact ID if known
                 - previous_meetings_summary: Brief summary of past interactions
-            calendar_context: Recent calendar events to help identify who the meeting was with
-                - Helps correct misheard names (e.g., "Hoy" -> "Hieu")
+            calendar_context: Recent calendar events for name correction
+            db: Database connection for Stage 1 context gathering
+            use_two_stage: Whether to use two-stage architecture (default True)
         """
         try:
             logger.info("Analyzing transcript ASYNC for multi-database routing (length: %d chars)", len(transcript))
@@ -83,6 +98,37 @@ class ClaudeMultiAnalyzer:
                 "word_count": len(transcript.split()),
             }
 
+            # ===============================================================
+            # STAGE 1: Context Gathering (Haiku - cheap/fast)
+            # ===============================================================
+            rich_context = None
+            if use_two_stage and db:
+                try:
+                    from app.features.analysis.context_gatherer import gather_context_for_transcript
+                    
+                    logger.info("🧠 Stage 1: Gathering context with Haiku...")
+                    rich_context = await gather_context_for_transcript(
+                        transcript=transcript,
+                        filename=filename,
+                        db=db,
+                        recording_date=recording_date,
+                    )
+                    logger.info("🧠 Stage 1 complete: gathered %d context sections",
+                              len([k for k in rich_context.keys() if rich_context.get(k)]))
+                    
+                    # Use existing_topics from rich_context if gathered
+                    if rich_context.get("existing_reflections"):
+                        existing_topics = rich_context["existing_reflections"]
+                        
+                except Exception as e:
+                    logger.warning("Stage 1 context gathering failed, continuing without: %s", e)
+                    rich_context = None
+
+            # ===============================================================
+            # STAGE 2: Main Analysis (Sonnet - powerful)
+            # ===============================================================
+            logger.info("📊 Stage 2: Analyzing transcript with Sonnet...")
+            
             prompt = self._build_multi_analysis_prompt(
                 transcript=transcript,
                 filename=filename,
@@ -92,6 +138,7 @@ class ClaudeMultiAnalyzer:
                 known_contacts=known_contacts,
                 person_context=person_context,
                 calendar_context=calendar_context,
+                rich_context=rich_context,  # NEW: Pass rich context from Stage 1
             )
 
             last_error: Optional[Exception] = None
@@ -247,6 +294,7 @@ class ClaudeMultiAnalyzer:
         known_contacts: List[Dict[str, str]] = None,
         person_context: Dict = None,
         calendar_context: List[Dict] = None,
+        rich_context: Dict[str, Any] = None,  # NEW: Rich context from Stage 1
     ) -> str:
         """Generate the instruction block sent to Claude using centralized prompts."""
         return build_multi_analysis_prompt(
@@ -258,6 +306,7 @@ class ClaudeMultiAnalyzer:
             known_contacts=known_contacts,
             person_context=person_context,
             calendar_context=calendar_context,
+            rich_context=rich_context,
         )
 
     def _invoke_model(self, prompt: str, model_name: str) -> str:

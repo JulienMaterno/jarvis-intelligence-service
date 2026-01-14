@@ -238,14 +238,18 @@ async def process_transcript(
             transcript_text = notes_header + transcript_text
             logger.info(f"Prepended {len(user_notes)} user note(s) to transcript")
 
+        # TWO-STAGE ARCHITECTURE:
+        # Stage 1 (Haiku) will gather context from DB
+        # Stage 2 (Sonnet) will do the analysis
+        # The old manual fetching is kept as fallback for backward compatibility
+        
         existing_topics = db.get_existing_reflection_topics()
         
-        # Fetch known contacts for smart transcription correction
+        # Fetch known contacts for smart transcription correction (fallback if Stage 1 fails)
         known_contacts = db.get_contacts_for_transcription(limit=200)
         logger.info(f"Fetched {len(known_contacts)} contacts for transcription correction")
         
-        # Fetch recent calendar events to help identify meeting participants
-        # This helps correct misheard names (e.g., "Hoy" -> "Hieu" if calendar shows meeting with Hieu)
+        # Fetch recent calendar events to help identify meeting participants (fallback)
         try:
             recent_calendar_events = db.get_recent_calendar_events(hours_back=3)
             if recent_calendar_events:
@@ -255,6 +259,7 @@ async def process_transcript(
             recent_calendar_events = []
         
         # Use async analyzer for non-blocking LLM call
+        # Pass db for two-stage architecture (Stage 1 will gather rich context)
         analysis = await analyzer.analyze_transcript_async(
             transcript=transcript_text,
             filename=filename,
@@ -263,6 +268,8 @@ async def process_transcript(
             known_contacts=known_contacts,
             person_context=person_context,  # Pass person context to analyzer
             calendar_context=recent_calendar_events,  # Pass calendar events for name correction
+            db=db,  # NEW: Pass db for two-stage context gathering
+            use_two_stage=True,  # NEW: Enable two-stage processing
         )
 
         db_records = {
@@ -469,16 +476,18 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
 
         existing_topics = db.get_existing_reflection_topics()
         
-        # Fetch known contacts for smart transcription correction
+        # Fetch known contacts for smart transcription correction (fallback)
         known_contacts = db.get_contacts_for_transcription(limit=200)
         
-        # Use async analyzer for non-blocking LLM call
+        # Use async analyzer for non-blocking LLM call (with two-stage architecture)
         analysis = await analyzer.analyze_transcript_async(
             transcript=request.transcript,
             filename=request.filename,
             recording_date=request.recording_date,
             existing_topics=existing_topics,
             known_contacts=known_contacts,
+            db=db,  # Enable two-stage context gathering
+            use_two_stage=True,
         )
 
         db_records = {
@@ -744,16 +753,18 @@ async def process_meeting_transcript(
         # Get existing topics for reflection routing
         existing_topics = db.get_existing_reflection_topics()
         
-        # Fetch known contacts for smart transcription correction
+        # Fetch known contacts for smart transcription correction (fallback)
         known_contacts = db.get_contacts_for_transcription(limit=200)
         
-        # Analyze with Claude (async for non-blocking)
+        # Analyze with Claude (async for non-blocking, with two-stage architecture)
         analysis = await analyzer.analyze_transcript_async(
             transcript=enhanced_transcript,
             filename=filename,
             recording_date=request.start_time[:10],
             existing_topics=existing_topics,
             known_contacts=known_contacts,
+            db=db,  # Enable two-stage context gathering
+            use_two_stage=True,
         )
         
         db_records = {

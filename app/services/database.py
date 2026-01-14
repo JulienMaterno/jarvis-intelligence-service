@@ -515,6 +515,67 @@ class SupabaseMultiDatabase:
             logger.error(f"Error finding similar reflection for '{topic_key}': {e}")
             return None
     
+    def search_reflections_by_topic(self, topic: str, limit: int = 5) -> List[Dict]:
+        """
+        Search reflections by topic/keyword for context gathering.
+        
+        This is used by Stage 1 (context gatherer) to find related reflections
+        that might be relevant to the current transcript.
+        
+        Args:
+            topic: Topic or keyword to search for
+            limit: Maximum results to return
+            
+        Returns: List of matching reflections with summary info
+        """
+        if not topic or len(topic) < 2:
+            return []
+        
+        try:
+            topic_lower = topic.lower().strip()
+            topic_search = topic_lower.replace("-", " ").replace("_", " ")
+            
+            # Search in title, topic_key, and tags
+            results = []
+            
+            # Strategy 1: Title contains topic
+            title_result = self.client.table("reflections").select(
+                "id, title, topic_key, tags, date, content"
+            ).ilike(
+                "title", f"%{topic_search}%"
+            ).is_(
+                "deleted_at", "null"
+            ).order(
+                "created_at", desc=True
+            ).limit(limit).execute()
+            
+            if title_result.data:
+                results.extend(title_result.data)
+            
+            # Strategy 2: Topic key matches
+            if len(results) < limit:
+                topic_key_result = self.client.table("reflections").select(
+                    "id, title, topic_key, tags, date, content"
+                ).ilike(
+                    "topic_key", f"%{topic_lower.replace(' ', '-')}%"
+                ).is_(
+                    "deleted_at", "null"
+                ).order(
+                    "created_at", desc=True
+                ).limit(limit - len(results)).execute()
+                
+                if topic_key_result.data:
+                    existing_ids = {r["id"] for r in results}
+                    for r in topic_key_result.data:
+                        if r["id"] not in existing_ids:
+                            results.append(r)
+            
+            return results[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error searching reflections for topic '{topic}': {e}")
+            return []
+    
     def append_to_reflection(
         self,
         reflection_id: str,
