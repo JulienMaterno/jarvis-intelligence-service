@@ -104,6 +104,83 @@ async def _send_processing_notification(db_records: dict, analysis: dict, transc
         logger.error("Failed to send Telegram notification: %s", e, exc_info=True)
 
 
+async def _handle_proactive_outreach(analysis: dict) -> None:
+    """
+    Handle proactive outreach if the AI determined it would be valuable.
+    
+    This sends thoughtful follow-up messages to the user when:
+    - They expressed concerns/frustrations that could use support
+    - They asked questions that could benefit from research
+    - Patterns were observed across their recordings
+    - There's valuable follow-up or insight to share
+    
+    The AI decides whether to reach out in the analysis phase, and if so,
+    provides a warm, supportive message to send.
+    """
+    outreach = analysis.get("proactive_outreach", {})
+    
+    if not outreach or not outreach.get("should_reach_out"):
+        return
+    
+    message = outreach.get("message")
+    if not message:
+        logger.debug("Proactive outreach enabled but no message provided")
+        return
+    
+    outreach_type = outreach.get("outreach_type", "follow_up")
+    reason = outreach.get("reason", "")
+    
+    try:
+        # Add a slight delay so it doesn't feel immediate/robotic
+        import asyncio
+        await asyncio.sleep(5)  # 5 second delay
+        
+        # Format the message with appropriate emoji based on type
+        type_emoji = {
+            "support": "💭",
+            "research": "🔍",
+            "pattern_observation": "🔮",
+            "follow_up": "💡",
+        }.get(outreach_type, "💬")
+        
+        formatted_message = f"{type_emoji} *Jarvis thinking out loud...*\n\n{message}"
+        
+        # Add research prompt if research is needed
+        research_topics = outreach.get("research_needed", [])
+        if research_topics:
+            topics_str = ", ".join(research_topics[:3])
+            formatted_message += f"\n\n_Want me to research: {topics_str}? Just reply yes!_"
+        
+        # Store the outreach context in chat_messages so future replies have context
+        try:
+            from app.features.chat.storage import get_chat_storage
+            storage = get_chat_storage()
+            await storage.store_message(
+                role="assistant",
+                content=formatted_message,
+                source="proactive_outreach",
+                metadata={
+                    "outreach_type": outreach_type,
+                    "reason": reason,
+                    "research_needed": research_topics,
+                    "original_analysis_category": analysis.get("primary_category"),
+                }
+            )
+            logger.info("Stored proactive outreach context in chat history")
+        except Exception as store_error:
+            logger.warning("Failed to store outreach context: %s", store_error)
+        
+        await send_telegram_message(formatted_message)
+        logger.info(
+            "Sent proactive outreach [%s]: %s (reason: %s)",
+            outreach_type,
+            message[:50],
+            reason[:50]
+        )
+    except Exception as e:
+        logger.error("Failed to send proactive outreach: %s", e, exc_info=True)
+
+
 async def _send_meeting_feedback_notifications(
     meeting_ids: list, 
     meetings_data: list, 
@@ -429,6 +506,10 @@ async def process_transcript(
         background_tasks.add_task(_send_processing_notification, db_records, analysis, transcript_text)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, filename)
         
+        # Handle proactive outreach (AI-initiated follow-up messages)
+        if analysis.get("proactive_outreach", {}).get("should_reach_out"):
+            background_tasks.add_task(_handle_proactive_outreach, analysis)
+        
         # Handle clarifications (ask user via Telegram if AI has questions)
         if analysis.get("clarifications_needed"):
             background_tasks.add_task(
@@ -643,6 +724,10 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis, request.transcript)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, request.filename)
+        
+        # Handle proactive outreach (AI-initiated follow-up messages)
+        if analysis.get("proactive_outreach", {}).get("should_reach_out"):
+            background_tasks.add_task(_handle_proactive_outreach, analysis)
         
         # Send meeting feedback for EACH meeting (even if created with journal)
         if db_records["meeting_ids"]:
@@ -861,6 +946,10 @@ async def process_meeting_transcript(
         background_tasks.add_task(trigger_syncs_for_records, db_records)
         background_tasks.add_task(_send_processing_notification, db_records, analysis, request.transcript)
         background_tasks.add_task(_seed_memory_from_analysis, analysis, "screenpipe_meeting")
+        
+        # Handle proactive outreach (AI-initiated follow-up messages)
+        if analysis.get("proactive_outreach", {}).get("should_reach_out"):
+            background_tasks.add_task(_handle_proactive_outreach, analysis)
         
         # Send meeting feedback notifications
         if db_records["meeting_ids"]:

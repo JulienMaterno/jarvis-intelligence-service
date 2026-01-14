@@ -347,6 +347,11 @@ Return ONLY the JSON, no explanation."""
         
         context["relevant_emails"] = emails[:10]
         
+        # 9. RAG SEARCH - Semantic search for related knowledge
+        rag_context = await self._fetch_rag_context(transcript, entities, topics)
+        if rag_context:
+            context["knowledge_base"] = rag_context
+        
         return context
     
     def _format_contact(self, contact: Dict, is_primary: bool = False, is_suggestion: bool = False) -> Dict:
@@ -400,6 +405,86 @@ Return ONLY the JSON, no explanation."""
             "date": email.get("date"),
             "snippet": email.get("snippet", "")[:150] if email.get("snippet") else None,
         }
+    
+    async def _fetch_rag_context(
+        self, 
+        transcript: str, 
+        entities: Dict, 
+        topics: List[str]
+    ) -> List[Dict]:
+        """
+        Fetch semantically related context from the knowledge base (RAG).
+        
+        This searches across ALL indexed content:
+        - Transcripts
+        - Meetings  
+        - Journals
+        - Reflections
+        - Messages (Beeper)
+        - Contacts
+        
+        Uses the extracted topics to form search queries.
+        """
+        try:
+            from app.features.knowledge import get_knowledge_service
+            knowledge = get_knowledge_service()
+            
+            rag_results = []
+            
+            # Build search queries from topics and key phrases
+            search_queries = []
+            
+            # Use extracted topics
+            for topic in topics[:5]:
+                search_queries.append(topic)
+            
+            # Use action intents if available
+            action_intents = entities.get("action_intent", [])
+            for intent in action_intents[:3]:
+                search_queries.append(intent)
+            
+            # Extract a key phrase from the transcript itself (first ~200 words)
+            transcript_snippet = " ".join(transcript.split()[:200])
+            if transcript_snippet:
+                search_queries.append(transcript_snippet)
+            
+            # Search for each query
+            seen_ids = set()
+            for query in search_queries:
+                if not query or len(query.strip()) < 5:
+                    continue
+                    
+                try:
+                    results = await knowledge.search(
+                        query=query,
+                        limit=5,
+                        threshold=0.5  # Only reasonably similar results
+                    )
+                    
+                    for r in results:
+                        # Deduplicate by source_id
+                        source_id = r.get("source_id")
+                        if source_id and source_id not in seen_ids:
+                            seen_ids.add(source_id)
+                            rag_results.append({
+                                "source_type": r.get("source_type"),
+                                "source_id": source_id,
+                                "content": r.get("content", "")[:500],  # Limit content
+                                "similarity": r.get("similarity", 0),
+                                "metadata": r.get("metadata", {}),
+                            })
+                except Exception as e:
+                    logger.debug(f"RAG search for '{query[:50]}...' failed: {e}")
+            
+            # Sort by similarity and limit
+            rag_results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+            
+            logger.info(f"RAG search found {len(rag_results)} relevant chunks")
+            return rag_results[:15]  # Max 15 chunks
+            
+        except Exception as e:
+            logger.warning(f"RAG search failed: {e}")
+            return []
     
     def _get_open_tasks(self, limit: int = 20) -> List[Dict]:
         """Fetch open tasks from database."""

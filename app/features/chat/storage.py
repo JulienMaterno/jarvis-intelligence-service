@@ -193,6 +193,43 @@ class ChatMessageStorage:
             logger.error(f"Failed to get recent messages: {e}")
             return []
     
+    async def get_recent_proactive_outreach(
+        self,
+        minutes: int = 30
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent proactive outreach message within the time window.
+        
+        This is used to provide context when the user replies to a 
+        proactive message from Jarvis.
+        
+        Args:
+            minutes: How far back to look for proactive messages
+            
+        Returns:
+            Most recent proactive outreach message with metadata, or None
+        """
+        try:
+            db = get_database()
+            
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+            
+            result = db.client.table("chat_messages")\
+                .select("*")\
+                .eq("source", "proactive_outreach")\
+                .gte("created_at", cutoff.isoformat())\
+                .order("created_at", desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get recent proactive outreach: {e}")
+            return None
+    
     async def mark_letta_processed(
         self,
         message_ids: List[str]

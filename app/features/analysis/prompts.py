@@ -390,7 +390,15 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
       "context": "How it was mentioned in the transcript",
       "question": "What clarification would help? Is this a person, project, error?"
     }}
-  ]
+  ],
+  
+  "proactive_outreach": {{
+    "should_reach_out": true/false,
+    "reason": "Why reaching out would be valuable (or why not needed)",
+    "message": "A thoughtful, warm message to send Aaron via Telegram. Write as Jarvis, his AI assistant. Be supportive, not robotic.",
+    "research_needed": ["topic1 to research", "topic2"] or [],
+    "outreach_type": "support|research|pattern_observation|follow_up|none"
+  }}
 }}
 
 **CRITICAL RULES:**
@@ -497,6 +505,66 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Translate German/Turkish/other to English
    - Keep names and proper nouns in original form
    - Preserve meaning and nuance while translating
+
+10. **🚀 PROACTIVE OUTREACH (IMPORTANT!):**
+    You can choose to proactively reach out to Aaron via Telegram. This is OPTIONAL but valuable.
+    
+    **WHEN TO REACH OUT (set should_reach_out: true):**
+    
+    ✅ **SUPPORT opportunities:**
+    - Aaron expresses frustration, stress, health concerns (running pain example)
+    - Something emotionally significant happened (fish market observation)
+    - Aaron seems uncertain or is processing difficult thoughts
+    - Example: "I noticed you're dealing with that persistent running pain. Would it help if I researched common causes of abdominal pain during exercise?"
+    
+    ✅ **RESEARCH requests (explicit or implicit):**
+    - Aaron asks for information or frameworks (relationship frameworks, fasting research)
+    - Aaron is curious about something ("I should look into...")
+    - Aaron wants to understand something better
+    - Example: "You mentioned wanting frameworks for thinking about relationships. I can research attachment styles, love languages, and compatibility factors - want me to do that?"
+    
+    ✅ **PATTERN observations:**
+    - You notice recurring themes across recent transcripts
+    - Something in today's content connects to past reflections
+    - Aaron is working through the same issue repeatedly
+    - Example: "I've noticed this is the third time you've mentioned feeling 'unsporty' - would you like me to help brainstorm ways to address that?"
+    
+    ✅ **FOLLOW-UP value:**
+    - The transcript contains open questions worth exploring
+    - There's a decision Aaron needs to make
+    - Aaron mentioned wanting to think more about something
+    
+    **WHEN NOT TO REACH OUT (set should_reach_out: false):**
+    
+    ❌ **Routine recordings:**
+    - Standard meeting notes without emotional content
+    - Simple task reminders or logistics
+    - Content that's just being recorded for documentation
+    
+    ❌ **Complete/resolved topics:**
+    - Aaron has already resolved the issue
+    - It's just a factual record of events
+    - No questions or needs expressed
+    
+    ❌ **Over-reaching:**
+    - The content is private/sensitive and best left alone
+    - Aaron didn't ask for input and doesn't need it
+    - Reaching out would be intrusive
+    
+    **MESSAGE TONE:**
+    - Write as "Jarvis" - warm, supportive, intelligent
+    - Not robotic or overly formal
+    - Like a thoughtful friend who happens to have perfect memory
+    - Acknowledge the human experience, don't just offer solutions
+    - Keep it concise (2-4 sentences usually)
+    
+    **EXAMPLES OF GOOD PROACTIVE MESSAGES:**
+    
+    For health concern: "Hey, I noticed you mentioned that persistent abdominal pain during running again. I could research common causes and potential solutions if you'd like - just let me know."
+    
+    For emotional observation: "I heard you describe that experience at the fish market. It's understandable that it affected you, even after seeing many markets in Asia. Sometimes unexpected moments hit differently."
+    
+    For research: "You asked about frameworks for thinking about what you want from a relationship. I can compile some perspectives on this - attachment styles, hygiene vs. critical factors as you mentioned, etc. Want me to dig into this?"
 
 Now analyze the transcript and return the JSON:"""
 
@@ -733,6 +801,42 @@ If this content continues one of these themes, consider appending instead of cre
 {chr(10).join(app_lines)}
 Cross-reference if the transcript mentions job search, interviews, or specific companies.""")
     
+    # 10. RAG / Knowledge Base results (semantic search across all indexed content)
+    knowledge = rich_context.get("knowledge_base", [])
+    if knowledge:
+        knowledge_lines = []
+        for k in knowledge[:10]:
+            source_type = k.get("source_type", "unknown")
+            similarity = k.get("similarity", 0)
+            content = k.get("content", "")[:200]
+            metadata = k.get("metadata", {})
+            
+            # Format by type
+            if source_type == "transcript":
+                line = f"  - 🎤 [Transcript] (sim: {similarity:.2f}): {content}..."
+            elif source_type == "meeting":
+                line = f"  - 📅 [Meeting] (sim: {similarity:.2f}): {content}..."
+            elif source_type == "journal":
+                line = f"  - 📓 [Journal] (sim: {similarity:.2f}): {content}..."
+            elif source_type == "reflection":
+                line = f"  - 💭 [Reflection] (sim: {similarity:.2f}): {content}..."
+            elif source_type == "message":
+                line = f"  - 💬 [Message] (sim: {similarity:.2f}): {content}..."
+            else:
+                line = f"  - 📄 [{source_type}] (sim: {similarity:.2f}): {content}..."
+            
+            knowledge_lines.append(line)
+        
+        sections.append(f"""**🔮 KNOWLEDGE BASE (Semantic Search Results):**
+These are semantically related chunks from Aaron's entire knowledge base.
+Use this for:
+1. Finding patterns and recurring themes
+2. Connecting current thoughts to past ideas
+3. Understanding historical context
+4. Identifying ongoing concerns or interests
+
+{chr(10).join(knowledge_lines)}""")
+    
     # Combine all sections
     if sections:
         return f"""
@@ -744,6 +848,7 @@ Use this to:
 3. Avoid duplicate tasks (check existing tasks)
 4. Route reflections properly (append to existing if related)
 5. Connect dots (calendar events, recent activities)
+6. Find patterns in knowledge base results
 
 {chr(10).join(sections)}
 

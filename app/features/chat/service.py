@@ -939,8 +939,60 @@ class ChatService:
             logger.debug(f"Error extracting finding: {e}")
             return None
     
-    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "") -> str:
-        """Build system prompt with current date/time/location, memory, journal, Letta context, and behavior rules."""
+    async def _get_proactive_outreach_context(self) -> str:
+        """
+        Get recent proactive outreach context for conversation continuity.
+        
+        If Jarvis proactively reached out recently (within 30 min), include that
+        context so the chat understands WHY we reached out.
+        """
+        try:
+            storage = get_chat_storage()
+            recent_outreach = await storage.get_recent_proactive_outreach(minutes=30)
+            
+            if not recent_outreach:
+                return ""
+            
+            content = recent_outreach.get("content", "")
+            metadata = recent_outreach.get("metadata", {})
+            outreach_type = metadata.get("outreach_type", "unknown")
+            reason = metadata.get("reason", "")
+            research_needed = metadata.get("research_needed", [])
+            
+            context = f"""
+**🎯 RECENT PROACTIVE OUTREACH (YOU initiated this conversation):**
+You recently reached out to Aaron with this message:
+---
+{content}
+---
+**Why you reached out:** {reason}
+**Type:** {outreach_type}
+"""
+            if research_needed:
+                context += f"""
+**Research topics mentioned:** {', '.join(research_needed)}
+If Aaron says "yes" or confirms, USE THE RELEVANT TOOLS to actually do the research:
+- web_search for general topics
+- linkedin_search_people for people/professional research
+- get_reflections/get_journals for historical context
+"""
+            
+            context += """
+**IMPORTANT:** This is a follow-up conversation. Aaron is likely responding to your outreach.
+- If they say "yes", "sure", "go ahead" → execute what you offered
+- If they engage with your observation → continue the thoughtful conversation
+- Remember the context of WHY you reached out
+
+"""
+            logger.info(f"Added proactive outreach context ({outreach_type})")
+            return context
+            
+        except Exception as e:
+            logger.warning(f"Failed to get proactive outreach context: {e}")
+            return ""
+    
+    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "", proactive_context: str = "") -> str:
+        """Build system prompt with current date/time/location, memory, journal, Letta context, behavior rules, and proactive outreach context."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -967,7 +1019,11 @@ class ChatService:
             user_location=f"{location_str} ({timezone_str})"
         )
 
-        # Append behavior rules FIRST (most important - these are learned guidelines)
+        # Append proactive outreach context FIRST (most recent context)
+        if proactive_context:
+            base_prompt += proactive_context
+
+        # Append behavior rules (these are learned guidelines)
         if behavior_rules:
             base_prompt += behavior_rules
 
@@ -1262,14 +1318,15 @@ a genuine intellectual exchange, not robotic task completion.
             )
             letta_task = asyncio.create_task(self._get_letta_context())
             behavior_task = asyncio.create_task(self._get_behavior_rules())
+            proactive_task = asyncio.create_task(self._get_proactive_outreach_context())
             
             # Journal context is sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
             
             # Wait for async tasks (in parallel) with timeout
             try:
-                memory_context, letta_context, behavior_rules = await asyncio.wait_for(
-                    asyncio.gather(memory_task, letta_task, behavior_task, return_exceptions=True),
+                memory_context, letta_context, behavior_rules, proactive_context = await asyncio.wait_for(
+                    asyncio.gather(memory_task, letta_task, behavior_task, proactive_task, return_exceptions=True),
                     timeout=2.0  # 2 second max for context gathering
                 )
             except asyncio.TimeoutError:
@@ -1277,6 +1334,7 @@ a genuine intellectual exchange, not robotic task completion.
                 memory_context = ""
                 letta_context = ""
                 behavior_rules = ""
+                proactive_context = ""
             
             # Handle exceptions from gather
             if isinstance(memory_context, Exception):
@@ -1288,12 +1346,15 @@ a genuine intellectual exchange, not robotic task completion.
             if isinstance(behavior_rules, Exception):
                 logger.warning(f"Behavior rules failed: {behavior_rules}")
                 behavior_rules = ""
+            if isinstance(proactive_context, Exception):
+                logger.warning(f"Proactive context failed: {proactive_context}")
+                proactive_context = ""
             
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
             
-            # Build dynamic system prompt with current context, journals, Letta, behavior rules, and memory
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules)
+            # Build dynamic system prompt with current context, journals, Letta, behavior rules, proactive context, and memory
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context)
 
             # Add client-specific response style instructions (telegram vs web)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
