@@ -2595,7 +2595,7 @@ def _query_database(sql: str) -> Dict[str, Any]:
             "beeper_messages", "books", "highlights", "sync_logs",
             "applications", "linkedin_posts", "linkedin_connections",
             "mem0_memories", "messages", "chat_messages", "agents", "users",
-            "sync_state", "pipeline_logs"
+            "sync_state", "pipeline_logs", "documents"
         ]
         
         if table_name.lower() not in allowed_tables:
