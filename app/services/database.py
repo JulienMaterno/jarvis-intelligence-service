@@ -1102,19 +1102,20 @@ class SupabaseMultiDatabase:
     
     def get_contact_interactions(self, contact_id: str, limit: int = 50) -> List[Dict]:
         """
-        Get all interactions for a specific contact.
-        Uses the interaction_log view.
+        Get all meetings with a specific contact.
         
-        Returns: List of interactions ordered by date (newest first)
+        Returns: List of meetings ordered by date (newest first)
         """
         try:
-            result = self.client.table("interaction_log").select("*").eq(
+            result = self.client.table("meetings").select("*").eq(
                 "contact_id", contact_id
+            ).is_("deleted_at", "null").order(
+                "date", desc=True
             ).limit(limit).execute()
             
             return result.data
         except Exception as e:
-            logger.error(f"Error fetching interactions for contact {contact_id}: {e}")
+            logger.error(f"Error fetching meetings for contact {contact_id}: {e}")
             return []
     
     # =========================================================================
@@ -1261,8 +1262,8 @@ class SupabaseMultiDatabase:
         try:
             result = self.client.table("emails").select("*").eq(
                 "contact_id", contact_id
-            ).is_("deleted_at", "null").order(
-                "sent_at", desc=True
+            ).order(
+                "date", desc=True
             ).limit(limit).execute()
             
             return result.data
@@ -1279,8 +1280,8 @@ class SupabaseMultiDatabase:
         try:
             result = self.client.table("emails").select("*").eq(
                 "thread_id", thread_id
-            ).is_("deleted_at", "null").order(
-                "sent_at", desc=False
+            ).order(
+                "date", desc=False
             ).execute()
             
             return result.data

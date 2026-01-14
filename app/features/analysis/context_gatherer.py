@@ -347,7 +347,12 @@ Return ONLY the JSON, no explanation."""
         
         context["relevant_emails"] = emails[:10]
         
-        # 9. RAG SEARCH - Semantic search for related knowledge
+        # 9. MEMORIES (Mem0) - Semantic memory about user's life
+        memories = await self._fetch_memories(transcript, entities, topics)
+        if memories:
+            context["memories"] = memories
+        
+        # 10. RAG SEARCH - Semantic search for related knowledge
         rag_context = await self._fetch_rag_context(transcript, entities, topics)
         if rag_context:
             context["knowledge_base"] = rag_context
@@ -405,6 +410,64 @@ Return ONLY the JSON, no explanation."""
             "date": email.get("date"),
             "snippet": email.get("snippet", "")[:150] if email.get("snippet") else None,
         }
+    
+    async def _fetch_memories(
+        self,
+        transcript: str,
+        entities: Dict,
+        topics: List[str]
+    ) -> List[Dict]:
+        """
+        Fetch relevant memories from Mem0 (semantic long-term memory).
+        
+        Memories contain facts about the user's life, preferences, relationships, etc.
+        """
+        try:
+            from app.features.memory import get_memory_service
+            memory_service = get_memory_service()
+            
+            if not memory_service:
+                return []
+            
+            # Build search query from topics and key entities
+            search_parts = []
+            
+            # Add topics
+            for topic in topics[:3]:
+                search_parts.append(topic)
+            
+            # Add person names (relationships matter)
+            for name in entities.get("person_names", [])[:3]:
+                search_parts.append(name)
+            
+            # Add first 100 words of transcript for semantic matching
+            transcript_snippet = " ".join(transcript.split()[:100])
+            if transcript_snippet:
+                search_parts.append(transcript_snippet)
+            
+            search_query = " ".join(search_parts)
+            if not search_query:
+                return []
+            
+            # Search memories
+            results = await memory_service.search(
+                query=search_query,
+                limit=10
+            )
+            
+            memories = []
+            for r in results:
+                memories.append({
+                    "content": r.get("memory", r.get("content", ""))[:300],
+                    "category": r.get("metadata", {}).get("category", "general"),
+                })
+            
+            logger.info(f"Mem0 search found {len(memories)} relevant memories")
+            return memories[:10]
+            
+        except Exception as e:
+            logger.warning(f"Memory search failed: {e}")
+            return []
     
     async def _fetch_rag_context(
         self, 
@@ -490,7 +553,7 @@ Return ONLY the JSON, no explanation."""
         """Fetch open tasks from database."""
         try:
             result = self.db.client.table("tasks").select(
-                "id, title, description, due_date, priority, project"
+                "id, title, description, due_date, priority, status"
             ).neq(
                 "status", "Done"
             ).is_(
@@ -504,7 +567,7 @@ Return ONLY the JSON, no explanation."""
                 "title": t["title"],
                 "due_date": t.get("due_date"),
                 "priority": t.get("priority"),
-                "project": t.get("project"),
+                "status": t.get("status"),
             } for t in result.data or []]
         except Exception as e:
             logger.error(f"Error fetching open tasks: {e}")
@@ -516,29 +579,33 @@ Return ONLY the JSON, no explanation."""
             cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
             
             result = self.db.client.table("journals").select(
-                "id, date, title, mood, energy, summary, tomorrow_focus"
+                "id, date, title, mood, summary, tomorrow_focus"
             ).gte(
                 "date", cutoff
             ).order(
                 "date", desc=True
             ).limit(limit).execute()
             
-            return [{
-                "date": j["date"],
-                "title": j.get("title"),
-                "mood": j.get("mood"),
-                "summary": j.get("summary", "")[:200] if j.get("summary") else None,
-                "tomorrow_focus": j.get("tomorrow_focus", [])[:5],
-            } for j in result.data or []]
+            journals = []
+            for j in result.data or []:
+                tomorrow_focus = j.get("tomorrow_focus") or []
+                journals.append({
+                    "date": j["date"],
+                    "title": j.get("title"),
+                    "mood": j.get("mood"),
+                    "summary": j.get("summary", "")[:200] if j.get("summary") else None,
+                    "tomorrow_focus": tomorrow_focus[:5] if tomorrow_focus else [],
+                })
+            return journals
         except Exception as e:
             logger.error(f"Error fetching recent journals: {e}")
             return []
     
     def _get_relevant_applications(self, limit: int = 10) -> List[Dict]:
-        """Fetch relevant job applications."""
+        """Fetch relevant applications (grants, programs, etc.)."""
         try:
             result = self.db.client.table("applications").select(
-                "id, name, company, status, stage, position"
+                "id, name, institution, status, application_type, deadline"
             ).not_.in_(
                 "status", ["Rejected", "Withdrawn", "Closed"]
             ).order(
@@ -547,10 +614,10 @@ Return ONLY the JSON, no explanation."""
             
             return [{
                 "name": a["name"],
-                "company": a.get("company"),
+                "institution": a.get("institution"),
                 "status": a.get("status"),
-                "stage": a.get("stage"),
-                "position": a.get("position"),
+                "type": a.get("application_type"),
+                "deadline": a.get("deadline"),
             } for a in result.data or []]
         except Exception as e:
             logger.error(f"Error fetching applications: {e}")

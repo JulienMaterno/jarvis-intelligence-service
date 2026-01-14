@@ -506,65 +506,33 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Keep names and proper nouns in original form
    - Preserve meaning and nuance while translating
 
-10. **🚀 PROACTIVE OUTREACH (IMPORTANT!):**
-    You can choose to proactively reach out to Aaron via Telegram. This is OPTIONAL but valuable.
+10. **🚀 PROACTIVE OUTREACH (USE SPARINGLY):**
+    You can proactively message Aaron via Telegram. Only do this when genuinely valuable.
     
-    **WHEN TO REACH OUT (set should_reach_out: true):**
+    **REACH OUT ONLY IF:**
+    - Aaron explicitly asked for research/information on something
+    - There's a clear question he wants answered ("I should look into X")
+    - You notice a pattern that's actually actionable (not just an observation)
+    - There's specific follow-up that would help (not generic "support")
     
-    ✅ **SUPPORT opportunities:**
-    - Aaron expresses frustration, stress, health concerns (running pain example)
-    - Something emotionally significant happened (fish market observation)
-    - Aaron seems uncertain or is processing difficult thoughts
-    - Example: "I noticed you're dealing with that persistent running pain. Would it help if I researched common causes of abdominal pain during exercise?"
+    **DO NOT REACH OUT FOR:**
+    - Routine meeting notes, task reminders, logistics
+    - Emotional content that doesn't need commentary
+    - Observations without actionable value
+    - Generic "I noticed you mentioned X" without a concrete offer
+    - Things Aaron is just documenting, not asking about
     
-    ✅ **RESEARCH requests (explicit or implicit):**
-    - Aaron asks for information or frameworks (relationship frameworks, fasting research)
-    - Aaron is curious about something ("I should look into...")
-    - Aaron wants to understand something better
-    - Example: "You mentioned wanting frameworks for thinking about relationships. I can research attachment styles, love languages, and compatibility factors - want me to do that?"
+    **MESSAGE STYLE:**
+    - Skip warm filler words - get to the point
+    - Be specific about what you can do
+    - Keep it 1-2 sentences max
+    - Only offer research if you'll actually do it
     
-    ✅ **PATTERN observations:**
-    - You notice recurring themes across recent transcripts
-    - Something in today's content connects to past reflections
-    - Aaron is working through the same issue repeatedly
-    - Example: "I've noticed this is the third time you've mentioned feeling 'unsporty' - would you like me to help brainstorm ways to address that?"
-    
-    ✅ **FOLLOW-UP value:**
-    - The transcript contains open questions worth exploring
-    - There's a decision Aaron needs to make
-    - Aaron mentioned wanting to think more about something
-    
-    **WHEN NOT TO REACH OUT (set should_reach_out: false):**
-    
-    ❌ **Routine recordings:**
-    - Standard meeting notes without emotional content
-    - Simple task reminders or logistics
-    - Content that's just being recorded for documentation
-    
-    ❌ **Complete/resolved topics:**
-    - Aaron has already resolved the issue
-    - It's just a factual record of events
-    - No questions or needs expressed
-    
-    ❌ **Over-reaching:**
-    - The content is private/sensitive and best left alone
-    - Aaron didn't ask for input and doesn't need it
-    - Reaching out would be intrusive
-    
-    **MESSAGE TONE:**
-    - Write as "Jarvis" - warm, supportive, intelligent
-    - Not robotic or overly formal
-    - Like a thoughtful friend who happens to have perfect memory
-    - Acknowledge the human experience, don't just offer solutions
-    - Keep it concise (2-4 sentences usually)
-    
-    **EXAMPLES OF GOOD PROACTIVE MESSAGES:**
-    
-    For health concern: "Hey, I noticed you mentioned that persistent abdominal pain during running again. I could research common causes and potential solutions if you'd like - just let me know."
-    
-    For emotional observation: "I heard you describe that experience at the fish market. It's understandable that it affected you, even after seeing many markets in Asia. Sometimes unexpected moments hit differently."
-    
-    For research: "You asked about frameworks for thinking about what you want from a relationship. I can compile some perspectives on this - attachment styles, hygiene vs. critical factors as you mentioned, etc. Want me to dig into this?"
+    **EXAMPLES:**
+    ✅ "You asked about relationship frameworks - want me to research attachment styles, hygiene factors, etc.?"
+    ✅ "Re: the running pain - I can look up common causes of abdominal discomfort during exercise if helpful."
+    ❌ "I heard you describe that experience at the fish market. It's understandable..." (adds no value)
+    ❌ "Hey, just checking in about..." (unnecessary warm opening)
 
 Now analyze the transcript and return the JSON:"""
 
@@ -827,28 +795,36 @@ Cross-reference if the transcript mentions job search, interviews, or specific c
             
             knowledge_lines.append(line)
         
-        sections.append(f"""**🔮 KNOWLEDGE BASE (Semantic Search Results):**
-These are semantically related chunks from Aaron's entire knowledge base.
-Use this for:
-1. Finding patterns and recurring themes
-2. Connecting current thoughts to past ideas
-3. Understanding historical context
-4. Identifying ongoing concerns or interests
-
+        sections.append(f"""**🔮 KNOWLEDGE BASE (Semantic Search):**
 {chr(10).join(knowledge_lines)}""")
+    
+    # 11. Memories (Mem0 - semantic long-term memory)
+    memories = rich_context.get("memories", [])
+    if memories:
+        memory_lines = []
+        for m in memories[:8]:
+            content = m.get("content", "")[:150]
+            category = m.get("category", "")
+            
+            if category:
+                line = f"  - [{category}] {content}..."
+            else:
+                line = f"  - {content}..."
+            memory_lines.append(line)
+        
+        sections.append(f"""**🧠 MEMORIES (Long-term knowledge about Aaron):**
+{chr(10).join(memory_lines)}""")
     
     # Combine all sections
     if sections:
         return f"""
 **🧠 RICH CONTEXT (Pre-gathered from database):**
-The following context was gathered from Aaron's database to help you understand the full picture.
 Use this to:
 1. Correct names (use exact spellings from contacts)
 2. Understand relationships (previous meetings, email history)
 3. Avoid duplicate tasks (check existing tasks)
 4. Route reflections properly (append to existing if related)
-5. Connect dots (calendar events, recent activities)
-6. Find patterns in knowledge base results
+5. Connect dots (calendar, memories, knowledge base)
 
 {chr(10).join(sections)}
 
