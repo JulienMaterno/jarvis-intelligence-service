@@ -249,33 +249,35 @@ IMPORTANT: Only SELECT queries allowed. Use specific tools when available.""",
     },
     {
         "name": "query_knowledge",
-        "description": """Search the knowledge base using semantic (AI-powered) search.
+        "description": """🔍 PREFERRED SEARCH TOOL - Search the knowledge base using semantic (AI-powered) search.
         
 This tool searches across ALL of Aaron's data using vector embeddings:
-- Emails (body text)
+- Emails (1000+ indexed - use this for email searches!)
 - LinkedIn posts (content)
 - Beeper messages (WhatsApp, LinkedIn, etc.)
 - Transcripts (meeting notes, voice memos)
 - Applications (grants, fellowships)
-- Documents (notes, files)
+- Meetings, Journals, Reflections
 - And more...
 
-USE THIS WHEN:
+USE THIS FIRST WHEN:
+- User asks "find that email about X" 
 - User asks "what do I know about X"
 - Looking for information across multiple sources
 - Finding past conversations, emails, or notes about a topic
 - Semantic/meaning-based search (not just keyword matching)
 
-COMPARED TO query_database:
+COMPARED TO other tools:
+- query_knowledge = PRIMARY search for any content by meaning
 - query_database = SQL for structured queries (exact filters, counts, dates)
-- query_knowledge = Semantic search for finding relevant content by meaning
+- search_emails_live = FALLBACK when query_knowledge doesn't find emails
 
 RETURNS: Top matching content chunks with source type, text, and relevance score.
 
 EXAMPLE QUERIES:
+- "Network School signup" → finds emails from Network School
 - "conversations about funding" → finds emails, messages, meeting notes about funding
-- "what did I discuss with John" → finds all content mentioning John
-- "longevity research ideas" → finds notes, posts, reflections about longevity""",
+- "what did I discuss with John" → finds all content mentioning John""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -452,10 +454,12 @@ Use this after get_recent_emails to read full content of a specific email.""",
     {
         "name": "search_emails_live",
         "description": """Search Gmail inbox in real-time using Gmail's search syntax.
-Use this for:
-- Finding very recent emails (last few hours)
-- Complex searches that need Gmail's full search power
-- When database search doesn't find what user is looking for
+
+⚠️ USE query_knowledge FIRST for email searches! It searches indexed emails semantically.
+Only use search_emails_live when:
+- query_knowledge didn't find what user needs
+- Need very recent emails (last few hours, not yet indexed)
+- Need Gmail-specific filters (is:unread, has:attachment, etc.)
 
 Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is:unread, etc.""",
         "input_schema": {
