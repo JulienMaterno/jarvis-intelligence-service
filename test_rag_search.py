@@ -1,39 +1,39 @@
-#!/usr/bin/env python3
-"""Test RAG search functionality."""
-
-import asyncio
-import os
+﻿import asyncio
 from dotenv import load_dotenv
-
 load_dotenv()
 
-from app.features.knowledge.service import KnowledgeService
+from app.features.knowledge import semantic_search
+from app.core.database import supabase
 
-
-async def test_search():
-    service = KnowledgeService()
+async def test():
+    print('=== Testing RAG search for Network School ===')
     
-    queries = [
-        "meetings with startup founders",
-        "AI and machine learning projects",
-        "family events",
-        "grant applications",
-    ]
+    # Test 1: Email-only search
+    results = await semantic_search(
+        query='Network School signup email acceptance link',
+        db=supabase,
+        source_types=['email'],
+        limit=5
+    )
+    print(f'Email search found {len(results)} results:')
+    for r in results:
+        sim = r.get('similarity', 0)
+        content = r.get('content', '')[:200].replace('\n', ' ')
+        print(f'  - sim={sim:.3f}: {content}...')
     
-    for query in queries:
-        print(f"\n{'='*60}")
-        print(f"Search: '{query}'")
-        print("="*60)
-        
-        results = await service.search(query, limit=5)
-        print(f"Found {len(results)} results:\n")
-        
-        for i, r in enumerate(results, 1):
-            content = r["content"][:100].replace("\n", " ")
-            print(f"{i}. [{r['source_type']}] (score: {r['similarity']:.3f})")
-            print(f"   {content}...")
-            print()
+    # Test 2: Lower threshold
+    print('\n--- Lower threshold (0.3) ---')
+    results = await semantic_search(
+        query='Network School',
+        db=supabase,
+        source_types=['email'],
+        limit=5,
+        similarity_threshold=0.3
+    )
+    print(f'Low threshold found {len(results)} results:')
+    for r in results:
+        sim = r.get('similarity', 0)
+        content = r.get('content', '')[:150].replace('\n', ' ')
+        print(f'  - sim={sim:.3f}: {content}...')
 
-
-if __name__ == "__main__":
-    asyncio.run(test_search())
+asyncio.run(test())
