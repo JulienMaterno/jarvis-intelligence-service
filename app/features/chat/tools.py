@@ -3260,11 +3260,41 @@ def _search_transcripts(input: Dict) -> Dict[str, Any]:
         
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         
+        # Expand query to handle number variations (e.g., "5" -> "five", "five" -> "5")
+        number_map = {
+            '1': 'one', '2': 'two', '3': 'three', '4': 'four', '5': 'five',
+            '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine', '10': 'ten',
+            'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+            'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10'
+        }
+        
+        search_variants = [query_text]
+        # Check if query contains a number or number word and add variant
+        for num, word in number_map.items():
+            if num in query_text.lower():
+                variant = query_text.lower().replace(num, word)
+                if variant != query_text.lower():
+                    search_variants.append(variant)
+                break
+        
+        # Try primary search first
         result = supabase.table("transcripts").select(
             "id, source_file, full_text, created_at, language"
         ).ilike(
             "full_text", f"%{query_text}%"
         ).gte("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
+        
+        # If no results and we have variants, try alternatives
+        if not result.data and len(search_variants) > 1:
+            for variant in search_variants[1:]:
+                result = supabase.table("transcripts").select(
+                    "id, source_file, full_text, created_at, language"
+                ).ilike(
+                    "full_text", f"%{variant}%"
+                ).gte("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
+                if result.data:
+                    query_text = variant  # Use the successful variant for snippet search
+                    break
         
         transcripts = []
         for t in result.data or []:
@@ -3289,7 +3319,7 @@ def _search_transcripts(input: Dict) -> Dict[str, Any]:
                 "language": t.get("language")
             })
         
-        return {"transcripts": transcripts, "count": len(transcripts), "query": query_text}
+        return {"transcripts": transcripts, "count": len(transcripts), "query": query_text, "searched_variants": search_variants}
     except Exception as e:
         return {"error": str(e)}
 
