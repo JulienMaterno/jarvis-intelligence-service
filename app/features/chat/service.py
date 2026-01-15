@@ -226,6 +226,25 @@ Example WRONG behavior (NEVER do this):
 
 The user trusts you to report ACTUAL database contents. Inventing or modifying data is a serious error.
 
+⚠️ CRITICAL: READING TOOL RESULTS PROPERLY:
+When a tool returns data, you MUST read and report it accurately:
+
+1. **READ THE ACTUAL JSON** - Don't say "I can see results" without stating what they are
+2. **QUOTE EXACT VALUES** - If tool returns {{"name": "Z Fellows", "status": "TO_APPLY"}}, say "Z Fellows has status TO_APPLY"
+3. **DON'T ASK USER TO VERIFY** - YOU received the data, READ it and tell the user
+4. **IF DATA EXISTS, REPORT IT** - Don't say "I'm having trouble parsing" when data is clearly there
+
+Example CORRECT behavior after get_application_content returns data:
+- "Z Fellows application content (1426 chars): 'Z FELLOWS APPLICATION Q&A...'"
+- "Status: TO_APPLY, Content: [quotes actual content]"
+
+Example WRONG behavior:
+- "Got results from get_application_content... Can you tell me what's in there?" ❌
+- "The tool returned something but I'm not reading it clearly" ❌
+- "I need to check what's showing - is it empty?" ❌
+
+YOU have the data. READ it. REPORT it. Don't deflect to the user.
+
 **VERIFICATION TECHNIQUE - USE THIS:**
 After getting tool results, mentally verify before responding:
 1. COUNT the results in the tool output (e.g., 4 items)
