@@ -572,6 +572,25 @@ Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is
         }
     },
     {
+        "name": "get_full_transcript",
+        "description": "Get the COMPLETE text of a specific voice memo transcript. Use this when you need to see the full content of a transcript (e.g., when user asks to discuss a voice memo, analyze what was said, or when snippets are not enough). Returns the entire transcript without truncation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "transcript_id": {
+                    "type": "string",
+                    "description": "UUID of the transcript to retrieve"
+                },
+                "recent": {
+                    "type": "boolean",
+                    "description": "If true (default), get the most recent transcript instead of by ID",
+                    "default": True
+                }
+            },
+            "required": []
+        }
+    },
+    {
         "name": "get_journals",
         "description": "Get journal entries. Use this to see what happened on specific days, moods, accomplishments, tomorrow's focus.",
         "input_schema": {
@@ -2185,6 +2204,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
         # Phase 1 additions
         elif tool_name == "search_transcripts":
             return _search_transcripts(tool_input)
+        elif tool_name == "get_full_transcript":
+            return _get_full_transcript(tool_input)
         elif tool_name == "get_journals":
             return _get_journals(tool_input)
         elif tool_name == "search_meetings":
@@ -3214,6 +3235,49 @@ def _search_transcripts(input: Dict) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+def _get_full_transcript(input: Dict) -> Dict[str, Any]:
+    """
+    Get the FULL text of a transcript without truncation.
+    Use this when user wants to discuss or analyze a voice memo in detail.
+    """
+    try:
+        transcript_id = input.get("transcript_id")
+        get_recent = input.get("recent", True)
+        
+        if transcript_id:
+            # Get specific transcript by ID
+            result = supabase.table("transcripts").select(
+                "id, full_text, source_file, created_at, language, audio_duration"
+            ).eq("id", transcript_id).limit(1).execute()
+        elif get_recent:
+            # Get most recent transcript
+            result = supabase.table("transcripts").select(
+                "id, full_text, source_file, created_at, language, audio_duration"
+            ).order("created_at", desc=True).limit(1).execute()
+        else:
+            return {"error": "Must provide transcript_id or set recent=true"}
+        
+        if not result.data:
+            return {"error": "Transcript not found"}
+        
+        t = result.data[0]
+        full_text = t.get("full_text", "")
+        
+        return {
+            "id": t.get("id"),
+            "source_file": t.get("source_file"),
+            "recorded_at": t.get("created_at"),
+            "language": t.get("language"),
+            "duration_seconds": t.get("audio_duration"),
+            "word_count": len(full_text.split()),
+            "char_count": len(full_text),
+            "full_transcript": full_text  # NO TRUNCATION - full text
+        }
+    except Exception as e:
+        logger.error(f"Error getting full transcript: {e}")
+        return {"error": str(e)}
+
+
 def _get_journals(input: Dict) -> Dict[str, Any]:
     """Get journal entries."""
     try:
@@ -4152,8 +4216,11 @@ def _get_recent_voice_memo(input: Dict) -> Dict[str, Any]:
         
         if include_transcript:
             full_text = transcript.get("full_text", "")
-            result["transcript"] = full_text[:2000] + "..." if len(full_text) > 2000 else full_text
+            # Increased limit from 2000 to 10000 chars - use get_full_transcript for complete text
+            result["transcript"] = full_text[:10000] + "..." if len(full_text) > 10000 else full_text
             result["transcript_length"] = len(full_text)
+            if len(full_text) > 10000:
+                result["note"] = "Transcript truncated. Use get_full_transcript tool for complete text."
         
         # Find meetings created from this transcript
         meetings = supabase.table("meetings").select(
