@@ -2537,18 +2537,21 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
             if table_name in sync_managed_tables:
                 update_data["last_sync_source"] = "supabase"
             
-            # Use .select() to get the updated row back (Supabase quirk)
-            result = supabase.table(table_name).update(update_data).eq("id", record_id).select().execute()
+            # Execute update (note: .select() after .update().eq() no longer works in newer Supabase SDK)
+            supabase.table(table_name).update(update_data).eq("id", record_id).execute()
             
-            if result.data and len(result.data) > 0:
+            # Verify by querying the updated record
+            verify_result = supabase.table(table_name).select("*").eq("id", record_id).execute()
+            
+            if verify_result.data and len(verify_result.data) > 0:
                 return {
                     "status": "success",
                     "operation": operation,
                     "table": table_name,
                     "updated_id": record_id,
                     "fields_updated": list(update_data.keys()),
-                    "rows_affected": len(result.data),
-                    "updated_record": result.data[0],  # Return the actual updated data for verification
+                    "rows_affected": 1,
+                    "updated_record": verify_result.data[0],  # Return the actual updated data for verification
                     "sync_note": "Set last_sync_source='supabase' to preserve changes during next sync" if table_name in sync_managed_tables else None
                 }
             else:
