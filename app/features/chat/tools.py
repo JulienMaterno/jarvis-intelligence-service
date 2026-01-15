@@ -191,7 +191,7 @@ CALENDAR & EMAIL:
 MEDIA & CONTENT:
 ----------------
 • transcripts: Voice memo transcriptions
-  - id (uuid), full_text (text), source_file, audio_duration (float)
+  - id (uuid), full_text (text), source_file, audio_duration_seconds (float)
   - language, segments (jsonb), speakers (text[]), model_used
 
 • documents: Personal documents (CV, profiles, notes)
@@ -3306,12 +3306,12 @@ def _get_full_transcript(input: Dict) -> Dict[str, Any]:
         if transcript_id:
             # Get specific transcript by ID
             result = supabase.table("transcripts").select(
-                "id, full_text, source_file, created_at, language, audio_duration"
+                "id, full_text, source_file, created_at, language, audio_duration_seconds"
             ).eq("id", transcript_id).limit(1).execute()
         elif get_recent:
             # Get most recent transcript
             result = supabase.table("transcripts").select(
-                "id, full_text, source_file, created_at, language, audio_duration"
+                "id, full_text, source_file, created_at, language, audio_duration_seconds"
             ).order("created_at", desc=True).limit(1).execute()
         else:
             return {"error": "Must provide transcript_id or set recent=true"}
@@ -3327,7 +3327,7 @@ def _get_full_transcript(input: Dict) -> Dict[str, Any]:
             "source_file": t.get("source_file"),
             "recorded_at": t.get("created_at"),
             "language": t.get("language"),
-            "duration_seconds": t.get("audio_duration"),
+            "duration_seconds": t.get("audio_duration_seconds"),
             "word_count": len(full_text.split()),
             "char_count": len(full_text),
             "full_transcript": full_text  # NO TRUNCATION - full text
