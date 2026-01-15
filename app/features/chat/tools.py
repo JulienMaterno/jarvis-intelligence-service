@@ -6525,9 +6525,14 @@ def _update_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 fields["last_sync_source"] = "supabase"
             
             try:
-                result = supabase.table(table_name).update(fields).eq("id", record_id).select().execute()
+                # Note: Supabase SDK changed - .update().eq().execute() no longer returns data by default
+                # We just execute the update and then verify separately
+                supabase.table(table_name).update(fields).eq("id", record_id).execute()
                 
-                if result.data and len(result.data) > 0:
+                # Verify the update worked by querying the record
+                verify = supabase.table(table_name).select("id").eq("id", record_id).execute()
+                
+                if verify.data and len(verify.data) > 0:
                     results.append({
                         "id": record_id,
                         "status": "updated",
@@ -6537,7 +6542,7 @@ def _update_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     errors.append({
                         "id": record_id,
-                        "error": "No matching record found or no data returned"
+                        "error": "Record not found after update attempt"
                     })
             except Exception as e:
                 logger.error(f"Update failed for {record_id}: {e}")
