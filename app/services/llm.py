@@ -483,23 +483,6 @@ class ClaudeMultiAnalyzer:
         # If journals are being missed, improve the prompt, not add code hacks.
 
         return self._fix_task_due_dates(analysis, recording_date)
-                logger.info("Converted reflection to journal successfully")
-
-        primary = analysis.get("primary_category") or "other"
-        if primary not in self.VALID_PRIMARY_CATEGORIES:
-            if analysis["journals"]:
-                primary = "journal"
-            elif analysis["meetings"]:
-                primary = "meeting"
-            elif analysis["reflections"]:
-                primary = "reflection"
-            elif analysis["tasks"]:
-                primary = "task_planning"
-            else:
-                primary = "other"
-
-        analysis["primary_category"] = primary
-        return analysis
 
     def _default_analysis(self, transcript: str, filename: str, recording_date: str) -> Dict:
         """Return a safe fallback structure when Claude fails."""
