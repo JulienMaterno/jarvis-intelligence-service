@@ -478,6 +478,48 @@ class ClaudeMultiAnalyzer:
             reflection.setdefault("sections", [])
             reflection.setdefault("tags", [])
 
+        # POST-PROCESSING: Fix misclassified journals
+        # If the LLM created a reflection when it should have been a journal, convert it
+        journal_indicators = ["journal", "journaling", "tagebuch", "today", "woke up", "this morning", "tonight"]
+        filename_lower = filename.lower()
+        transcript_lower = transcript[:500].lower()
+        
+        # Check if this should be a journal
+        should_be_journal = (
+            any(ind in filename_lower for ind in ["journal", "tagebuch"]) or
+            any(phrase in transcript_lower for phrase in ["journaling for today", "journal entry", "this is a journal"])
+        )
+        
+        # If it's detected as journal but no journal was created, and there's a reflection, convert it
+        if should_be_journal and not analysis["journals"] and analysis["reflections"]:
+            reflection_to_convert = analysis["reflections"][0]
+            reflection_title = reflection_to_convert.get("title", "").lower()
+            
+            # Only convert if the reflection title also indicates it should be a journal
+            if any(ind in reflection_title for ind in journal_indicators):
+                logger.info(
+                    "Converting mislabeled reflection '%s' to journal (detected journal indicators)",
+                    reflection_to_convert.get("title")
+                )
+                
+                # Create journal from reflection
+                new_journal = {
+                    "date": reflection_to_convert.get("date", recording_date),
+                    "summary": reflection_to_convert.get("content", ""),
+                    "mood": None,
+                    "effort": None,
+                    "sports": [],
+                    "key_events": [],
+                    "accomplishments": [],
+                    "challenges": [],
+                    "gratitude": [],
+                    "tomorrow_focus": [],
+                    "sections": reflection_to_convert.get("sections", []),
+                }
+                analysis["journals"].append(new_journal)
+                analysis["reflections"].remove(reflection_to_convert)
+                logger.info("Converted reflection to journal successfully")
+
         primary = analysis.get("primary_category") or "other"
         if primary not in self.VALID_PRIMARY_CATEGORIES:
             if analysis["journals"]:

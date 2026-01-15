@@ -370,6 +370,48 @@ QUERY TIPS:
 - For "send email to X" or "write an email" → use create_email_draft
 - For "show my drafts" → use list_email_drafts
 
+⚠️ DATABASE QUERY BEST PRACTICES (CRITICAL - READ THIS):
+
+**ALWAYS FETCH ALL RECORDS** - NOT JUST 20!
+When user asks for a list (tasks, meetings, contacts, applications, etc.):
+1. Set limit=1000 or higher to get ALL records, not just the default 20
+2. If a table has 100+ records, user expects to see them ALL
+3. NEVER assume "20 results is all there is" - pagination hides more data!
+4. If results seem incomplete, query again with higher limit or no limit
+
+**TRACKING IDs FOR MODIFICATIONS:**
+When fetching records that might need to be edited:
+1. ALWAYS include the `id` (UUID) in your query SELECT
+2. STORE the UUID when showing results to user
+3. When user says "change X" or "update Y", use the stored UUID
+4. Format for user: "• TaskName (id: abc123-...)" so you have reference
+
+**EFFICIENT SQL PATTERNS:**
+1. **Counting**: Use `COUNT(*)` not fetching all records to count
+2. **Filtering**: Use WHERE clauses, not post-fetch filtering
+3. **Specific lookup**: Use `id = 'uuid'` for updates, not name matching
+4. **Batch updates**: Prepare list of IDs then update in single operation
+5. **Check existence**: Use `SELECT id FROM table WHERE condition LIMIT 1`
+
+**EXAMPLE - CORRECT APPROACH:**
+User: "Show me ALL my tasks"
+BAD: `SELECT * FROM tasks LIMIT 20` ← only gets 20!
+GOOD: `SELECT id, title, status FROM tasks WHERE deleted_at IS NULL` ← gets ALL
+
+User: "Mark 'Call John' as done"
+BAD: `UPDATE tasks SET status='Done' WHERE title LIKE '%Call John%'`
+GOOD: First query to get UUID, then `UPDATE tasks SET status='Done' WHERE id='exact-uuid'`
+
+**COMMON TABLE SIZES (expect 100+ records):**
+- tasks: 100-500 records
+- contacts: 200-500 records  
+- meetings: 100-300 records
+- applications: 100-200 records
+- calendar_events: 500-1000 records
+- beeper_messages: 10,000+ records
+
+**NEVER ASSUME DEFAULT LIMITS ARE SUFFICIENT!**
+
 VOICE MEMO CONTEXT:
 The conversation history may include [Voice Memo Sent] entries. These indicate the user sent a voice recording that was processed. When users ask follow-up questions like:
 - "What did you just create?"
@@ -1442,13 +1484,31 @@ a genuine intellectual exchange, not robotic task completion.
                 logger.info(f"🗄️ Prompt caching ENABLED for web chat")
             
             while tool_call_count < MAX_TOOL_CALLS:
-                response = self.client.messages.create(
-                    model=model,  # Use selected model
-                    max_tokens=8000,  # Increased for web chat detailed responses
-                    system=cached_system,  # Use dynamic prompt with date/time/location and client-specific style
-                    tools=cached_tools,
-                    messages=messages
-                )
+                # Retry logic for overloaded API (transient errors)
+                max_retries = 3
+                retry_delays = [2, 5, 10]  # Seconds
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = self.client.messages.create(
+                            model=model,  # Use selected model
+                            max_tokens=8000,  # Increased for web chat detailed responses
+                            system=cached_system,  # Use dynamic prompt with date/time/location and client-specific style
+                            tools=cached_tools,
+                            messages=messages
+                        )
+                        break  # Success - exit retry loop
+                    except anthropic.APIError as e:
+                        error_message = str(e)
+                        # Check if it's an overload error
+                        if "overloaded" in error_message.lower() and attempt < max_retries - 1:
+                            delay = retry_delays[attempt]
+                            logger.warning(f"⏳ API overloaded, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            # Not an overload or last attempt - re-raise
+                            raise
                 
                 # Check if Claude wants to use a tool
                 if response.stop_reason == "tool_use":

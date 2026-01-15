@@ -238,7 +238,9 @@ SQL TIPS:
 • Join contacts: JOIN contacts c ON meetings.contact_id = c.id
 • Date ranges: WHERE date >= '2025-01-01' AND date < '2025-02-01'
 • JSON array search: WHERE 'tag' = ANY(tags)
-• Limit results: LIMIT 20
+• Default limit is 100, max is 1000: LIMIT 500
+• ALWAYS fetch ALL records when user asks for a list!
+• Include 'id' column for any records you might need to update
 
 IMPORTANT: Only SELECT queries allowed. Use specific tools when available.""",
         "input_schema": {
@@ -485,7 +487,7 @@ Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is
     },
     {
         "name": "get_tasks",
-        "description": "Get tasks, optionally filtered by status.",
+        "description": "Get tasks, optionally filtered by status. Returns ALL tasks by default.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -496,7 +498,8 @@ Gmail search supports: from:, to:, subject:, has:attachment, after:, before:, is
                 },
                 "limit": {
                     "type": "integer",
-                    "default": 10
+                    "description": "Maximum tasks to return (default 100 to get ALL pending)",
+                    "default": 100
                 }
             },
             "required": []
@@ -1760,8 +1763,8 @@ Returns applications with status, deadline, and details.""",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum applications to return",
-                    "default": 20
+                    "description": "Maximum applications to return (default 200 to get ALL)",
+                    "default": 200
                 }
             },
             "required": []
@@ -2174,7 +2177,7 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
         elif tool_name == "search_emails_live":
             return _search_emails_live(tool_input)
         elif tool_name == "get_tasks":
-            return _get_tasks(tool_input.get("status", "pending"), tool_input.get("limit", 10))
+            return _get_tasks(tool_input.get("status", "pending"), tool_input.get("limit", 100))
         elif tool_name == "complete_task":
             return _complete_task(tool_input)
         elif tool_name == "get_reflections":
@@ -2611,8 +2614,8 @@ def _query_database(sql: str) -> Dict[str, Any]:
         
         # Extract LIMIT
         limit_match = re.search(r'LIMIT\s+(\d+)', sql, re.IGNORECASE)
-        limit = int(limit_match.group(1)) if limit_match else 20
-        limit = min(limit, 100)  # Cap at 100
+        limit = int(limit_match.group(1)) if limit_match else 100
+        limit = min(limit, 1000)  # Cap at 1000 to allow fetching ALL records
         
         # Start building query
         query = supabase.table(table_name).select(columns)
@@ -3080,7 +3083,7 @@ def _search_emails_live(input: Dict) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def _get_tasks(status: str = "pending", limit: int = 10) -> Dict[str, Any]:
+def _get_tasks(status: str = "pending", limit: int = 100) -> Dict[str, Any]:
     """Get tasks with optional status filter."""
     try:
         query = supabase.table("tasks").select(
@@ -3090,6 +3093,8 @@ def _get_tasks(status: str = "pending", limit: int = 10) -> Dict[str, Any]:
         if status != "all":
             query = query.eq("status", status)
         
+        # Use higher limit to fetch ALL tasks
+        limit = min(limit, 500)
         result = query.order("created_at", desc=True).limit(limit).execute()
         
         return {"tasks": result.data or [], "count": len(result.data or [])}
@@ -5933,8 +5938,8 @@ def _get_applications(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         if tool_input.get("application_type"):
             query = query.eq("application_type", tool_input["application_type"])
         
-        # Limit
-        limit = min(tool_input.get("limit", 20), 50)
+        # Limit - increased to 200 to fetch ALL applications
+        limit = min(tool_input.get("limit", 200), 500)
         query = query.order("deadline", desc=False, nullsfirst=False).limit(limit)
         
         result = query.execute()
@@ -5964,7 +5969,7 @@ def _search_applications(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     """Search applications by name, institution, or content."""
     try:
         query_str = tool_input.get("query", "")
-        limit = min(tool_input.get("limit", 10), 50)
+        limit = min(tool_input.get("limit", 50), 200)
         
         if not query_str:
             return {"error": "query is required"}

@@ -313,6 +313,15 @@ If ANY of these indicators are present, you MUST create a journal entry:
 A JOURNAL is a daily log. Create one if the recording is about daily events/planning.
 A REFLECTION is topic-specific and NOT tied to daily events.
 
+⚠️ **VALIDATION BEFORE OUTPUT:**
+Before returning your JSON, CHECK:
+1. Does the transcript contain "journal", "journaling", or daily recap phrases?
+   - If YES → primary_category MUST be "journal" and journals array MUST NOT be empty
+   - A reflection titled "Journaling for today" is WRONG - that should be a JOURNAL
+2. Does this describe what happened TODAY or plans for TOMORROW?
+   - If YES → This is a JOURNAL, not a reflection
+3. If you created a reflection with title containing "journal", "journaling", "today" → STOP, recategorize as journal
+
 **OUTPUT FORMAT:**
 Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
 
