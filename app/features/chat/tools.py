@@ -1840,6 +1840,60 @@ Returns the complete application text.""",
             "required": []
         }
     },
+    {
+        "name": "update_application",
+        "description": """Update an application's fields (status, content, notes, etc.).
+
+Use when user asks:
+- "Update the Z Fellows application with this Q&A"
+- "Set the status of EIC application to In Progress"
+- "Add these notes to my Y Combinator application"
+- "Save my answers for the Breakthrough Energy application"
+
+IMPORTANT: This is the CORRECT tool for updating applications. Do NOT use execute_sql_write or update_data_batch for applications.
+
+Updatable fields: status, content, notes, context, deadline, grant_amount, website, application_type, institution""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {
+                    "type": "string",
+                    "description": "The application UUID (preferred)"
+                },
+                "application_name": {
+                    "type": "string",
+                    "description": "Application name to search for (if ID not known)"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["TO_APPLY", "RESEARCHING", "INACTIVE", "NOT_ELIGIBLE", "OTHER"],
+                    "description": "New status for the application"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full content/Q&A/essay text to save"
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Notes about the application"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Context/description of the application"
+                },
+                "deadline": {
+                    "type": "string",
+                    "description": "Deadline date (YYYY-MM-DD format)"
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "Set to true after user confirms the update",
+                    "default": False
+                }
+            },
+            "required": []
+        }
+    },
     # =========================================================================
     # LINKEDIN POSTS - Content planning and tracking
     # =========================================================================
@@ -2311,6 +2365,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _search_applications(tool_input)
         elif tool_name == "get_application_content":
             return _get_application_content(tool_input)
+        elif tool_name == "update_application":
+            return _update_application(tool_input)
         # LinkedIn Posts tools
         elif tool_name == "get_linkedin_posts":
             return _get_linkedin_posts(tool_input)
@@ -6118,6 +6174,92 @@ def _get_application_content(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Failed to get application content: {e}")
+        return {"error": str(e)}
+
+
+def _update_application(tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Update an application's fields with verification."""
+    from datetime import datetime, timezone
+    
+    try:
+        app_id = tool_input.get("application_id")
+        app_name = tool_input.get("application_name")
+        user_confirmed = tool_input.get("user_confirmed", False)
+        
+        # First, find the application
+        if not app_id and not app_name:
+            return {"error": "Either application_id or application_name is required"}
+        
+        if app_id:
+            result = supabase.table("applications").select("id, name, status").eq("id", app_id).execute()
+        else:
+            result = supabase.table("applications").select("id, name, status").ilike("name", f"%{app_name}%").limit(1).execute()
+        
+        if not result.data:
+            return {"error": f"Application not found: {app_name or app_id}"}
+        
+        app = result.data[0]
+        app_id = app["id"]
+        
+        # Build update fields
+        updatable_fields = ["status", "content", "notes", "context", "deadline", "grant_amount", "website", "application_type", "institution"]
+        fields_to_update = {}
+        
+        for field in updatable_fields:
+            if field in tool_input and tool_input[field] is not None:
+                fields_to_update[field] = tool_input[field]
+        
+        if not fields_to_update:
+            return {"error": "No fields to update. Provide at least one of: status, content, notes, context, deadline, grant_amount, website, application_type, institution"}
+        
+        # Require confirmation for significant updates
+        if not user_confirmed:
+            preview = {
+                "application": app["name"],
+                "current_status": app["status"],
+                "fields_to_update": list(fields_to_update.keys()),
+            }
+            # Show preview of content if being updated
+            if "content" in fields_to_update:
+                content = fields_to_update["content"]
+                preview["content_preview"] = content[:300] + "..." if len(content) > 300 else content
+                preview["content_length"] = len(content)
+            
+            return {
+                "status": "confirmation_required",
+                "preview": preview,
+                "message": f"⚠️ Ready to update '{app['name']}'. Please confirm.",
+                "instructions": "Ask the user to confirm, then call update_application again with user_confirmed=true"
+            }
+        
+        # Add metadata
+        fields_to_update["updated_at"] = datetime.now(timezone.utc).isoformat()
+        fields_to_update["last_sync_source"] = "supabase"
+        
+        # Execute update
+        logger.info(f"Updating application {app_id} with fields: {list(fields_to_update.keys())}")
+        supabase.table("applications").update(fields_to_update).eq("id", app_id).execute()
+        
+        # Verify update
+        verify = supabase.table("applications").select("id, name, status, content").eq("id", app_id).execute()
+        if not verify.data:
+            return {"error": "Verification failed - could not read updated record"}
+        
+        updated_app = verify.data[0]
+        
+        return {
+            "status": "success",
+            "application_id": app_id,
+            "application_name": updated_app["name"],
+            "fields_updated": list(fields_to_update.keys()),
+            "new_status": updated_app.get("status"),
+            "content_saved": bool(updated_app.get("content")),
+            "content_length": len(updated_app.get("content") or ""),
+            "message": f"✅ Successfully updated '{updated_app['name']}'"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to update application: {e}")
         return {"error": str(e)}
 
 
