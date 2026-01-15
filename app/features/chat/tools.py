@@ -143,6 +143,53 @@ For common operations, prefer specific tools when available:
         }
     },
     {
+        "name": "update_record",
+        "description": """Update a single record in the database using structured JSON input.
+
+⚠️ USE THIS INSTEAD OF execute_sql_write when updating content with special characters (commas, quotes, etc.)
+
+WHEN TO USE:
+- Updating text content (descriptions, notes, email content)
+- Any field that might contain commas, quotes, or special characters
+- Single record updates by ID
+
+WRITABLE TABLES:
+- contacts, meetings, tasks, journals, reflections
+- applications, linkedin_posts, books, highlights
+
+EXAMPLE - Update reflection content:
+table: "reflections"
+record_id: "419ac9a1-29f9-440e-9962-ef86bc8cd4bb"
+updates: {"content": "Full email content here with commas, quotes, etc."}
+user_confirmed: false (first call), then true (after confirmation)""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "table": {
+                    "type": "string",
+                    "description": "Table name (e.g., 'reflections', 'meetings', 'tasks')"
+                },
+                "record_id": {
+                    "type": "string",
+                    "description": "UUID of the record to update"
+                },
+                "updates": {
+                    "type": "object",
+                    "description": "Key-value pairs of fields to update. Can contain any text content."
+                },
+                "user_confirmed": {
+                    "type": "boolean",
+                    "description": "Set false first to preview, then true after user confirms"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Human-readable description of what this change does"
+                }
+            },
+            "required": ["table", "record_id", "updates", "user_confirmed"]
+        }
+    },
+    {
         "name": "query_database",
         "description": """Execute a read-only SQL query against the knowledge database.
 Use this for novel/complex queries that specific tools can't handle. For common operations, prefer specific tools like get_applications, search_contacts, get_tasks.
@@ -2225,6 +2272,8 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
     try:
         if tool_name == "execute_sql_write":
             return _execute_sql_write(tool_input)
+        elif tool_name == "update_record":
+            return _update_record(tool_input)
         elif tool_name == "query_database":
             return _query_database(tool_input.get("sql", ""))
         elif tool_name == "query_knowledge":
@@ -2634,6 +2683,117 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
             "status": "error",
             "error": str(e)[:300],
             "hint": "Check SQL syntax. For complex operations, break into simpler queries."
+        }
+
+
+def _update_record(input: Dict) -> Dict[str, Any]:
+    """Update a single record using structured JSON input (no SQL parsing issues).
+    
+    This is the PREFERRED method for updating content that contains special characters.
+    """
+    table = input.get("table", "").strip().lower()
+    record_id = input.get("record_id", "").strip()
+    updates = input.get("updates", {})
+    user_confirmed = input.get("user_confirmed", False)
+    description = input.get("description", "")
+    
+    if not table:
+        return {"error": "Table name is required"}
+    if not record_id:
+        return {"error": "Record ID is required"}
+    if not updates:
+        return {"error": "Updates dict is required with at least one field to update"}
+    
+    # Validate table
+    writable_tables = [
+        "contacts", "meetings", "tasks", "journals", "reflections",
+        "applications", "linkedin_posts", "books", "highlights"
+    ]
+    
+    if table not in writable_tables:
+        return {
+            "error": f"Table '{table}' is not writable",
+            "allowed_tables": writable_tables
+        }
+    
+    # Show preview and require confirmation
+    if not user_confirmed:
+        # Get current record for comparison
+        try:
+            current = supabase.table(table).select("*").eq("id", record_id).execute()
+            current_data = current.data[0] if current.data else None
+        except:
+            current_data = None
+        
+        preview = {
+            "status": "confirmation_required",
+            "table": table,
+            "record_id": record_id,
+            "fields_to_update": list(updates.keys()),
+            "description": description,
+            "message": f"⚠️ This will update {len(updates)} field(s) in '{table}'. Please confirm.",
+            "instructions": "Ask the user to confirm, then call update_record again with user_confirmed=true"
+        }
+        
+        # Show what will change
+        if current_data:
+            preview["current_values"] = {k: str(current_data.get(k, ""))[:100] + "..." if len(str(current_data.get(k, ""))) > 100 else current_data.get(k) for k in updates.keys()}
+            preview["new_values"] = {k: str(v)[:100] + "..." if len(str(v)) > 100 else v for k, v in updates.items()}
+        
+        return preview
+    
+    # Execute the update
+    try:
+        # Prepare update data
+        update_data = dict(updates)  # Copy to avoid modifying input
+        
+        # Always update timestamp
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        
+        # For sync-managed tables, mark as local change
+        sync_managed_tables = ["applications", "meetings", "tasks", "journals", 
+                               "reflections", "contacts", "linkedin_posts"]
+        if table in sync_managed_tables:
+            update_data["last_sync_source"] = "supabase"
+        
+        # Execute update
+        supabase.table(table).update(update_data).eq("id", record_id).execute()
+        
+        # Verify by querying the updated record
+        verify_result = supabase.table(table).select("*").eq("id", record_id).execute()
+        
+        if verify_result.data and len(verify_result.data) > 0:
+            updated = verify_result.data[0]
+            # Check if our updates were actually applied
+            success = True
+            for key, value in updates.items():
+                if str(updated.get(key, "")) != str(value):
+                    # Content might be different due to formatting, check if at least the length is similar
+                    if len(str(updated.get(key, ""))) != len(str(value)):
+                        success = False
+                        break
+            
+            return {
+                "status": "success" if success else "partial",
+                "table": table,
+                "record_id": record_id,
+                "fields_updated": list(updates.keys()),
+                "verified": success,
+                "content_length": {k: len(str(updated.get(k, ""))) for k in updates.keys()},
+                "sync_note": "Set last_sync_source='supabase' to preserve changes during next sync" if table in sync_managed_tables else None
+            }
+        else:
+            return {
+                "status": "warning",
+                "message": f"No rows matched id='{record_id}'. Check the UUID is correct.",
+                "rows_affected": 0
+            }
+            
+    except Exception as e:
+        logger.error(f"Record update error: {e}")
+        return {
+            "status": "error",
+            "error": str(e)[:300]
         }
 
 
