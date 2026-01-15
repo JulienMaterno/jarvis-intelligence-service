@@ -1236,11 +1236,45 @@ a genuine intellectual exchange, not robotic task completion.
             model = request.model or MODEL_ID
             logger.info(f"Streaming with model: {model}, client_type: {request.client_type}")
 
-            # Build messages
+            # Build messages with smart context management
+            # Use MORE history for web chat (multi-turn conversations)
+            # Keep limited for Telegram (ad-hoc queries)
+            max_history = 50 if request.client_type == "web" else 15
             messages = []
-            for msg in request.conversation_history[-10:]:
-                messages.append({"role": msg.role, "content": msg.content})
+            
+            # Smart token estimation for context management
+            # Approximate: 1 token ≈ 4 characters for English text
+            def estimate_tokens(text: str) -> int:
+                return len(text) // 4
+            
+            # Reserve tokens: ~50k for system/tools, ~8k for response, ~140k for conversation
+            MAX_CONTEXT_TOKENS = 140000  # Safe limit below 200k
+            total_tokens = 0
+            truncated_count = 0
+            
+            # Add history from newest to oldest, respecting token limits
+            history_slice = request.conversation_history[-max_history:]
+            for msg in reversed(history_slice):
+                msg_tokens = estimate_tokens(msg.content)
+                if total_tokens + msg_tokens > MAX_CONTEXT_TOKENS:
+                    truncated_count += 1
+                    continue  # Skip older messages if hitting limit
+                messages.insert(0, {"role": msg.role, "content": msg.content})
+                total_tokens += msg_tokens
+            
+            # Always add current message (required)
             messages.append({"role": "user", "content": request.message})
+            total_tokens += estimate_tokens(request.message)
+            
+            if truncated_count > 0:
+                logger.warning(f"⚠️ Truncated {truncated_count} older messages to stay under {MAX_CONTEXT_TOKENS:,} token limit")
+                # Add notice to system for continuity
+                messages.insert(0, {
+                    "role": "assistant", 
+                    "content": f"[Note: {truncated_count} earlier messages omitted due to context length. Focusing on recent conversation.]"
+                })
+            
+            logger.info(f"Context: {len(messages)} messages (~{total_tokens:,} tokens), history_available={len(request.conversation_history)}")
 
             tools_used = []
             tool_call_count = 0
@@ -1299,8 +1333,37 @@ a genuine intellectual exchange, not robotic task completion.
                         total_cache_read_tokens += getattr(response.usage, 'cache_read_input_tokens', 0) or 0
                         
                 except anthropic.BadRequestError as e:
-                    logger.error(f"Anthropic API error: {e}")
-                    yield {"type": "error", "message": str(e)}
+                    error_msg = str(e)
+                    logger.error(f"Anthropic API error: {error_msg}")
+                    
+                    # Handle specific error types gracefully
+                    if "prompt is too long" in error_msg.lower() or "context_length" in error_msg.lower():
+                        # Context too long - try again with fewer messages
+                        logger.warning("⚠️ Context too long, attempting recovery by truncating history")
+                        if len(messages) > 5:
+                            # Keep only last 3 messages + current
+                            messages = messages[-4:]
+                            yield {"type": "content", "text": "\n\n⚠️ _Context too long, summarizing recent conversation..._\n\n"}
+                            continue  # Retry with fewer messages
+                        else:
+                            yield {"type": "error", "message": "The conversation is too long to process. Please start a new conversation."}
+                            return
+                    elif "overloaded" in error_msg.lower():
+                        # API overloaded - inform user
+                        yield {"type": "error", "message": "Claude is currently overloaded. Please try again in a moment."}
+                        return
+                    else:
+                        yield {"type": "error", "message": f"API Error: {error_msg[:200]}"}
+                        return
+                        
+                except anthropic.RateLimitError as e:
+                    logger.error(f"Rate limit hit: {e}")
+                    yield {"type": "error", "message": "Rate limit reached. Please wait a moment and try again."}
+                    return
+                    
+                except anthropic.APIStatusError as e:
+                    logger.error(f"Anthropic API status error: {e}")
+                    yield {"type": "error", "message": f"Service temporarily unavailable ({e.status_code}). Please try again."}
                     return
 
                 # Check if Claude wants to use tools
@@ -1443,21 +1506,40 @@ a genuine intellectual exchange, not robotic task completion.
             model = request.model or MODEL_ID
             logger.info(f"Using model: {model}, client_type: {request.client_type}")
             
-            # Build conversation messages
+            # Build messages with smart context management (same logic as streaming)
+            max_history = 50 if request.client_type == "web" else 15
             messages = []
             
-            # Add conversation history
-            for msg in request.conversation_history[-10:]:  # Last 10 messages for context
-                messages.append({
-                    "role": msg.role,
-                    "content": msg.content
+            # Smart token estimation for context management
+            def estimate_tokens(text: str) -> int:
+                return len(text) // 4
+            
+            MAX_CONTEXT_TOKENS = 140000
+            total_tokens = 0
+            truncated_count = 0
+            
+            # Add history from newest to oldest, respecting token limits
+            history_slice = request.conversation_history[-max_history:]
+            for msg in reversed(history_slice):
+                msg_tokens = estimate_tokens(msg.content)
+                if total_tokens + msg_tokens > MAX_CONTEXT_TOKENS:
+                    truncated_count += 1
+                    continue
+                messages.insert(0, {"role": msg.role, "content": msg.content})
+                total_tokens += msg_tokens
+            
+            # Always add current message
+            messages.append({"role": "user", "content": request.message})
+            total_tokens += estimate_tokens(request.message)
+            
+            if truncated_count > 0:
+                logger.warning(f"⚠️ Truncated {truncated_count} older messages to stay under {MAX_CONTEXT_TOKENS:,} token limit")
+                messages.insert(0, {
+                    "role": "assistant", 
+                    "content": f"[Note: {truncated_count} earlier messages omitted due to context length.]"
                 })
             
-            # Add current message
-            messages.append({
-                "role": "user",
-                "content": request.message
-            })
+            logger.info(f"Context: {len(messages)} messages (~{total_tokens:,} tokens)")
             
             # Call Claude with tools
             tools_used = []

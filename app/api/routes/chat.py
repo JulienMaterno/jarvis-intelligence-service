@@ -256,10 +256,18 @@ async def openai_chat_completions(request: OpenAIChatRequest):
         )
 
         service = get_chat_service()
+        
+        # Import storage for message logging
+        from app.features.chat.storage import ChatMessageStorage
+        storage = ChatMessageStorage()
 
         if request.stream:
             # Streaming response using real Anthropic streaming
             async def generate() -> AsyncGenerator[str, None]:
+                # Track full response and tools for storage
+                full_response_text = []
+                tools_used = []
+                
                 try:
                     chat_id = f"chatcmpl-{int(time.time())}"
                     created_time = int(time.time())
@@ -267,7 +275,9 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                     # Stream from Anthropic via our streaming service
                     async for chunk in service.process_message_stream(jarvis_request):
                         if chunk["type"] == "content":
-                            # Text content from Claude
+                            # Text content from Claude - track for storage
+                            full_response_text.append(chunk["text"])
+                            
                             chunk_data = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
@@ -282,8 +292,11 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                             yield f"data: {json.dumps(chunk_data)}\n\n"
 
                         elif chunk["type"] == "tool_use":
-                            # Send tool use as visible text chunk so user sees what's happening
+                            # Track tool for storage
                             tool_name = chunk['tool']
+                            if tool_name not in tools_used:
+                                tools_used.append(tool_name)
+                            
                             tool_input = chunk.get('input', {})
                             logger.info(f"Tool use: {tool_name}")
                             
@@ -367,6 +380,32 @@ async def openai_chat_completions(request: OpenAIChatRequest):
                                     }
                                 }
                                 yield f"data: {json.dumps(usage_chunk)}\n\n"
+                            
+                            # =====================================================
+                            # STORE MESSAGES TO DATABASE (for web chat logging)
+                            # =====================================================
+                            try:
+                                complete_response = "".join(full_response_text)
+                                if complete_response.strip():  # Only store if there's actual content
+                                    await storage.store_exchange(
+                                        user_message=last_message.content,
+                                        assistant_response=complete_response,
+                                        source="web",
+                                        user_metadata={
+                                            "model": request.model,
+                                            "conversation_id": conversation_id,
+                                            "history_length": len(conversation_history)
+                                        },
+                                        assistant_metadata={
+                                            "model": request.model,
+                                            "usage": usage_info,
+                                            "streamed": True
+                                        },
+                                        tools_used=tools_used if tools_used else None
+                                    )
+                                    logger.info(f"Stored web chat exchange: user={len(last_message.content)} chars, assistant={len(complete_response)} chars, tools={tools_used}")
+                            except Exception as store_err:
+                                logger.warning(f"Failed to store web chat messages: {store_err}")
                             
                             # Final chunk
                             final_chunk = {

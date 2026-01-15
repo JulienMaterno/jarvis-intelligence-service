@@ -6447,7 +6447,7 @@ def _add_column_to_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _update_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Update multiple records in a single operation."""
+    """Update multiple records in a single operation with verification."""
     from datetime import datetime, timezone
     
     try:
@@ -6509,6 +6509,9 @@ def _update_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         
         results = []
         errors = []
+        updated_ids = []
+        
+        logger.info(f"Starting batch update of {len(updates)} records in '{table_name}'")
         
         for update in updates:
             record_id = update.get("id")
@@ -6530,31 +6533,82 @@ def _update_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                         "status": "updated",
                         "fields": list(fields.keys())
                     })
+                    updated_ids.append(record_id)
                 else:
                     errors.append({
                         "id": record_id,
-                        "error": "No matching record found"
+                        "error": "No matching record found or no data returned"
                     })
             except Exception as e:
+                logger.error(f"Update failed for {record_id}: {e}")
                 errors.append({
                     "id": record_id,
                     "error": str(e)
                 })
         
-        return {
-            "status": "success" if not errors else "partial_success",
+        # =====================================================
+        # VERIFICATION STEP - Query database to confirm updates
+        # =====================================================
+        verification_results = None
+        if updated_ids:
+            try:
+                # Get the first field that was being updated (for verification)
+                sample_field = list({k for u in updates for k in u.keys() if k != "id"})[:1]
+                if sample_field:
+                    sample_field = sample_field[0]
+                    verify_query = supabase.table(table_name).select(f"id, {sample_field}").in_("id", updated_ids[:20]).execute()
+                    if verify_query.data:
+                        verification_results = {
+                            "verified_count": len(verify_query.data),
+                            "sample_values": [
+                                {"id": r["id"][:8] + "...", sample_field: str(r.get(sample_field, ""))[:50]}
+                                for r in verify_query.data[:5]
+                            ]
+                        }
+                        logger.info(f"Verified {len(verify_query.data)} updates in '{table_name}'")
+            except Exception as ve:
+                logger.warning(f"Verification query failed: {ve}")
+                verification_results = {"error": f"Could not verify updates: {ve}"}
+        
+        # Build response with clear status
+        response = {
             "table": table_name,
+            "requested_updates": len(updates),
             "updated_count": len(results),
             "failed_count": len(errors),
-            "results": results[:20],  # Limit output size
-            "errors": errors[:10] if errors else None,
-            "message": f"✅ Updated {len(results)}/{len(updates)} records in '{table_name}'" + 
-                       (f" ({len(errors)} failed)" if errors else "")
         }
+        
+        # Clear status indicators
+        if len(errors) == 0 and len(results) == len(updates):
+            response["status"] = "success"
+            response["message"] = f"✅ Successfully updated ALL {len(results)} records in '{table_name}'"
+        elif len(results) > 0:
+            response["status"] = "partial_success"
+            response["message"] = f"⚠️ Updated {len(results)}/{len(updates)} records in '{table_name}' ({len(errors)} failed)"
+        else:
+            response["status"] = "failed"
+            response["message"] = f"❌ FAILED: No records were updated in '{table_name}'"
+        
+        # Add verification proof
+        if verification_results:
+            response["verification"] = verification_results
+        
+        # Add details (limited for output size)
+        response["results"] = results[:20]
+        if errors:
+            response["errors"] = errors[:10]
+            response["error_summary"] = f"First error: {errors[0].get('error', 'unknown')}"
+        
+        logger.info(f"Batch update complete: {response['status']} - {response['message']}")
+        return response
         
     except Exception as e:
         logger.error(f"Failed to batch update: {e}")
-        return {"error": str(e)}
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": f"❌ BATCH UPDATE FAILED: {str(e)}"
+        }
 
 
 def _insert_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
