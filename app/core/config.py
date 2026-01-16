@@ -22,6 +22,7 @@ _CLAUDE_MODEL_OPTIONS = [_CLAUDE_MODEL_PRIMARY] + [m for m in _CLAUDE_MODEL_FALL
 _SYNC_SERVICE_URL = os.getenv('SYNC_SERVICE_URL', 'https://jarvis-sync-service-776871804948.asia-southeast1.run.app')
 _TELEGRAM_BOT_URL = os.getenv('TELEGRAM_BOT_URL', 'https://jarvis-telegram-bot-qkz4et4n4q-as.a.run.app')
 _AUDIO_PIPELINE_URL = os.getenv('AUDIO_PIPELINE_URL', 'https://jarvis-audio-pipeline-qkz4et4n4q-as.a.run.app')
+_MCP_SERVER_URL = os.getenv('MCP_SERVER_URL', 'https://jarvis-mcp-server-776871804948.asia-southeast1.run.app')
 
 # Telegram config
 _TELEGRAM_CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID', '0'))
@@ -45,6 +46,7 @@ class Config:
     SYNC_SERVICE_URL = _SYNC_SERVICE_URL
     TELEGRAM_BOT_URL = _TELEGRAM_BOT_URL
     AUDIO_PIPELINE_URL = _AUDIO_PIPELINE_URL
+    MCP_SERVER_URL = _MCP_SERVER_URL
     
     # Telegram
     TELEGRAM_CHAT_ID = _TELEGRAM_CHAT_ID

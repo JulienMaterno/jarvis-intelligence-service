@@ -3,15 +3,81 @@ Chat Tools for Conversational AI.
 
 These tools are exposed to Claude for answering questions and taking actions.
 Mirrors the MCP approach used in Claude Desktop.
+
+MCP Integration:
+- When USE_MCP_DELEGATION is True, tools delegate to jarvis-mcp-server
+- This provides a single source of truth for tool implementations
+- Fallback to local implementation if MCP call fails
 """
 
 import logging
+import os
+import asyncio
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 from app.core.database import supabase
 
 logger = logging.getLogger("Jarvis.Chat.Tools")
+
+# =============================================================================
+# MCP DELEGATION CONFIGURATION
+# Set USE_MCP_DELEGATION=true to delegate tool calls to jarvis-mcp-server
+# =============================================================================
+USE_MCP_DELEGATION = os.getenv("USE_MCP_DELEGATION", "false").lower() == "true"
+
+# Lazy import MCP client to avoid circular imports
+_mcp_client = None
+
+def _get_mcp_client():
+    """Lazy load the MCP client."""
+    global _mcp_client
+    if _mcp_client is None and USE_MCP_DELEGATION:
+        try:
+            from app.services.mcp_client import mcp_client
+            _mcp_client = mcp_client
+            logger.info("MCP delegation enabled - tools will use jarvis-mcp-server")
+        except ImportError as e:
+            logger.warning(f"MCP client not available: {e}")
+    return _mcp_client
+
+# Tool name mapping: intelligence-service name -> MCP tool name
+MCP_DELEGATED_TOOLS = {
+    # Contacts
+    "search_contacts": "contacts_search",
+    "get_contact_history": "contacts_get",
+    "create_contact": "contacts_create",
+    "update_contact": "contacts_update",
+
+    # Tasks
+    "get_tasks": "tasks_search",
+    "create_task": "tasks_create",
+    "update_task": "tasks_update",
+    "complete_task": "tasks_complete",
+    "delete_task": "tasks_delete",
+
+    # Meetings
+    "search_meetings": "meetings_search",
+    "create_meeting": "meetings_create",
+
+    # Reflections
+    "get_reflections": "reflections_search",
+    "create_reflection": "reflections_create",
+
+    # Journals
+    "get_journals": "journals_search",
+
+    # Transcripts
+    "search_transcripts": "transcripts_search",
+    "get_full_transcript": "transcripts_get",
+
+    # Calendar
+    "get_upcoming_events": "calendar_search",
+
+    # Database
+    "query_database": "query",
+    "query_knowledge": "search",
+}
 
 
 # =============================================================================
@@ -2263,12 +2329,48 @@ def get_all_tools() -> List[Dict[str, Any]]:
 
 def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: str = "") -> Dict[str, Any]:
     """Execute a tool and return the result.
-    
+
     Args:
         tool_name: Name of the tool to execute
         tool_input: Tool parameters
         last_user_message: The most recent user message (for confirmation checks)
+
+    MCP Delegation:
+        When USE_MCP_DELEGATION=true, mapped tools delegate to jarvis-mcp-server.
+        Falls back to local implementation if MCP call fails.
     """
+    # Try MCP delegation first if enabled
+    if USE_MCP_DELEGATION and tool_name in MCP_DELEGATED_TOOLS:
+        mcp = _get_mcp_client()
+        if mcp:
+            mcp_tool = MCP_DELEGATED_TOOLS[tool_name]
+            try:
+                # Run async MCP call in sync context
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If already in async context, create a task
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        result = pool.submit(
+                            asyncio.run,
+                            mcp.execute_tool(mcp_tool, tool_input)
+                        ).result(timeout=30)
+                else:
+                    result = asyncio.run(mcp.execute_tool(mcp_tool, tool_input))
+
+                if result.get("ok"):
+                    logger.debug(f"Tool {tool_name} delegated to MCP successfully")
+                    return {
+                        "success": True,
+                        "data": result.get("data"),
+                        "source": "mcp",
+                    }
+                else:
+                    logger.warning(f"MCP tool {tool_name} failed, falling back to local: {result.get('error')}")
+            except Exception as e:
+                logger.warning(f"MCP delegation failed for {tool_name}, falling back to local: {e}")
+
+    # Local implementation (fallback or non-delegated tools)
     try:
         if tool_name == "execute_sql_write":
             return _execute_sql_write(tool_input)
