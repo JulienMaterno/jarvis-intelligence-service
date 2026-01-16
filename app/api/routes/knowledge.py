@@ -77,6 +77,18 @@ class HealthStatus(BaseModel):
     total_chunks: int
 
 
+class EmbedRequest(BaseModel):
+    """Embedding generation request."""
+    text: str = Field(..., description="Text to generate embedding for")
+
+
+class EmbedResponse(BaseModel):
+    """Embedding generation response."""
+    embedding: List[float]
+    model: str
+    tokens: int
+
+
 # ===================== Endpoints =====================
 
 @router.post("/search", response_model=SearchResponse)
@@ -288,6 +300,38 @@ async def knowledge_health_check():
             openai_configured=False,
             total_chunks=0
         )
+
+
+@router.post("/embed", response_model=EmbedResponse)
+async def generate_embedding(request: EmbedRequest):
+    """
+    Generate embedding vector for text.
+
+    Uses OpenAI's text-embedding-ada-002 model (1536 dimensions).
+    This endpoint allows external services (like jarvis-mcp-server)
+    to generate embeddings for semantic search.
+
+    **For MCP Server**: Use this to generate query embeddings for pgvector search.
+    """
+    try:
+        import openai
+        import os
+
+        client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        response = await client.embeddings.create(
+            model="text-embedding-ada-002",
+            input=request.text
+        )
+
+        return EmbedResponse(
+            embedding=response.data[0].embedding,
+            model="text-embedding-ada-002",
+            tokens=response.usage.total_tokens
+        )
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/reindex")
