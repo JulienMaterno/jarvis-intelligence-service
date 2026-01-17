@@ -91,35 +91,35 @@ def build_multi_analysis_prompt(
             for topic in existing_topics[:25]
         ])
         topics_context = f"""
-**EXISTING REFLECTIONS IN DATABASE (HIGH-LEVEL BUCKETS):**
+**EXISTING REFLECTIONS IN DATABASE:**
 {topics_lines}
 
-**🎯 CRITICAL: PREFER APPENDING TO EXISTING BUCKETS!**
-These reflections are HIGH-LEVEL life themes, NOT individual diary entries. 
-Aaron wants to build up comprehensive reflections over time, not scatter them.
+**REFLECTION ROUTING (when you have reflection-worthy content):**
 
-**STRONG PREFERENCE: APPEND unless user explicitly says "create new"**
+Reflections are for **deep personal insights** - thoughts you'd want to revisit months later.
+NOT for: daily activities (→ journal), conversations (→ meeting), or to-dos (→ task).
 
-**ROUTING DECISION (in order of priority):**
+**WHEN TO APPEND vs CREATE NEW:**
 
-1. **USER EXPLICIT INSTRUCTIONS** (only if clearly stated):
+1. **USER EXPLICIT INSTRUCTIONS** (highest priority):
    - "create new reflection", "new entry", "start fresh" → CREATE NEW
-   - "add to [title]", "continue [topic]", "append to" → APPEND
+   - "add to [title]", "continue [topic]" → APPEND to that reflection
    - Numbered series (e.g., "Exploring Out Loud #4") → CREATE NEW with that number
-   
-2. **MATCH BY TOPIC_KEY THEME** (DEFAULT - be generous with matching!):
-   - Gym, workout, exercise, running, diet, nutrition → `health-sport-nutrition`
-   - Vietnamese food, customs, local observations, markets → `vietnam-cultural-observations`  
-   - Career moves, job hunting, VC meetings, business → `career-development`
-   - Singapore planning, SE Asia relocation → `singapore-relocation`
-   - Relationships, dating, personal connections → `relationships`
-   - Jarvis system, AI assistant, automation → `project-jarvis`
-   
-3. **TO APPEND (PREFERRED)**: Set `append_to_id` to the existing reflection's ID
-4. **TO CREATE NEW (RARE)**: Only if genuinely new high-level topic not covered above
 
-**IMPORTANT:** A reflection titled "Health, Sport & Nutrition Journey" should get ALL fitness/diet content.
-Do NOT create "Gym Session Today" - append to the existing health bucket instead!
+2. **TOPIC MATCHING** (when user doesn't specify):
+   - If content genuinely continues an existing topic → APPEND (use the ID)
+   - If it's a new angle or fresh exploration → CREATE NEW
+   - **When in doubt → CREATE NEW** (it's cleaner to merge later than split)
+
+**EXISTING TOPIC_KEYS for appending:**
+- `health-sport-nutrition` - fitness/nutrition insights
+- `career-development` - career thoughts and realizations
+- `relationships` - relationship insights
+- `project-jarvis` - AI assistant development
+- `singapore-relocation` - SE Asia move planning
+
+**Remember:** A reflection titled "Health Journey" should get fitness INSIGHTS appended.
+But "went to gym today" is a JOURNAL entry, not a reflection.
 """
     else:
         topics_context = """
@@ -226,6 +226,17 @@ EXAMPLE CORRECTIONS:
         rich_context_section = _build_rich_context_section(rich_context)
 
     return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
+
+**🎯 YOUR JOB: EXTRACT INTO THE RIGHT CATEGORIES**
+
+| Category | What it's for |
+|----------|---------------|
+| **JOURNAL** | Daily activities, what happened today, plans for tomorrow |
+| **MEETING** | Conversations/interactions with other people |
+| **TASKS** | Action items, things to do |
+| **REFLECTION** | Deep personal insights, realizations, lessons learned |
+
+Use your judgment to categorize content appropriately. A single recording can produce multiple outputs (e.g., a journal AND tasks).
 {person_context_section}
 {calendar_context_section}
 {rich_context_section}
@@ -475,38 +486,25 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - You CAN create BOTH a journal AND reflections from one recording
    - Items in "tomorrow_focus" should be brief reminders, not necessarily tasks
 
-6. **REFLECTIONS** - AI-Driven Routing (YOU DECIDE):
+6. **REFLECTIONS** - For deep personal insights:
 
-   **🎯 APPEND vs CREATE NEW (YOU HAVE FULL CONTROL):**
-   
-   **LISTEN FOR USER'S EXPLICIT INSTRUCTIONS:**
-   - "create new reflection" / "new entry" / "start fresh" → set `append_to_id: null`
-   - "add to [topic]" / "continue [title]" / "append to" → set `append_to_id: <ID from list>`
-   - "Exploring Out Loud #4" (numbered) → CREATE NEW with that specific number
-   - If user says NOTHING about appending → use semantic judgment below
-   
-   **SEMANTIC ROUTING (when user doesn't specify):**
-   - Does this GENUINELY continue the same exploration/thought?
-   - Would appending make the reflection better, or dilute it?
-   - Is there significant time gap or shift in perspective?
-   - When in doubt → CREATE NEW (it's cleaner)
-   
+   **What goes here:** Realizations, philosophy, lessons learned, deep thinking on topics.
+   **What doesn't:** Daily activities (→ journal), conversations (→ meeting), to-dos (→ task).
+
+   **APPEND vs CREATE NEW:**
+   - User says "add to [topic]" → APPEND to that reflection ID
+   - User says "new reflection" or numbered series → CREATE NEW
+   - Content continues existing topic → APPEND
+   - New topic or fresh angle → CREATE NEW
+   - **When in doubt → CREATE NEW**
+
    **OUTPUT FIELD:**
    - To APPEND: `"append_to_id": "<UUID from existing reflections list>"`
    - To CREATE NEW: `"append_to_id": null`
-   
-   **TOPIC_KEY RULES (for new reflections):**
-   - topic_keys must be HIGH-LEVEL, BROAD themes
-   - Think "what folder would this live in?"
-   
-   ✅ GOOD topic_keys:
-   - "life-in-australia", "career-development", "project-jarvis"
-   - "relationships", "health-fitness", "singapore-relocation"
-   - "exploring-out-loud-4" (numbered series = specific installment)
-   
-   ❌ BAD topic_keys (too narrow):
-   - "kangaroos-in-sydney" → should be "life-in-australia"
-   - "call-with-tom" → this should be a MEETING, not a reflection
+
+   **TOPIC_KEY RULES:**
+   ✅ GOOD: "career-development", "relationships", "project-jarvis", "exploring-out-loud-4"
+   ❌ BAD: "gym-session-today" (journal), "call-with-tom" (meeting)
 
 7. **MEETINGS** - For conversations with people:
    - "person_name" is the PRIMARY person met with
@@ -726,9 +724,9 @@ If this is a journal, consider referencing/following up on items from recent day
                 line += f"\n    {preview}..."
             ref_lines.append(line)
         
-        sections.append(f"""**💭 RELATED REFLECTIONS (consider appending?):**
+        sections.append(f"""**💭 EXISTING REFLECTIONS (for routing):**
 {chr(10).join(ref_lines)}
-If this content continues one of these themes, consider appending instead of creating new.""")
+If transcript contains deep insights on these topics, consider appending. Daily activities go to JOURNAL instead.""")
     
     # 7. Calendar events (broader context than just name correction)
     calendar = rich_context.get("calendar_events", [])
@@ -842,7 +840,7 @@ Use this to:
 1. Correct names (use exact spellings from contacts)
 2. Understand relationships (previous meetings, email history)
 3. Avoid duplicate tasks (check existing tasks)
-4. Route reflections properly (append to existing if related)
+4. Route reflections properly (append to existing topics when relevant)
 5. Connect dots (calendar, memories, knowledge base)
 
 {chr(10).join(sections)}
