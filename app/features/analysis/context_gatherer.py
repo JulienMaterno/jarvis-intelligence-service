@@ -149,6 +149,15 @@ class ContextGatherer:
 - Locations mentioned
 - Dates/times mentioned (other than "today")
 
+**CONTENT TYPE DETECTION (CRITICAL):**
+- **journal**: Daily recap, "journaling for today", "today I...", what happened today, morning/evening routine
+- **meeting**: Conversation with a specific person, "met with X", "talked to", "had coffee with"
+- **task_planning**: Pure task listing, reminders, "I need to", "don't forget"
+- **reflection**: Deep philosophical insights ONLY (NOT daily activities), "I've realized that", lessons learned
+- **voice_note**: Quick general note that doesn't fit above
+
+**IMPORTANT:** If transcript says "journaling" or "journal entry" → content_type MUST be "journal", not "reflection"
+
 **RETURN JSON ONLY:**
 {{
   "person_names": ["Name 1", "Name 2"],

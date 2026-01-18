@@ -38,10 +38,14 @@ class MeetingsRepository:
         filename: str = None,
         transcript_id: str = None,
         calendar_event_id: str = None,
+        person_email: str = None,
     ) -> Tuple[str, str, Dict]:
         """
         Create meeting entry in Supabase.
-        
+
+        Args:
+            person_email: Email from calendar attendee for contact matching (optional)
+
         Returns:
             Tuple of (meeting_id, url, contact_match_info)
         """

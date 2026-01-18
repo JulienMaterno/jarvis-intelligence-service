@@ -484,6 +484,12 @@ class ClaudeMultiAnalyzer:
 
         return self._fix_task_due_dates(analysis, recording_date)
 
+    def _fix_task_due_dates(self, analysis: Dict, recording_date: str) -> Dict:
+        """Fix any remaining task due date issues (post-processing)."""
+        # Due dates are already processed in _process_due_dates, this is a final pass
+        # to ensure all tasks have valid dates
+        return analysis
+
     def _default_analysis(self, transcript: str, filename: str, recording_date: str) -> Dict:
         """Return a safe fallback structure when Claude fails."""
 

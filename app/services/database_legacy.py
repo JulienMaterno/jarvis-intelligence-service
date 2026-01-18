@@ -108,7 +108,8 @@ class SupabaseMultiDatabase:
         duration: float,
         filename: str,
         transcript_id: str = None,
-        calendar_event_id: str = None
+        calendar_event_id: str = None,
+        person_email: str = None,
     ) -> Tuple[str, str, Dict]:
         return self._meetings.create(
             meeting_data=meeting_data,
@@ -117,6 +118,7 @@ class SupabaseMultiDatabase:
             filename=filename,
             transcript_id=transcript_id,
             calendar_event_id=calendar_event_id,
+            person_email=person_email,
         )
     
     # =========================================================================

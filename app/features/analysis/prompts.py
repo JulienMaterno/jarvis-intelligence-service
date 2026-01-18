@@ -606,6 +606,9 @@ def _build_rich_context_section(rich_context: Dict[str, Any]) -> str:
     sections = []
     
     # 1. Extracted entities (what Stage 1 detected)
+    # NOTE: We intentionally do NOT pass content_type from Stage 1 to Stage 2
+    # to avoid biasing Sonnet's categorization. Sonnet should determine category
+    # based on the transcript content and the categorization rules at the top.
     entities = rich_context.get("extracted_entities", {})
     if entities:
         entity_summary = []
@@ -617,11 +620,10 @@ def _build_rich_context_section(rich_context: Dict[str, Any]) -> str:
             entity_summary.append(f"**Companies:** {', '.join(entities['companies'][:5])}")
         if entities.get("topics"):
             entity_summary.append(f"**Topics detected:** {', '.join(entities['topics'][:5])}")
-        if entities.get("content_type"):
-            entity_summary.append(f"**Detected type:** {entities['content_type']}")
+        # Removed: content_type - let Sonnet decide category based on transcript, not Stage 1's guess
         if entities.get("action_intent"):
             entity_summary.append(f"**Detected intent:** {', '.join(entities['action_intent'])}")
-        
+
         if entity_summary:
             sections.append(f"""**🔍 DETECTED ENTITIES (from pre-analysis):**
 {chr(10).join(entity_summary)}""")
@@ -657,11 +659,11 @@ Use these correct spellings. ⭐ = primary match, ? = suggestion
     if meetings:
         meeting_lines = []
         for m in meetings[:7]:
-            title = m.get("title", "Untitled")
-            date = m.get("date", "")
-            contact = m.get("contact_name", "")
-            summary = m.get("summary", "")[:100]
-            
+            title = m.get("title") or "Untitled"
+            date = m.get("date") or ""
+            contact = m.get("contact_name") or ""
+            summary = (m.get("summary") or "")[:100]
+
             line = f"  - [{date}] {title}"
             if contact:
                 line += f" (with {contact})"
@@ -692,11 +694,11 @@ Use these correct spellings. ⭐ = primary match, ? = suggestion
     if journals:
         journal_lines = []
         for j in journals[:3]:
-            date = j.get("date", "")
-            mood = j.get("mood", "")
+            date = j.get("date", "") or ""
+            mood = j.get("mood", "") or ""
             focus = ", ".join(j.get("tomorrow_focus", [])[:3]) if j.get("tomorrow_focus") else ""
-            summary = j.get("summary", "")[:80]
-            
+            summary = (j.get("summary") or "")[:80]
+
             line = f"  - **{date}**"
             if mood:
                 line += f" (mood: {mood})"
@@ -715,11 +717,11 @@ If this is a journal, consider referencing/following up on items from recent day
     if related_reflections:
         ref_lines = []
         for r in related_reflections[:5]:
-            title = r.get("title", "Untitled")
-            topic = r.get("topic_key", "")
+            title = r.get("title") or "Untitled"
+            topic = r.get("topic_key") or ""
             tags = ", ".join(r.get("tags", [])[:3]) if r.get("tags") else ""
-            preview = r.get("content_preview", "")[:80]
-            
+            preview = (r.get("content_preview") or "")[:80]
+
             line = f"  - **{title}** (topic: {topic})"
             if tags:
                 line += f" [tags: {tags}]"
@@ -736,28 +738,28 @@ If transcript contains deep insights on these topics, consider appending. Daily 
     if calendar:
         event_lines = []
         for e in calendar[:6]:
-            summary = e.get("summary", "Event")
-            start = e.get("start_time", "")[:16] if e.get("start_time") else ""
+            summary = e.get("summary") or "Event"
+            start = (e.get("start_time") or "")[:16]
             attendees = ", ".join(e.get("attendees", [])[:3])
-            
+
             line = f"  - [{start}] {summary}"
             if attendees:
                 line += f" (with {attendees})"
             event_lines.append(line)
-        
+
         sections.append(f"""**📆 CALENDAR CONTEXT:**
 {chr(10).join(event_lines)}""")
-    
+
     # 8. Relevant emails
     emails = rich_context.get("relevant_emails", [])
     if emails:
         email_lines = []
         for e in emails[:5]:
-            subject = e.get("subject", "No subject")[:40]
-            sender = e.get("sender", "Unknown")
-            date = e.get("date", "")[:10] if e.get("date") else ""
-            snippet = e.get("snippet", "")[:60]
-            
+            subject = (e.get("subject") or "No subject")[:40]
+            sender = e.get("sender") or "Unknown"
+            date = (e.get("date") or "")[:10]
+            snippet = (e.get("snippet") or "")[:60]
+
             line = f"  - [{date}] From {sender}: {subject}"
             if snippet:
                 line += f"\n    {snippet}..."
@@ -794,10 +796,10 @@ Cross-reference if the transcript mentions job search, interviews, or specific c
     if knowledge:
         knowledge_lines = []
         for k in knowledge[:10]:
-            source_type = k.get("source_type", "unknown")
-            similarity = k.get("similarity", 0)
-            content = k.get("content", "")[:200]
-            metadata = k.get("metadata", {})
+            source_type = k.get("source_type") or "unknown"
+            similarity = k.get("similarity") or 0
+            content = (k.get("content") or "")[:200]
+            metadata = k.get("metadata") or {}
             
             # Format by type
             if source_type == "transcript":
@@ -823,8 +825,8 @@ Cross-reference if the transcript mentions job search, interviews, or specific c
     if memories:
         memory_lines = []
         for m in memories[:8]:
-            content = m.get("content", "")[:150]
-            category = m.get("category", "")
+            content = (m.get("content") or "")[:150]
+            category = m.get("category") or ""
             
             if category:
                 line = f"  - [{category}] {content}..."
