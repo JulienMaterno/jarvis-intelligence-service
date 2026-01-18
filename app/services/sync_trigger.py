@@ -89,26 +89,116 @@ async def trigger_sync(sync_type: str) -> bool:
 async def trigger_syncs_for_records(db_records: dict) -> dict:
     """
     Trigger syncs based on what was created.
-    
+
     Args:
         db_records: Dict with lists of created IDs (task_ids, meeting_ids, etc.)
-    
+
     Returns:
         Dict with sync results
     """
     results = {}
-    
+
     # Determine which syncs to trigger based on what was created
     if db_records.get("task_ids"):
         results["tasks"] = await trigger_sync("tasks")
-    
+
     if db_records.get("meeting_ids"):
         results["meetings"] = await trigger_sync("meetings")
-    
+
     if db_records.get("reflection_ids"):
         results["reflections"] = await trigger_sync("reflections")
-    
+
     if db_records.get("journal_ids"):
         results["journals"] = await trigger_sync("journals")
-    
+
     return results
+
+
+async def trigger_quick_sync(entity_type: str, hours: int = 1) -> dict:
+    """
+    Trigger a quick incremental sync for a single entity.
+
+    This is designed for when the user wants to quickly sync recent changes
+    (e.g., after making a change in Notion and wanting it in Supabase).
+
+    Args:
+        entity_type: One of 'meetings', 'tasks', 'reflections', 'journals', 'contacts',
+                     'books', 'highlights', 'calendar', 'gmail'
+        hours: How many hours to look back (default 1 for quick sync)
+
+    Returns:
+        Dict with sync result including elapsed time
+    """
+    import time
+
+    if not SYNC_SERVICE_URL:
+        return {"success": False, "error": "SYNC_SERVICE_URL not configured"}
+
+    # Map entity types to endpoints
+    endpoint_map = {
+        "meetings": "/sync/meetings",
+        "tasks": "/sync/tasks",
+        "reflections": "/sync/reflections",
+        "journals": "/sync/reflections",
+        "contacts": "/sync/contacts",
+        "books": "/sync/books",
+        "highlights": "/sync/highlights",
+        "calendar": "/sync/calendar",
+        "gmail": "/sync/gmail",
+    }
+
+    endpoint = endpoint_map.get(entity_type.lower())
+    if not endpoint:
+        return {
+            "success": False,
+            "error": f"Unknown entity type: {entity_type}. Valid types: {', '.join(endpoint_map.keys())}"
+        }
+
+    # Build URL with parameters for incremental sync
+    url = f"{SYNC_SERVICE_URL.rstrip('/')}{endpoint}"
+    params = {"hours": hours, "full": "false"}
+
+    start_time = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info(f"Quick sync: {entity_type} (last {hours}h)")
+            response = await client.post(url, params=params)
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Quick sync {entity_type} completed in {elapsed_ms}ms")
+                return {
+                    "success": True,
+                    "entity_type": entity_type,
+                    "elapsed_ms": elapsed_ms,
+                    "data": result
+                }
+            else:
+                error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                logger.error(f"Quick sync {entity_type} failed: {error_msg}")
+                return {
+                    "success": False,
+                    "entity_type": entity_type,
+                    "elapsed_ms": elapsed_ms,
+                    "error": error_msg
+                }
+
+    except httpx.TimeoutException:
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        return {
+            "success": False,
+            "entity_type": entity_type,
+            "elapsed_ms": elapsed_ms,
+            "error": "Request timed out"
+        }
+    except Exception as e:
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        logger.error(f"Quick sync {entity_type} error: {e}")
+        return {
+            "success": False,
+            "entity_type": entity_type,
+            "elapsed_ms": elapsed_ms,
+            "error": str(e)
+        }

@@ -2309,6 +2309,38 @@ Backs up to Supabase Storage bucket.""",
             },
             "required": ["table_name"]
         }
+    },
+    # =========================================================================
+    # SYNC TOOLS
+    # =========================================================================
+    {
+        "name": "quick_sync",
+        "description": """Quickly sync a single entity type between Notion and Supabase.
+
+Use when user says:
+- "Sync my meetings now"
+- "Update my tasks from Notion"
+- "I just changed something in Notion, sync it"
+- "Sync [entity] please"
+
+This triggers a fast incremental sync (< 2 seconds) for just the specified entity type.
+Much faster than waiting for the full scheduled sync cycle.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["meetings", "tasks", "reflections", "journals", "contacts", "books", "highlights", "calendar", "gmail"],
+                    "description": "The type of data to sync"
+                },
+                "hours": {
+                    "type": "integer",
+                    "description": "How many hours to look back (default 1)",
+                    "default": 1
+                }
+            },
+            "required": ["entity_type"]
+        }
     }
 ]
 
@@ -2540,8 +2572,11 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any], last_user_message: 
             return _get_database_backup_status(tool_input)
         elif tool_name == "backup_table":
             return _backup_table(tool_input)
+        # Sync tools
+        elif tool_name == "quick_sync":
+            return _quick_sync(tool_input)
         # Research tools (LinkedIn via Bright Data, Web Search via Brave)
-        elif tool_name in ("linkedin_get_profiles", "linkedin_search_people", 
+        elif tool_name in ("linkedin_get_profiles", "linkedin_search_people",
                           "linkedin_get_company", "linkedin_get_company_employees",
                           "linkedin_get_company_jobs", "web_search", "web_search_news",
                           "get_research_status"):
@@ -5730,6 +5765,67 @@ def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
         result["message"] = "⚠️ Bridge running but Beeper Desktop not connected"
     
     return result
+
+
+# =============================================================================
+# SYNC TOOLS IMPLEMENTATIONS
+# =============================================================================
+
+def _quick_sync(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Quickly sync a single entity type.
+
+    This triggers a fast incremental sync for just the specified entity,
+    allowing users to sync recent changes without waiting for the full cycle.
+    """
+    from app.services.sync_trigger import trigger_quick_sync
+
+    entity_type = params.get("entity_type", "").lower()
+    hours = params.get("hours", 1)
+
+    if not entity_type:
+        return {"error": "entity_type is required"}
+
+    # Run the async function
+    try:
+        result = _run_async(trigger_quick_sync(entity_type, hours))
+
+        if result.get("success"):
+            elapsed_ms = result.get("elapsed_ms", 0)
+            sync_data = result.get("data", {})
+
+            # Extract stats from sync result if available
+            stats = sync_data.get("stats", sync_data)
+            created = stats.get("created", 0) or 0
+            updated = stats.get("updated", 0) or 0
+            deleted = stats.get("deleted", 0) or 0
+
+            summary = f"✅ Synced {entity_type} in {elapsed_ms}ms"
+            if created or updated or deleted:
+                summary += f" ({created} created, {updated} updated, {deleted} deleted)"
+            else:
+                summary += " (no changes)"
+
+            return {
+                "success": True,
+                "message": summary,
+                "entity_type": entity_type,
+                "elapsed_ms": elapsed_ms,
+                "changes": {"created": created, "updated": updated, "deleted": deleted}
+            }
+        else:
+            return {
+                "success": False,
+                "error": result.get("error", "Sync failed"),
+                "entity_type": entity_type
+            }
+
+    except Exception as e:
+        logger.error(f"Quick sync error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "entity_type": entity_type
+        }
 
 
 # =============================================================================
