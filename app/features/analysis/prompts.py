@@ -227,16 +227,19 @@ EXAMPLE CORRECTIONS:
 
     return f"""You are analyzing an audio transcript. The speaker is Aaron (the user) who recorded this voice memo.
 
-**🎯 YOUR JOB: EXTRACT INTO THE RIGHT CATEGORIES**
+**🚨 CRITICAL CATEGORIZATION RULES - READ FIRST:**
 
-| Category | What it's for |
-|----------|---------------|
-| **JOURNAL** | Daily activities, what happened today, plans for tomorrow |
-| **MEETING** | Conversations/interactions with other people |
-| **TASKS** | Action items, things to do |
-| **REFLECTION** | Deep personal insights, realizations, lessons learned |
+1. If transcript says "journaling", "journal entry", "today I..." → **primary_category: "journal"**, create a JOURNAL entry
+2. If transcript describes meeting/talking with a person → **primary_category: "meeting"**, create a MEETING entry
+3. REFLECTIONS are ONLY for deep philosophical insights, NOT for daily activities or conversations
 
-Use your judgment to categorize content appropriately. A single recording can produce multiple outputs (e.g., a journal AND tasks).
+**Category definitions:**
+| Category | What it's for | Example triggers |
+|----------|---------------|------------------|
+| **JOURNAL** | Daily activities, what happened today | "journaling for today", "today I went to", "this morning" |
+| **MEETING** | Conversations with people | "met with X", "had coffee with", "talked to" |
+| **TASKS** | Action items | "I need to", "reminder to", "don't forget" |
+| **REFLECTION** | Deep insights ONLY | "I've realized that", "my philosophy on", "lesson learned" |
 {person_context_section}
 {calendar_context_section}
 {rich_context_section}
