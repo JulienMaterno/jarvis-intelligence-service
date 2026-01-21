@@ -1,15 +1,32 @@
 # 🧠 Jarvis Intelligence Service
 
-> **THE BRAIN of the Jarvis ecosystem.** ALL AI processing and business logic lives here exclusively.
+> **THE BRAIN** - All AI processing happens here. One piece of the [Jarvis Ecosystem](https://github.com/JulienMaterno/jarvis-ecosystem).
 
-## 🎯 Role in the Ecosystem
+---
 
-This service is the **single source of intelligence**. Other services are specialized:
-- **Audio Pipeline** → Transcribes audio, then **calls this service** for analysis
-- **Telegram Bot** → Receives user input, forwards voice memos, receives notifications
-- **Sync Service** → Pure sync between Supabase, Notion, and Google
+**📚 New here?** Start with the [Jarvis Ecosystem Overview](https://github.com/JulienMaterno/jarvis-ecosystem) to understand how all 7 microservices work together. This README focuses on the **Intelligence Service** specifically.
 
-**Why centralized?** One place to maintain AI logic, prompts, and business rules. Easy to upgrade, easy to debug.
+---
+
+## 🎯 This Service's Role
+
+The Intelligence Service is the **single source of intelligence** in the Jarvis ecosystem. Think of it as the conductor of an orchestra:
+
+| Other Service | What It Does | How Intelligence Service Fits In |
+|---------------|--------------|----------------------------------|
+| 🎤 **Audio Pipeline** | Transcribes voice memos | Receives transcripts → analyzes with Claude → extracts meetings/tasks/reflections |
+| 📱 **Telegram Bot** | User interface (voice, text) | Receives user messages → processes with 40+ tools → sends responses |
+| 🔄 **Sync Service** | Syncs data across platforms | Pure sync logic, no AI. Intelligence Service owns all business logic. |
+| 💬 **Beeper Bridge** | Unified messaging gateway | Intelligence Service orchestrates: "send John a WhatsApp message" |
+| 📹 **Screenpipe Bridge** | Auto-captures meetings | Sends meeting audio → Intelligence Service analyzes and structures |
+
+**Why centralized AI?**
+- ✅ Upgrade Claude Sonnet 4 → Sonnet 5 in ONE place
+- ✅ Shared prompt caching across all features (90% cost savings)
+- ✅ Single codebase for all AI behavior (easy to debug)
+- ✅ Swap Claude for GPT-4o/Gemini without touching other services
+
+This is the **only** service that calls the Anthropic API. Everything else is "dumb" infrastructure.
 
 ## 🌟 Features
 
