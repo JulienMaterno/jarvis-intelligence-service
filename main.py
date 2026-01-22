@@ -1,8 +1,9 @@
 import logging
 import uuid
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from app.api.endpoints import router
 from app.core.config import settings
 
@@ -32,29 +33,75 @@ for handler in root_logger.handlers:
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """
     Middleware to add request ID tracing for distributed debugging.
-    
+
     Uses X-Request-ID header if provided (for cross-service tracing),
     otherwise generates a new UUID.
     """
-    
+
     async def dispatch(self, request: Request, call_next):
         # Get or generate request ID
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
-        
+
         # Store in request state for access in endpoints
         request.state.request_id = request_id
-        
+
         # Create a logging adapter for this request
         logger = logging.getLogger("jarvis.request")
         logger.info(f"[{request_id}] {request.method} {request.url.path}", extra={"request_id": request_id})
-        
+
         # Process request
         response = await call_next(request)
-        
+
         # Add request ID to response headers for debugging
         response.headers["X-Request-ID"] = request_id
-        
+
         return response
+
+
+class APIKeyAuthMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to enforce API key authentication on all endpoints.
+
+    Excludes /health endpoint (for load balancer health checks) and root.
+    Requires X-API-Key header with valid key from environment variable.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Public endpoints that don't require authentication
+        public_paths = ["/health", "/"]
+
+        if request.url.path in public_paths:
+            return await call_next(request)
+
+        # Check if API key is configured
+        expected_key = settings.INTELLIGENCE_SERVICE_API_KEY
+        if not expected_key:
+            # If no API key configured, log warning but allow (backward compatibility during rollout)
+            logger = logging.getLogger("jarvis.auth")
+            logger.warning("INTELLIGENCE_SERVICE_API_KEY not set - authentication disabled!")
+            return await call_next(request)
+
+        # Get API key from request headers
+        api_key = request.headers.get("X-API-Key")
+
+        if not api_key:
+            logger = logging.getLogger("jarvis.auth")
+            logger.warning(f"Missing API key from {request.client.host} for {request.url.path}")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing API key. Include X-API-Key header."}
+            )
+
+        if api_key != expected_key:
+            logger = logging.getLogger("jarvis.auth")
+            logger.warning(f"Invalid API key from {request.client.host} for {request.url.path}")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid API key"}
+            )
+
+        # API key is valid, proceed with request
+        return await call_next(request)
 
 
 app = FastAPI(
@@ -77,6 +124,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add API key authentication middleware (processes before request ID)
+app.add_middleware(APIKeyAuthMiddleware)
 
 # Add request ID middleware
 app.add_middleware(RequestIdMiddleware)

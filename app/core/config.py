@@ -27,6 +27,9 @@ _MCP_SERVER_URL = os.getenv('MCP_SERVER_URL', 'https://jarvis-mcp-server-7768718
 # Telegram config
 _TELEGRAM_CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID', '0'))
 
+# API Key for authentication
+_INTELLIGENCE_SERVICE_API_KEY = os.getenv('INTELLIGENCE_SERVICE_API_KEY')
+
 
 class Config:
     """Central configuration for the intelligence service."""
@@ -50,6 +53,9 @@ class Config:
     
     # Telegram
     TELEGRAM_CHAT_ID = _TELEGRAM_CHAT_ID
+
+    # API Authentication
+    INTELLIGENCE_SERVICE_API_KEY = _INTELLIGENCE_SERVICE_API_KEY
 
 
 settings = Config()

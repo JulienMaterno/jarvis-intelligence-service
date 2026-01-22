@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 import uuid
 
 from app.api.dependencies import get_database
+from app.core.logging_utils import sanitize_log_message
 
 logger = logging.getLogger("Jarvis.Intelligence.ChatStorage")
 
@@ -95,7 +96,9 @@ class ChatMessageStorage:
             
             if result.data:
                 msg_id = result.data[0].get("id")
-                logger.debug(f"Stored {role} message: {content[:50]}...")
+                # Sanitize content before logging to avoid PII leakage
+                safe_content = sanitize_log_message(content[:50])
+                logger.debug(f"Stored {role} message: {safe_content}...")
                 return msg_id
             return None
             

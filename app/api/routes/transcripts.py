@@ -6,8 +6,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.api.dependencies import get_services, get_memory
 from app.api.models import AnalysisResponse, TranscriptRequest, ProcessTranscriptRequest
 from app.services.sync_trigger import trigger_syncs_for_records
+from app.core.logging_utils import sanitize_log_message
 from app.features.telegram import (
-    send_telegram_message, 
+    send_telegram_message,
     build_processing_result_message,
     send_meeting_feedback,
 )
@@ -271,7 +272,9 @@ async def process_transcript(
                 "person_email": request.person_context.person_email,  # Email from calendar
                 "previous_meetings_summary": request.person_context.previous_meetings_summary,
             }
-            logger.info(f"Processing transcript {transcript_id} with person context: {person_context.get('confirmed_person_name')} <{person_context.get('person_email', 'no email')}>")
+            # Log without PII (email is redacted)
+            person_name = person_context.get('confirmed_person_name', 'Unknown')
+            logger.info(f"Processing transcript {transcript_id} with person context: {person_name}")
         
         # Extract user notes if provided (from /note command during meeting)
         if request and request.user_notes:

@@ -18,6 +18,7 @@ Usage:
     # Get available tools
     tools = await mcp_client.list_tools()
 """
+from app.core.logging_utils import sanitize_for_logging
 
 import os
 import logging
