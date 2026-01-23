@@ -20,7 +20,6 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
-import httpx
 
 from app.api.dependencies import get_database, get_memory
 from app.services.llm import ClaudeMultiAnalyzer
@@ -30,7 +29,7 @@ from app.features.briefing.meeting_briefing import (
     format_briefing_for_telegram,
     MeetingBriefing,
 )
-from app.shared.constants import TELEGRAM_BOT_URL
+from app.features.telegram.notifications import send_telegram_message
 import os
 
 router = APIRouter(tags=["Briefing"])
@@ -108,11 +107,14 @@ class ManualBriefingRequest(BaseModel):
 # ============================================================================
 
 async def send_telegram_notification(message: str, chat_id: Optional[int] = None) -> bool:
-    """Send a briefing notification via Telegram."""
-    if not TELEGRAM_BOT_URL:
-        logger.warning("TELEGRAM_BOT_URL not configured, skipping notification")
-        return False
-    
+    """
+    Send a briefing notification via Telegram.
+
+    Uses the shared send_telegram_message function which includes:
+    - API key authentication (X-API-Key header)
+    - Retry logic with exponential backoff
+    - Proper error handling
+    """
     # Use provided chat_id or fall back to default
     target_chat_id = chat_id
     if not target_chat_id and DEFAULT_TELEGRAM_CHAT_ID:
@@ -121,34 +123,12 @@ async def send_telegram_notification(message: str, chat_id: Optional[int] = None
         except ValueError:
             logger.error(f"Invalid DEFAULT_TELEGRAM_CHAT_ID: {DEFAULT_TELEGRAM_CHAT_ID}")
             return False
-    
+
     if not target_chat_id:
         logger.warning("No chat_id provided and no DEFAULT_TELEGRAM_CHAT_ID configured")
         return False
-    
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            payload = {
-                "chat_id": target_chat_id,
-                "text": message,
-                "parse_mode": "Markdown"
-            }
-            
-            response = await client.post(
-                f"{TELEGRAM_BOT_URL}/send_message",
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"Telegram notification sent successfully to chat {target_chat_id}")
-                return True
-            else:
-                logger.warning(f"Telegram notification failed: {response.status_code} - {response.text}")
-                return False
-                
-    except Exception as e:
-        logger.error(f"Error sending Telegram notification: {e}")
-        return False
+
+    return await send_telegram_message(message, chat_id=target_chat_id)
 
 
 # ============================================================================
