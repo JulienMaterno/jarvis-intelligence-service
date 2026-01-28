@@ -73,13 +73,15 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in public_paths:
             return await call_next(request)
 
-        # Check if API key is configured
+        # Check if API key is configured - FAIL CLOSED
         expected_key = settings.INTELLIGENCE_SERVICE_API_KEY
         if not expected_key:
-            # If no API key configured, log warning but allow (backward compatibility during rollout)
             logger = logging.getLogger("jarvis.auth")
-            logger.warning("INTELLIGENCE_SERVICE_API_KEY not set - authentication disabled!")
-            return await call_next(request)
+            logger.error("INTELLIGENCE_SERVICE_API_KEY not set - rejecting request (fail-closed)")
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Service authentication not configured"}
+            )
 
         # Get API key from request headers
         api_key = request.headers.get("X-API-Key")
