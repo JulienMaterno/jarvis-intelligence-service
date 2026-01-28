@@ -34,6 +34,9 @@ MCP_SERVER_URL = os.getenv(
     "https://jarvis-mcp-server-776871804948.asia-southeast1.run.app"
 )
 
+# MCP API key for authenticating with the MCP server
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")
+
 
 class MCPClient:
     """HTTP client for jarvis-mcp-server."""
@@ -55,13 +58,16 @@ class MCPClient:
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
         if self._client is None or self._client.is_closed:
+            headers = {
+                "Content-Type": "application/json",
+                "X-Client-Name": "jarvis-intelligence-service",
+            }
+            if MCP_API_KEY:
+                headers["X-API-Key"] = MCP_API_KEY
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=self.timeout,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Client-Name": "jarvis-intelligence-service",
-                }
+                headers=headers,
             )
         return self._client
 

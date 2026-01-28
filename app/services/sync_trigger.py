@@ -3,6 +3,7 @@ Sync Trigger Service.
 Triggers the Sync Service to push newly created data to Notion immediately.
 """
 
+import os
 import logging
 import httpx
 import asyncio
@@ -13,9 +14,20 @@ logger = logging.getLogger('Jarvis.Intelligence.SyncTrigger')
 # Sync service base URL
 SYNC_SERVICE_URL = settings.SYNC_SERVICE_URL
 
+# Internal API key for authenticating with other services
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
 # Retry configuration
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+
+
+def _get_sync_headers() -> dict:
+    """Get authentication headers for sync service requests."""
+    headers = {}
+    if INTERNAL_API_KEY:
+        headers["X-API-Key"] = INTERNAL_API_KEY
+    return headers
 
 
 async def trigger_sync(sync_type: str) -> bool:
@@ -54,8 +66,8 @@ async def trigger_sync(sync_type: str) -> bool:
                     logger.info(f"Triggering sync: {url}")
                 else:
                     logger.info(f"Retrying sync {sync_type} (attempt {attempt + 1}/{MAX_RETRIES})")
-                    
-                response = await client.post(url)
+
+                response = await client.post(url, headers=_get_sync_headers())
                 
                 if response.status_code == 200:
                     result = response.json()
@@ -162,7 +174,7 @@ async def trigger_quick_sync(entity_type: str, hours: int = 1) -> dict:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             logger.info(f"Quick sync: {entity_type} (last {hours}h)")
-            response = await client.post(url, params=params)
+            response = await client.post(url, params=params, headers=_get_sync_headers())
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
