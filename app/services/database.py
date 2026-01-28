@@ -248,7 +248,33 @@ class SupabaseMultiDatabase:
         except Exception as e:
             logger.error(f"Error creating transcript: {e}")
             raise
-    
+
+    def update_transcript_linkage(
+        self,
+        transcript_id: str,
+        meeting_ids: List[str],
+        reflection_ids: List[str],
+        journal_ids: List[str],
+    ) -> bool:
+        """Update transcript with arrays of created record IDs for cross-referencing."""
+        try:
+            payload = {}
+            if meeting_ids:
+                payload["meeting_ids"] = meeting_ids
+            if reflection_ids:
+                payload["reflection_ids"] = reflection_ids
+            if not payload:
+                return True  # Nothing to update
+
+            from datetime import datetime, timezone
+            payload["processed_at"] = datetime.now(timezone.utc).isoformat()
+            self.client.table("transcripts").update(payload).eq("id", transcript_id).execute()
+            logger.info(f"Updated transcript {transcript_id} linkage: {len(meeting_ids)} meetings, {len(reflection_ids)} reflections")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update transcript linkage for {transcript_id}: {e}")
+            return False
+
     # =========================================================================
     # MEETINGS
     # =========================================================================

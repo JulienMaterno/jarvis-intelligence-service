@@ -496,6 +496,15 @@ async def process_transcript(
                 )
                 db_records["task_ids"].extend(task_ids)
 
+        # Write linkage back to transcript row for cross-referencing
+        if db_records["meeting_ids"] or db_records["reflection_ids"]:
+            db.update_transcript_linkage(
+                transcript_id=transcript_id,
+                meeting_ids=db_records["meeting_ids"],
+                reflection_ids=db_records["reflection_ids"],
+                journal_ids=db_records.get("journal_ids", []),
+            )
+
         # Process CRM updates (contact info learned from meetings)
         crm_updates = analysis.get("crm_updates", [])
         if crm_updates:
@@ -714,6 +723,15 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                     origin_type="reflection",
                 )
                 db_records["task_ids"].extend(task_ids)
+
+        # Write linkage back to transcript row for cross-referencing
+        if db_records["meeting_ids"] or db_records["reflection_ids"]:
+            db.update_transcript_linkage(
+                transcript_id=transcript_id,
+                meeting_ids=db_records["meeting_ids"],
+                reflection_ids=db_records["reflection_ids"],
+                journal_ids=db_records.get("journal_ids", []),
+            )
 
         # Process CRM updates (contact info learned from meetings)
         crm_updates = analysis.get("crm_updates", [])
