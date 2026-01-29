@@ -354,42 +354,56 @@ class ClaudeMultiAnalyzer:
         ASYNC version - Send the prompt to Claude without blocking.
         Uses the async Anthropic client for non-blocking API calls.
         """
-        # Scale max_tokens based on prompt size
-        # 16K tokens for very long transcripts (90+ min meetings)
-        # But keep it short for quick notes to save cost and ensure concise output
-        prompt_length = len(prompt)
-        if prompt_length > 150000:
-            max_tokens = 16000  # Very long transcript (90+ min) - need comprehensive output
-        elif prompt_length > 100000:
-            max_tokens = 12000  # Long transcript (60-90 min)
-        elif prompt_length > 50000:
-            max_tokens = 8000   # Medium transcript (30-60 min)
-        elif prompt_length > 20000:
-            max_tokens = 6000   # Shorter transcript (10-30 min)
-        elif prompt_length > 5000:
-            max_tokens = 4000   # Brief meeting/note
-        else:
-            max_tokens = 2000   # Very short note - keep response concise
+        with tracer.start_as_current_span("llm.invoke_model_async") as span:
+            # Scale max_tokens based on prompt size
+            # 16K tokens for very long transcripts (90+ min meetings)
+            # But keep it short for quick notes to save cost and ensure concise output
+            prompt_length = len(prompt)
+            if prompt_length > 150000:
+                max_tokens = 16000  # Very long transcript (90+ min) - need comprehensive output
+            elif prompt_length > 100000:
+                max_tokens = 12000  # Long transcript (60-90 min)
+            elif prompt_length > 50000:
+                max_tokens = 8000   # Medium transcript (30-60 min)
+            elif prompt_length > 20000:
+                max_tokens = 6000   # Shorter transcript (10-30 min)
+            elif prompt_length > 5000:
+                max_tokens = 4000   # Brief meeting/note
+            else:
+                max_tokens = 2000   # Very short note - keep response concise
 
-        response = await self.async_client.messages.create(
-            model=model_name,
-            max_tokens=max_tokens,
-            temperature=0.3,  # Lower temperature for consistent JSON output
-            messages=[{"role": "user", "content": prompt}],
-        )
+            # Add span attributes for observability
+            span.set_attribute("llm.model", model_name)
+            span.set_attribute("llm.prompt_length", prompt_length)
+            span.set_attribute("llm.max_tokens", max_tokens)
+            span.set_attribute("llm.temperature", 0.3)
 
-        if not response.content:
-            raise ValueError(f"Model {model_name} returned empty content")
+            response = await self.async_client.messages.create(
+                model=model_name,
+                max_tokens=max_tokens,
+                temperature=0.3,  # Lower temperature for consistent JSON output
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-        block = response.content[0]
-        result_text = block.text if hasattr(block, "text") else str(block)
-        result_text = result_text.strip()
+            if not response.content:
+                span.set_attribute("llm.error", "empty_content")
+                raise ValueError(f"Model {model_name} returned empty content")
 
-        if result_text.startswith("```"):
-            result_text = re.sub(r"^```(?:json)?\n?", "", result_text)
-            result_text = re.sub(r"\n?```$", "", result_text)
+            block = response.content[0]
+            result_text = block.text if hasattr(block, "text") else str(block)
+            result_text = result_text.strip()
 
-        return result_text
+            # Record response metrics
+            span.set_attribute("llm.response_length", len(result_text))
+            if hasattr(response, "usage"):
+                span.set_attribute("llm.input_tokens", response.usage.input_tokens)
+                span.set_attribute("llm.output_tokens", response.usage.output_tokens)
+
+            if result_text.startswith("```"):
+                result_text = re.sub(r"^```(?:json)?\n?", "", result_text)
+                result_text = re.sub(r"\n?```$", "", result_text)
+
+            return result_text
 
     def _process_due_dates(self, analysis: Dict, recording_date: str) -> Dict:
         """Convert natural language due contexts to ISO dates."""

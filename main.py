@@ -1,11 +1,13 @@
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from app.api.endpoints import router
 from app.core.config import settings
+from app.services.http_client import http_client_manager
 
 
 # Add a filter to inject request_id into log records
@@ -106,10 +108,33 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+logger = logging.getLogger("Jarvis.Intelligence")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan manager for startup and shutdown tasks.
+
+    Handles:
+    - HTTP client pool initialization and cleanup
+    """
+    # Startup: Initialize HTTP client pool
+    logger.info("Starting HTTP client pool")
+    await http_client_manager.startup()
+
+    yield
+
+    # Shutdown: Clean up HTTP client pool
+    logger.info("Shutting down HTTP client pool")
+    await http_client_manager.shutdown()
+
+
 app = FastAPI(
     title="Jarvis Intelligence Service",
     description="AI Analysis and Reasoning Service for Jarvis",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware for web chat access

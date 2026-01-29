@@ -22,3 +22,10 @@ python-multipart  # For file uploads
 # Service-to-service authentication (Cloud Run)
 requests
 google-auth  # For local dev identity token fallback
+
+# OpenTelemetry - Distributed Tracing
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
+opentelemetry-exporter-otlp  # For future production exporters
