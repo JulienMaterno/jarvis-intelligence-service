@@ -6,8 +6,12 @@ Handles creation and updates across Meetings, Reflections, Tasks, and Contacts.
 import logging
 from typing import Dict, List, Optional, Tuple, Any
 from app.core.database import supabase
+from app.core.tracing import get_tracer
 
 logger = logging.getLogger('Jarvis.Intelligence.Database')
+
+# Tracer for database operations
+tracer = get_tracer(__name__)
 
 
 def get_database():
@@ -31,7 +35,7 @@ class SupabaseMultiDatabase:
     # =========================================================================
     
     def log_pipeline_event(
-        self, 
+        self,
         run_id: str,
         event_type: str,
         status: str,
@@ -43,24 +47,32 @@ class SupabaseMultiDatabase:
         """
         Log a pipeline event to pipeline_logs table.
         """
-        try:
-            payload = {
-                "run_id": run_id,
-                "event_type": event_type,
-                "status": status,
-                "message": message,
-            }
-            if source_file:
-                payload["source_file"] = source_file
-            if duration_ms is not None:
-                payload["duration_ms"] = duration_ms
-            if details:
-                payload["details"] = details
-            
-            self.client.table("pipeline_logs").insert(payload).execute()
-            logger.debug(f"[{event_type}] {status}: {message}")
-        except Exception as e:
-            logger.error(f"Failed to log pipeline event: {e}")
+        with tracer.start_as_current_span("db.log_pipeline_event") as span:
+            span.set_attribute("db.table", "pipeline_logs")
+            span.set_attribute("db.operation", "insert")
+            span.set_attribute("pipeline.run_id", run_id)
+            span.set_attribute("pipeline.event_type", event_type)
+
+            try:
+                payload = {
+                    "run_id": run_id,
+                    "event_type": event_type,
+                    "status": status,
+                    "message": message,
+                }
+                if source_file:
+                    payload["source_file"] = source_file
+                if duration_ms is not None:
+                    payload["duration_ms"] = duration_ms
+                if details:
+                    payload["details"] = details
+
+                self.client.table("pipeline_logs").insert(payload).execute()
+                logger.debug(f"[{event_type}] {status}: {message}")
+            except Exception as e:
+                span.set_attribute("error", True)
+                span.set_attribute("error.message", str(e))
+                logger.error(f"Failed to log pipeline event: {e}")
     
     # =========================================================================
     # CONTACT LOOKUP
