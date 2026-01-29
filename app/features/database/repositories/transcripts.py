@@ -143,3 +143,38 @@ class TranscriptsRepository:
         except Exception as e:
             logger.error(f"Error getting transcripts for seeding: {e}")
             return []
+
+    def update_linkage(
+        self,
+        transcript_id: str,
+        meeting_ids: List[str],
+        reflection_ids: List[str],
+        journal_ids: List[str] = None,
+    ) -> bool:
+        """
+        Update transcript with arrays of created record IDs for cross-referencing.
+
+        This enables bi-directional navigation between transcripts and their
+        derived records (meetings, reflections, journals).
+        """
+        from datetime import datetime, timezone
+
+        try:
+            payload = {}
+            if meeting_ids:
+                payload["meeting_ids"] = meeting_ids
+            if reflection_ids:
+                payload["reflection_ids"] = reflection_ids
+            if not payload:
+                return True  # Nothing to update
+
+            payload["processed_at"] = datetime.now(timezone.utc).isoformat()
+            self.client.table("transcripts").update(payload).eq("id", transcript_id).execute()
+            logger.info(
+                f"Updated transcript {transcript_id} linkage: "
+                f"{len(meeting_ids)} meetings, {len(reflection_ids)} reflections"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update transcript linkage for {transcript_id}: {e}")
+            return False

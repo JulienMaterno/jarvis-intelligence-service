@@ -96,7 +96,22 @@ class SupabaseMultiDatabase:
             speakers=speakers,
             model_used=model_used,
         )
-    
+
+    def update_transcript_linkage(
+        self,
+        transcript_id: str,
+        meeting_ids: List[str],
+        reflection_ids: List[str],
+        journal_ids: List[str] = None,
+    ) -> bool:
+        """Update transcript with IDs of created records for cross-referencing."""
+        return self._transcripts.update_linkage(
+            transcript_id=transcript_id,
+            meeting_ids=meeting_ids,
+            reflection_ids=reflection_ids,
+            journal_ids=journal_ids or [],
+        )
+
     # =========================================================================
     # MEETING METHODS (delegated)
     # =========================================================================
