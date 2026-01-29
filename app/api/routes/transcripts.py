@@ -364,6 +364,25 @@ async def process_transcript(
 
         primary_category = analysis.get("primary_category", "other")
 
+        # Force meeting category for screenpipe/meeting recordings
+        # The source_type is set by the audio pipeline when it's a known meeting recording
+        transcript_source_type = transcript_record.get("source_type")
+        if transcript_source_type == "meeting":
+            if primary_category != "meeting":
+                logger.info(f"Overriding category from '{primary_category}' to 'meeting' (source_type=meeting)")
+                primary_category = "meeting"
+
+                # Ensure at least one meeting is created if AI didn't extract any
+                if not analysis.get("meetings"):
+                    # Create a default meeting entry
+                    analysis["meetings"] = [{
+                        "title": f"Meeting ({filename})",
+                        "summary": analysis.get("summary", "Auto-captured meeting recording"),
+                        "topics_discussed": analysis.get("key_topics", []),
+                        "date": transcript_record.get("created_at"),
+                    }]
+                    logger.info("Created default meeting entry for source_type=meeting")
+
         for journal in analysis.get("journals", []):
             j_id, _ = db.create_journal(
                 journal_data=journal,
