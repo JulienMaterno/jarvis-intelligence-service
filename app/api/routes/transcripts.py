@@ -424,7 +424,7 @@ async def process_transcript(
         for meeting in analysis.get("meetings", []):
             # Get person_email from person_context for enhanced contact matching
             person_email = person_context.get("person_email") if person_context else None
-            
+
             m_id, _, contact_match_info = db.create_meeting(
                 meeting_data=meeting,
                 transcript=transcript_text,
@@ -449,7 +449,17 @@ async def process_transcript(
                 origin_type="meeting",
             )
 
-        for reflection in analysis.get("reflections", []):
+        # Skip reflection creation for meeting recordings - meetings should not create reflections
+        # This prevents fallback analysis from creating garbage reflections when Claude API fails
+        reflections_to_process = analysis.get("reflections", [])
+        if transcript_source_type == "meeting" and reflections_to_process:
+            logger.info(
+                "Skipping %d reflection(s) for source_type=meeting - meetings don't create reflections",
+                len(reflections_to_process)
+            )
+            reflections_to_process = []
+
+        for reflection in reflections_to_process:
             tags = reflection.get("tags", [])
             title = reflection.get("title", "")
             

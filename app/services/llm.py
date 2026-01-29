@@ -17,9 +17,13 @@ from typing import Dict, List, Optional, Any
 from anthropic import Anthropic, AsyncAnthropic
 
 from app.core.config import settings
+from app.core.tracing import get_tracer
 from app.features.analysis.prompts import build_multi_analysis_prompt
 
 logger = logging.getLogger("Jarvis.Intelligence.LLM")
+
+# Get tracer for LLM operations
+tracer = get_tracer(__name__)
 
 
 class ClaudeMultiAnalyzer:
