@@ -226,10 +226,18 @@ async def trigger_briefing(request: TriggerBriefingRequest):
         
         # Generate briefing
         briefing = await generate_meeting_briefing(db, llm, event, memory)
-        
+
         if not briefing:
-            raise HTTPException(status_code=500, detail="Failed to generate briefing")
-        
+            # Briefing was skipped (no history, no LinkedIn data)
+            return BriefingResponse(
+                status="skipped",
+                event_id=request.event_id,
+                event_title=event.get("summary", event.get("title", "Meeting")),
+                event_start=event.get("start_time", ""),
+                briefing_text="No prior interactions or LinkedIn data found.",
+                notification_sent=False
+            )
+
         notification_sent = False
         if request.send_notification:
             telegram_text = format_briefing_for_telegram(briefing)
@@ -300,15 +308,24 @@ async def generate_contact_briefing(
         
         # Generate briefing
         briefing = await generate_meeting_briefing(db, llm, pseudo_event, memory)
-        
+
         if not briefing:
-            raise HTTPException(status_code=500, detail="Failed to generate briefing")
-        
+            # Briefing was skipped (no history, no LinkedIn data)
+            return BriefingResponse(
+                status="skipped",
+                event_id=f"manual-{contact_id}",
+                event_title=f"Meeting with {contact_name}",
+                event_start=datetime.now(timezone.utc).isoformat(),
+                contact_name=contact_name,
+                briefing_text="No prior interactions or LinkedIn data found.",
+                notification_sent=False
+            )
+
         notification_sent = False
         if send_notification:
             telegram_text = format_briefing_for_telegram(briefing)
             notification_sent = await send_telegram_notification(telegram_text)
-        
+
         return BriefingResponse(
             status="success",
             event_id=briefing.event_id,
@@ -364,15 +381,23 @@ async def get_next_meeting_briefing(send_notification: bool = False):
         
         # Generate briefing
         briefing = await generate_meeting_briefing(db, llm, event, memory)
-        
+
         if not briefing:
-            raise HTTPException(status_code=500, detail="Failed to generate briefing")
-        
+            # Briefing was skipped (no history, no LinkedIn data)
+            return BriefingResponse(
+                status="skipped",
+                event_id=event.get("id", "unknown"),
+                event_title=event.get("summary", event.get("title", "Meeting")),
+                event_start=event.get("start_time", ""),
+                briefing_text="No prior interactions or LinkedIn data found.",
+                notification_sent=False
+            )
+
         notification_sent = False
         if send_notification:
             telegram_text = format_briefing_for_telegram(briefing)
             notification_sent = await send_telegram_notification(telegram_text)
-        
+
         return BriefingResponse(
             status="success",
             event_id=briefing.event_id,
@@ -388,7 +413,7 @@ async def get_next_meeting_briefing(send_notification: bool = False):
             briefing_text=briefing.briefing_text,
             notification_sent=notification_sent
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
