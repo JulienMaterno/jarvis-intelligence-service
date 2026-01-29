@@ -391,6 +391,39 @@ def get_beeper_messages_by_chat_id(db, beeper_chat_id: str, limit: int = 20) -> 
         return []
 
 
+def search_beeper_messages_by_content(db, search_terms: List[str], limit: int = 20) -> List[Dict]:
+    """
+    Search Beeper messages that mention specific terms (e.g., a person's name).
+    Useful for finding intro messages or mentions in group chats.
+
+    Args:
+        db: Database client
+        search_terms: List of terms to search for (e.g., ["georgina", "algiplex"])
+        limit: Maximum messages to return
+
+    Returns: List of matching messages
+    """
+    if not search_terms:
+        return []
+
+    try:
+        # Build OR query for all search terms
+        or_conditions = ",".join([f"content.ilike.%{term}%" for term in search_terms])
+
+        result = db.client.table("beeper_messages").select(
+            "content, platform, is_outgoing, timestamp, sender_name, message_type"
+        ).or_(
+            or_conditions
+        ).order(
+            "timestamp", desc=True
+        ).limit(limit).execute()
+
+        return result.data or []
+    except Exception as e:
+        logger.error(f"Error searching Beeper messages for terms {search_terms}: {e}")
+        return []
+
+
 def get_beeper_messages_for_contact(db, contact_id: str, limit: int = 20) -> List[Dict]:
     """
     Get recent Beeper messages (WhatsApp, LinkedIn, etc.) with a contact.
@@ -959,6 +992,20 @@ async def generate_meeting_briefing(
             if beeper_chat_id:
                 contact_context["beeper_messages"] = get_beeper_messages_by_chat_id(db, beeper_chat_id, limit=20)
                 contact_context["beeper_chats"] = [beeper_chat_match]
+        else:
+            # No direct chat found - search for mentions in any messages (e.g., intro in group chat)
+            # Build search terms from name parts
+            name_parts = person_name_for_beeper.lower().split()
+            search_terms = [name_parts[0]]  # First name
+            if len(name_parts) > 1:
+                search_terms.append(name_parts[-1])  # Last name
+                search_terms.append(person_name_for_beeper.lower())  # Full name
+
+            mention_messages = search_beeper_messages_by_content(db, search_terms, limit=15)
+            if mention_messages:
+                logger.info(f"Found {len(mention_messages)} messages mentioning '{person_name_for_beeper}'")
+                contact_context["beeper_messages"] = mention_messages
+                contact_context["beeper_chats"] = [{"platform": "mentions", "chat_name": f"Messages about {person_name_for_beeper}"}]
 
     # If no contact found, also try to find emails by attendee email directly
     if not contact_id and attendees:
