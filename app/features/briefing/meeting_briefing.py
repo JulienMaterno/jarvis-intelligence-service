@@ -764,7 +764,7 @@ CONTACT INFORMATION:
         # No history and no LinkedIn - signal to use simple message
         return None
 
-    prompt = f"""Summarize ONLY what's explicitly in the data below. Be extremely literal.
+    prompt = f"""Generate a meeting briefing focusing on what was discussed LAST TIME so I know where to continue.
 
 {contact_info}
 
@@ -778,16 +778,24 @@ CONTACT INFORMATION:
 
 {open_items}
 
+FOCUS ON:
+1. What we discussed in the LAST meeting/conversation (most important!)
+2. Any recent messages or emails with substantive content
+3. Open items or follow-ups from previous discussions
+4. Key topics to potentially continue
+
 STRICT RULES:
 1. ONLY state facts explicitly written in the data above
-2. If emails are just scheduling (confirming times, calendar invites), write "First substantive conversation"
+2. If emails are just scheduling (confirming times, calendar invites), ignore them
 3. NEVER invent names, topics, projects, or connections not in the data
-4. NEVER suggest follow-up questions unless something specific was discussed
-5. Maximum 50 words
-6. If nothing substantive, just write "No prior context."
+4. Prioritize the most RECENT substantive interaction
+5. Maximum 120 words
+6. If nothing substantive found, write "First substantive conversation."
 
-Output format - one line only:
-[Your one-line summary based strictly on the data, or "No prior context."]"""
+Output format:
+- Start with what we discussed last time
+- Then any relevant recent context
+- Keep it actionable and concise"""
 
     try:
         response = llm.client.messages.create(
