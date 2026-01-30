@@ -576,10 +576,41 @@ def get_calendar_events_for_contact(db, contact_id: str, contact_email: str = No
         return []
 
 
+def get_transcript_excerpt(db, transcript_id: str, max_chars: int = 2000) -> Optional[str]:
+    """
+    Get an excerpt from a transcript for briefing context.
+
+    Args:
+        db: Database client
+        transcript_id: UUID of the transcript
+        max_chars: Maximum characters to return
+
+    Returns:
+        Truncated transcript text or None
+    """
+    if not transcript_id:
+        return None
+
+    try:
+        result = db.client.table("transcripts").select("full_text").eq(
+            "id", transcript_id
+        ).single().execute()
+
+        if result.data and result.data.get("full_text"):
+            full_text = result.data["full_text"]
+            if len(full_text) > max_chars:
+                return full_text[:max_chars] + "... [truncated]"
+            return full_text
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching transcript {transcript_id}: {e}")
+        return None
+
+
 def get_contact_context(db, contact_id: str) -> Dict[str, Any]:
     """
     Get comprehensive context about a contact for briefing.
-    
+
     Returns:
         Dict with contact info, previous meetings, emails, calendar events, Beeper messages, and open items
     """
@@ -619,7 +650,17 @@ def get_contact_context(db, contact_id: str) -> Dict[str, Any]:
         if meetings_result.data:
             context["previous_meetings"] = meetings_result.data
             context["last_meeting"] = meetings_result.data[0] if meetings_result.data else None
-        
+
+            # Get transcript for the most recent meeting (if available)
+            last_meeting = context["last_meeting"]
+            if last_meeting:
+                transcript_id = last_meeting.get("transcript_id") or last_meeting.get("source_transcript_id")
+                if transcript_id:
+                    transcript_excerpt = get_transcript_excerpt(db, transcript_id, max_chars=3000)
+                    if transcript_excerpt:
+                        context["last_meeting_transcript"] = transcript_excerpt
+                        logger.info(f"Found transcript for last meeting with {contact_id}")
+
         # Get open tasks related to this contact's meetings
         if context["previous_meetings"]:
             meeting_ids = [m["id"] for m in context["previous_meetings"]]
@@ -669,6 +710,7 @@ def generate_briefing_with_llm(
     contact = contact_context.get("contact") or {}
     previous_meetings = contact_context.get("previous_meetings", [])
     last_meeting = contact_context.get("last_meeting")
+    last_meeting_transcript = contact_context.get("last_meeting_transcript")
     open_tasks = contact_context.get("open_tasks", [])
     recent_emails = contact_context.get("recent_emails", [])
     previous_events = contact_context.get("previous_events", [])
@@ -706,13 +748,68 @@ CONTACT INFORMATION:
     
     meeting_history = ""
     if previous_meetings:
-        meeting_history = "PREVIOUS MEETINGS (Voice Memos):\n"
-        for i, m in enumerate(previous_meetings[:5], 1):
+        meeting_history = "PREVIOUS MEETINGS:\n"
+        for i, m in enumerate(previous_meetings[:3], 1):  # Limit to 3 for context size
             date = m.get('date', 'Unknown date')
             title = m.get('title', 'Untitled')
-            summary = m.get('summary', 'No summary')[:500]  # Truncate long summaries
-            meeting_history += f"{i}. [{date}] {title}\n   Summary: {summary}\n\n"
-    
+            summary = m.get('summary', '')
+
+            meeting_history += f"\n{i}. [{date}] {title}\n"
+
+            # Include topics discussed (most valuable for context)
+            topics = m.get('topics_discussed', [])
+            if topics:
+                meeting_history += "   TOPICS DISCUSSED:\n"
+                for topic in topics[:5]:  # Limit topics
+                    if isinstance(topic, dict):
+                        topic_name = topic.get('topic', '')
+                        details = topic.get('details', [])
+                        meeting_history += f"   • {topic_name}\n"
+                        # Include key details (truncated)
+                        for detail in details[:3]:
+                            if isinstance(detail, str):
+                                detail_text = detail[:150] + "..." if len(detail) > 150 else detail
+                                meeting_history += f"     - {detail_text}\n"
+                    elif isinstance(topic, str):
+                        meeting_history += f"   • {topic}\n"
+
+            # Include follow-up items
+            follow_ups = m.get('follow_up_items', [])
+            if follow_ups:
+                meeting_history += "   FOLLOW-UPS:\n"
+                for fu in follow_ups[:3]:
+                    if isinstance(fu, dict):
+                        fu_text = fu.get('item', fu.get('title', str(fu)))
+                    else:
+                        fu_text = str(fu)
+                    meeting_history += f"   → {fu_text[:100]}\n"
+
+            # Include key points if available
+            key_points = m.get('key_points', [])
+            if key_points:
+                meeting_history += "   KEY POINTS:\n"
+                for kp in key_points[:3]:
+                    if isinstance(kp, str):
+                        meeting_history += f"   * {kp[:100]}\n"
+
+            # Fall back to summary if no structured data
+            if not topics and not follow_ups and not key_points and summary:
+                summary_text = summary[:600] + "..." if len(summary) > 600 else summary
+                meeting_history += f"   Summary: {summary_text}\n"
+
+            meeting_history += "\n"
+
+    # Add transcript excerpt for the most recent meeting (most valuable context)
+    transcript_section = ""
+    if last_meeting_transcript:
+        transcript_section = f"""
+LAST MEETING TRANSCRIPT EXCERPT:
+(This is what was actually said in the most recent meeting)
+---
+{last_meeting_transcript}
+---
+"""
+
     # Email history
     email_history = ""
     if recent_emails:
@@ -803,6 +900,8 @@ CONTACT INFORMATION:
 
 {meeting_history}
 
+{transcript_section}
+
 {email_history}
 
 {messaging_history}
@@ -812,28 +911,28 @@ CONTACT INFORMATION:
 {open_items}
 
 FOCUS ON:
-1. What we discussed in the LAST meeting/conversation (most important!)
-2. Any recent messages or emails with substantive content
-3. Open items or follow-ups from previous discussions
-4. Key topics to potentially continue
+1. What we discussed in the LAST meeting/conversation (most important!) - use transcript if available
+2. Key topics, decisions, and action items from previous discussions
+3. Any recent messages or emails with substantive content
+4. Open items or follow-ups to address
 
 STRICT RULES:
 1. ONLY state facts explicitly written in the data above
 2. If emails are just scheduling (confirming times, calendar invites), ignore them
 3. NEVER invent names, topics, projects, or connections not in the data
 4. Prioritize the most RECENT substantive interaction
-5. Maximum 120 words
+5. Maximum 200 words - be thorough but concise
 6. If nothing substantive found, write "First substantive conversation."
 
 Output format:
-- Start with what we discussed last time
-- Then any relevant recent context
-- Keep it actionable and concise"""
+- Start with key topics/decisions from last meeting (if transcript available, use specific details)
+- Then any relevant recent context or follow-ups
+- Keep it actionable - what should I remember going in?"""
 
     try:
         response = llm.client.messages.create(
             model=llm.model,
-            max_tokens=600,
+            max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
         return response.content[0].text
