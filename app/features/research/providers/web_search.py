@@ -18,6 +18,7 @@ import httpx
 from typing import Any, Dict, List, Optional
 
 from .base import BaseProvider, ProviderResult, ProviderStatus
+from app.services.http_client import http_client_manager
 
 logger = logging.getLogger("Jarvis.Research.WebSearch")
 
@@ -71,8 +72,8 @@ class WebSearchProvider(BaseProvider):
             _last_request_time = time.time()
     
     def _create_client(self) -> httpx.AsyncClient:
-        """Create a new HTTP client (fresh for each request)."""
-        return httpx.AsyncClient(
+        """Create a new HTTP client (fresh for each request, shared pool limits)."""
+        return http_client_manager.create_client(
             timeout=30.0,
             headers={
                 "X-Subscription-Token": self.api_key,

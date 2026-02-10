@@ -18,7 +18,8 @@ Usage:
     # Get available tools
     tools = await mcp_client.list_tools()
 """
-from app.core.logging_utils import sanitize_for_logging
+from app.core.logging_utils import sanitize_for_logging  # noqa: F401
+from app.services.http_client import http_client_manager
 
 import os
 import logging
@@ -55,19 +56,23 @@ class MCPClient:
         self._cache_time: Optional[datetime] = None
         self._cache_ttl = 300  # 5 minutes
 
+    def _get_headers(self) -> Dict[str, str]:
+        """Get headers for MCP requests."""
+        headers = {
+            "Content-Type": "application/json",
+            "X-Client-Name": "jarvis-intelligence-service",
+        }
+        if MCP_API_KEY:
+            headers["X-API-Key"] = MCP_API_KEY
+        return headers
+
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create the HTTP client."""
+        """Get or create the HTTP client using shared connection pool."""
         if self._client is None or self._client.is_closed:
-            headers = {
-                "Content-Type": "application/json",
-                "X-Client-Name": "jarvis-intelligence-service",
-            }
-            if MCP_API_KEY:
-                headers["X-API-Key"] = MCP_API_KEY
-            self._client = httpx.AsyncClient(
+            self._client = http_client_manager.create_client(
                 base_url=self.base_url,
                 timeout=self.timeout,
-                headers=headers,
+                headers=self._get_headers(),
             )
         return self._client
 

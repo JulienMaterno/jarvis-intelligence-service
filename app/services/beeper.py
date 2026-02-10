@@ -19,6 +19,7 @@ import os
 import httpx
 from typing import Optional, List, Dict, Any
 from app.core.database import supabase
+from app.services.http_client import http_client_manager
 
 logger = logging.getLogger("Jarvis.Intelligence.Beeper")
 
@@ -29,23 +30,23 @@ BEEPER_BRIDGE_URL = os.getenv("BEEPER_BRIDGE_URL", "https://beeper.new-world-pro
 
 class BeeperService:
     """Unified service for accessing Beeper data from database or live."""
-    
+
     def __init__(self):
         self.db = supabase
         logger.info("Beeper service initialized (hybrid mode)")
-    
+
     # =========================================================================
     # STATUS
     # =========================================================================
-    
+
     async def get_status(self) -> Dict[str, Any]:
         """
         Get Beeper connectivity status.
-        
+
         Checks:
         1. Database stats (synced chats/messages)
         2. Bridge connectivity (if reachable)
-        
+
         Returns:
             Status dict with db_stats and bridge_status
         """
@@ -54,7 +55,7 @@ class BeeperService:
             "db_stats": {},
             "bridge_status": "unknown"
         }
-        
+
         # Get database stats
         try:
             chats_count = self.db.table("beeper_chats") \
@@ -63,7 +64,7 @@ class BeeperService:
             messages_count = self.db.table("beeper_messages") \
                 .select("id", count="exact") \
                 .execute()
-            
+
             result["db_stats"] = {
                 "chats": chats_count.count or 0,
                 "messages": messages_count.count or 0
@@ -71,17 +72,17 @@ class BeeperService:
         except Exception as e:
             logger.warning(f"Failed to get DB stats: {e}")
             result["db_stats"] = {"error": str(e)}
-        
+
         # Check bridge connectivity
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{BEEPER_BRIDGE_URL}/health")
-                if resp.status_code == 200:
-                    bridge_data = resp.json()
-                    result["bridge_status"] = "connected" if bridge_data.get("beeper_connected") else "disconnected"
-                    result["platforms"] = list(bridge_data.get("accounts", {}).keys())
-                else:
-                    result["bridge_status"] = "error"
+            client = await http_client_manager.get_client()
+            resp = await client.get(f"{BEEPER_BRIDGE_URL}/health", timeout=5.0)
+            if resp.status_code == 200:
+                bridge_data = resp.json()
+                result["bridge_status"] = "connected" if bridge_data.get("beeper_connected") else "disconnected"
+                result["platforms"] = list(bridge_data.get("accounts", {}).keys())
+            else:
+                result["bridge_status"] = "error"
         except httpx.ConnectError:
             result["bridge_status"] = "offline"
         except httpx.TimeoutException:
@@ -89,13 +90,13 @@ class BeeperService:
         except Exception as e:
             logger.warning(f"Failed to check bridge: {e}")
             result["bridge_status"] = "error"
-        
+
         return result
-    
+
     # =========================================================================
     # INBOX & CHATS
     # =========================================================================
-    
+
     async def get_inbox(
         self,
         include_groups: bool = False,
@@ -104,19 +105,19 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """
         Get inbox chats that need attention.
-        
+
         Args:
             include_groups: Include group chats
             limit: Max chats per category
             live: Fetch from beeper-bridge instead of database
-        
+
         Returns:
             Inbox organized by priority
         """
         if live:
             return await self._get_inbox_live(include_groups, limit)
         return self._get_inbox_db(include_groups, limit)
-    
+
     def _get_inbox_db(self, include_groups: bool, limit: int) -> Dict[str, Any]:
         """Get inbox from database (fast)."""
         try:
@@ -129,7 +130,7 @@ class BeeperService:
                 .order("last_message_at", desc=True) \
                 .limit(limit) \
                 .execute()
-            
+
             # Other active DMs (last message from you)
             other_active = self.db.table("beeper_chats") \
                 .select("*, contact:contacts(id, first_name, last_name, company)") \
@@ -139,7 +140,7 @@ class BeeperService:
                 .order("last_message_at", desc=True) \
                 .limit(limit) \
                 .execute()
-            
+
             result = {
                 "needs_response": {
                     "count": len(needs_response.data),
@@ -150,7 +151,7 @@ class BeeperService:
                     "chats": self._format_chats(other_active.data)
                 }
             }
-            
+
             if include_groups:
                 groups = self.db.table("beeper_chats") \
                     .select("*") \
@@ -159,38 +160,39 @@ class BeeperService:
                     .order("last_message_at", desc=True) \
                     .limit(limit) \
                     .execute()
-                
+
                 result["groups"] = {
                     "count": len(groups.data),
                     "chats": self._format_chats(groups.data)
                 }
-            
+
             return result
-        
+
         except Exception as e:
             logger.error(f"Failed to get inbox from database: {e}")
             raise
-    
+
     async def _get_inbox_live(self, include_groups: bool, limit: int) -> Dict[str, Any]:
         """Get inbox from beeper-bridge (real-time)."""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                params = {"limit": limit}
-                if include_groups:
-                    params["include_groups"] = "true"
-                
-                # Call sync service which will fetch live if needed
-                response = await client.get(
-                    f"{SYNC_SERVICE_URL}/beeper/inbox",
-                    params=params
-                )
-                response.raise_for_status()
-                return response.json()
-        
+            client = await http_client_manager.get_client()
+            params = {"limit": limit}
+            if include_groups:
+                params["include_groups"] = "true"
+
+            # Call sync service which will fetch live if needed
+            response = await client.get(
+                f"{SYNC_SERVICE_URL}/beeper/inbox",
+                params=params,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
         except Exception as e:
             logger.error(f"Failed to get inbox live: {e}")
             raise
-    
+
     async def get_chat_messages(
         self,
         beeper_chat_id: str,
@@ -200,20 +202,20 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """
         Get messages from a specific chat.
-        
+
         Args:
             beeper_chat_id: Chat ID
             limit: Number of messages
             before: Get messages before this timestamp
             live: Fetch from beeper-bridge for real-time data
-        
+
         Returns:
             Messages with chat context
         """
         if live:
             return await self._get_messages_live(beeper_chat_id, limit, before)
         return self._get_messages_db(beeper_chat_id, limit, before)
-    
+
     def _get_messages_db(
         self,
         beeper_chat_id: str,
@@ -228,29 +230,29 @@ class BeeperService:
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .order("timestamp", desc=True) \
                 .limit(limit)
-            
+
             if before:
                 query = query.lt("timestamp", before)
-            
+
             result = query.execute()
-            
+
             # Get chat info separately (with contact join which does have FK)
             chat_info = self.db.table("beeper_chats") \
                 .select("*, contact:contacts(id, first_name, last_name, company)") \
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .single() \
                 .execute()
-            
+
             return {
                 "chat": chat_info.data,
                 "messages": result.data,
                 "count": len(result.data)
             }
-        
+
         except Exception as e:
             logger.error(f"Failed to get messages from database: {e}")
             raise
-    
+
     async def _get_messages_live(
         self,
         beeper_chat_id: str,
@@ -259,30 +261,31 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """Get messages from beeper-bridge (real-time)."""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                params = {"limit": limit}
-                if before:
-                    params["before"] = before
-                
-                # URL encode the chat ID
-                import urllib.parse
-                encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
-                
-                response = await client.get(
-                    f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/messages",
-                    params=params
-                )
-                response.raise_for_status()
-                return response.json()
-        
+            client = await http_client_manager.get_client()
+            params = {"limit": limit}
+            if before:
+                params["before"] = before
+
+            # URL encode the chat ID
+            import urllib.parse
+            encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+
+            response = await client.get(
+                f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/messages",
+                params=params,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
         except Exception as e:
             logger.error(f"Failed to get messages live: {e}")
             raise
-    
+
     # =========================================================================
     # SENDING MESSAGES
     # =========================================================================
-    
+
     async def send_message(
         self,
         beeper_chat_id: str,
@@ -291,55 +294,57 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """
         Send a message to a Beeper chat.
-        
+
         Args:
             beeper_chat_id: Chat ID to send to
             content: Message text
             reply_to_event_id: Optional message ID to reply to
-        
+
         Returns:
             Send status and details
         """
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # URL encode the chat ID
-                import urllib.parse
-                encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
-                
-                payload = {"text": content}
-                if reply_to_event_id:
-                    payload["reply_to"] = reply_to_event_id
-                
-                response = await client.post(
-                    f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/messages",
-                    json=payload
-                )
-                response.raise_for_status()
-                
-                logger.info(f"Sent message to chat {beeper_chat_id[:20]}...")
-                return response.json()
-        
+            client = await http_client_manager.get_client()
+            # URL encode the chat ID
+            import urllib.parse
+            encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+
+            payload = {"text": content}
+            if reply_to_event_id:
+                payload["reply_to"] = reply_to_event_id
+
+            response = await client.post(
+                f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/messages",
+                json=payload,
+                timeout=30.0
+            )
+            response.raise_for_status()
+
+            logger.info(f"Sent message to chat {beeper_chat_id[:20]}...")
+            return response.json()
+
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
             raise
-    
+
     async def mark_as_read(self, beeper_chat_id: str) -> Dict[str, Any]:
         """Mark all messages in a chat as read."""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                import urllib.parse
-                encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
-                
-                response = await client.post(
-                    f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/read"
-                )
-                response.raise_for_status()
-                return response.json()
-        
+            client = await http_client_manager.get_client()
+            import urllib.parse
+            encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+
+            response = await client.post(
+                f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/read",
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
         except Exception as e:
             logger.error(f"Failed to mark as read: {e}")
             raise
-    
+
     async def archive_chat(self, beeper_chat_id: str) -> Dict[str, Any]:
         """Archive a chat (inbox-zero workflow)."""
         try:
@@ -348,22 +353,22 @@ class BeeperService:
                 .update({"is_archived": True, "archived_at": "now()"}) \
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .execute()
-            
+
             # Also tell beeper-bridge (optional, for UI sync)
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    import urllib.parse
-                    encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
-                    await client.post(f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/archive")
+                client = await http_client_manager.get_client()
+                import urllib.parse
+                encoded_id = urllib.parse.quote(beeper_chat_id, safe='')
+                await client.post(f"{BEEPER_BRIDGE_URL}/chats/{encoded_id}/archive", timeout=10.0)
             except Exception:
                 pass  # Bridge may be offline
-            
+
             return {"status": "archived", "beeper_chat_id": beeper_chat_id}
-        
+
         except Exception as e:
             logger.error(f"Failed to archive chat: {e}")
             raise
-    
+
     async def unarchive_chat(self, beeper_chat_id: str) -> Dict[str, Any]:
         """Unarchive a chat."""
         try:
@@ -371,13 +376,13 @@ class BeeperService:
                 .update({"is_archived": False, "archived_at": None}) \
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .execute()
-            
+
             return {"status": "unarchived", "beeper_chat_id": beeper_chat_id}
-        
+
         except Exception as e:
             logger.error(f"Failed to unarchive chat: {e}")
             raise
-    
+
     async def get_unread_messages(self, limit: int = 50) -> Dict[str, Any]:
         """Get unread messages across all chats."""
         try:
@@ -389,16 +394,16 @@ class BeeperService:
                 .order("timestamp", desc=True) \
                 .limit(limit) \
                 .execute()
-            
+
             return {
                 "count": len(result.data),
                 "messages": result.data
             }
-        
+
         except Exception as e:
             logger.error(f"Failed to get unread messages: {e}")
             raise
-    
+
     async def link_chat_to_contact(self, beeper_chat_id: str, contact_id: str) -> Dict[str, Any]:
         """Link a chat to a contact."""
         try:
@@ -411,49 +416,50 @@ class BeeperService:
                 }) \
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .execute()
-            
+
             # Also update all messages from this chat
             self.db.table("beeper_messages") \
                 .update({"contact_id": contact_id}) \
                 .eq("beeper_chat_id", beeper_chat_id) \
                 .execute()
-            
+
             # Get contact info for response
             contact = self.db.table("contacts") \
                 .select("id, first_name, last_name, company") \
                 .eq("id", contact_id) \
                 .single() \
                 .execute()
-            
+
             return {
                 "status": "linked",
                 "beeper_chat_id": beeper_chat_id,
                 "contact": contact.data
             }
-        
+
         except Exception as e:
             logger.error(f"Failed to link chat to contact: {e}")
             raise
-    
+
     async def trigger_sync(self, full: bool = False) -> Dict[str, Any]:
         """Trigger a Beeper sync via the sync service."""
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{SYNC_SERVICE_URL}/sync/beeper",
-                    params={"full": str(full).lower()}
-                )
-                response.raise_for_status()
-                return response.json()
-        
+            client = await http_client_manager.get_client()
+            response = await client.post(
+                f"{SYNC_SERVICE_URL}/sync/beeper",
+                params={"full": str(full).lower()},
+                timeout=60.0
+            )
+            response.raise_for_status()
+            return response.json()
+
         except Exception as e:
             logger.error(f"Failed to trigger sync: {e}")
             return {"status": "error", "error": str(e)}
-    
+
     # =========================================================================
     # SEARCH
     # =========================================================================
-    
+
     async def search_messages(
         self,
         query: str,
@@ -464,21 +470,21 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """
         Search across message history.
-        
+
         Args:
             query: Search query
             platform: Filter by platform
             contact_id: Filter by contact
             limit: Max results
             live: Search live data (usually not needed)
-        
+
         Returns:
             Matching messages with context
         """
         if live:
             return await self._search_messages_live(query, platform, limit)
         return self._search_messages_db(query, platform, contact_id, limit)
-    
+
     def _search_messages_db(
         self,
         query: str,
@@ -491,29 +497,29 @@ class BeeperService:
             # Build query with filters (no joins due to no FK relationship)
             search_query = self.db.table("beeper_messages") \
                 .select("*")
-            
+
             # Apply filters
             if platform:
                 search_query = search_query.eq("platform", platform)
             if contact_id:
                 search_query = search_query.eq("contact_id", contact_id)
-            
+
             # Use ilike for simple text search
             search_query = search_query.ilike("content", f"%{query}%")
-            
+
             # Order and limit
             result = search_query.order("timestamp", desc=True).limit(limit).execute()
-            
+
             return {
                 "query": query,
                 "count": len(result.data),
                 "messages": result.data
             }
-        
+
         except Exception as e:
             logger.error(f"Failed to search messages in database: {e}")
             raise
-    
+
     async def _search_messages_live(
         self,
         query: str,
@@ -522,32 +528,33 @@ class BeeperService:
     ) -> Dict[str, Any]:
         """Search messages via beeper-bridge."""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                params = {"q": query, "limit": limit}
-                if platform:
-                    params["platform"] = platform
-                
-                response = await client.get(
-                    f"{BEEPER_BRIDGE_URL}/messages/search",
-                    params=params
-                )
-                response.raise_for_status()
-                return response.json()
-        
+            client = await http_client_manager.get_client()
+            params = {"q": query, "limit": limit}
+            if platform:
+                params["platform"] = platform
+
+            response = await client.get(
+                f"{BEEPER_BRIDGE_URL}/messages/search",
+                params=params,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
         except Exception as e:
             logger.error(f"Failed to search messages live: {e}")
             raise
-    
+
     # =========================================================================
     # HELPERS
     # =========================================================================
-    
+
     def _format_chats(self, chats: List[Dict]) -> List[Dict]:
         """Format chat data for API response."""
         formatted = []
         for chat in chats:
             contact = chat.get("contact", {}) if isinstance(chat.get("contact"), dict) else None
-            
+
             formatted_chat = {
                 "beeper_chat_id": chat["beeper_chat_id"],
                 "platform": chat["platform"],
@@ -559,14 +566,14 @@ class BeeperService:
                 "unread_count": chat.get("unread_count", 0),
                 "needs_response": chat.get("needs_response", False)
             }
-            
+
             if contact:
                 formatted_chat["contact"] = {
                     "id": contact.get("id"),
                     "name": f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip(),
                     "company": contact.get("company")
                 }
-            
+
             formatted.append(formatted_chat)
-        
+
         return formatted

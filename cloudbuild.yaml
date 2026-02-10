@@ -22,9 +22,9 @@ steps:
       - '--platform'
       - 'managed'
       - '--update-secrets'
-      - 'SUPABASE_DB_PASSWORD=SUPABASE_DB_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,ANTHROPIC_API_KEY=CLAUDE_API_KEY:latest,LETTA_AGENT_ID=LETTA_AGENT_ID:latest,SUPABASE_KEY=SUPABASE_KEY:latest,BRAVE_API_KEY=BRAVE_API_KEY:latest,BRIGHTDATA_API_KEY=BRIGHTDATA_API_KEY:latest'
+      - 'SUPABASE_DB_PASSWORD=SUPABASE_DB_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,ANTHROPIC_API_KEY=CLAUDE_API_KEY:latest,LETTA_AGENT_ID=LETTA_AGENT_ID:latest,SUPABASE_KEY=SUPABASE_KEY:latest,BRAVE_API_KEY=BRAVE_API_KEY:latest,BRIGHTDATA_API_KEY=BRIGHTDATA_API_KEY:latest,INTELLIGENCE_SERVICE_API_KEY=INTERNAL_API_KEY:latest,MCP_API_KEY=MCP_API_KEY:latest,INTERNAL_API_KEY=INTERNAL_API_KEY:latest'
       - '--set-env-vars'
-      - 'SUPABASE_URL=https://ojnllduebzfxqmiyinhx.supabase.co,BEEPER_BRIDGE_URL=https://beeper.new-world-project.com,SYNC_SERVICE_URL=https://jarvis-sync-service-776871804948.asia-southeast1.run.app,TELEGRAM_BOT_URL=${_TELEGRAM_BOT_URL},DEFAULT_TELEGRAM_CHAT_ID=7247716272,LETTA_URL=https://letta-server-776871804948.asia-southeast1.run.app'
+      - 'SUPABASE_URL=https://ojnllduebzfxqmiyinhx.supabase.co,BEEPER_BRIDGE_URL=https://beeper.new-world-project.com,SYNC_SERVICE_URL=https://jarvis-sync-service-776871804948.asia-southeast1.run.app,TELEGRAM_BOT_URL=https://jarvis-telegram-bot-776871804948.asia-southeast1.run.app,DEFAULT_TELEGRAM_CHAT_ID=7247716272,LETTA_URL=https://letta-server-776871804948.asia-southeast1.run.app'
 
 options:
   logging: CLOUD_LOGGING_ONLY

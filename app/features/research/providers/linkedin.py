@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from .base import BaseProvider, ProviderResult, ProviderStatus
+from app.services.http_client import http_client_manager
 
 logger = logging.getLogger("Jarvis.Research.LinkedIn")
 
@@ -95,8 +96,8 @@ class LinkedInProvider(BaseProvider):
         return bool(self.api_key)
     
     def _create_client(self) -> httpx.AsyncClient:
-        """Create a new HTTP client (fresh for each request)."""
-        return httpx.AsyncClient(
+        """Create a new HTTP client (fresh for each request, shared pool limits)."""
+        return http_client_manager.create_client(
             timeout=60.0,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -491,32 +492,35 @@ class LinkedInProvider(BaseProvider):
             _brave_last_request = time.time()
         
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            client = http_client_manager.create_client(
+                timeout=30.0,
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": BRAVE_API_KEY
+                }
+            )
+            async with client:
                 response = await client.get(
                     BRAVE_URL,
-                    params={"q": query, "count": count},
-                    headers={
-                        "Accept": "application/json",
-                        "X-Subscription-Token": BRAVE_API_KEY
-                    }
+                    params={"q": query, "count": count}
                 )
-                
+
                 if response.status_code != 200:
                     logger.warning(f"Brave search failed: {response.status_code}")
                     return []
-                
+
                 data = response.json()
                 results = data.get("web", {}).get("results", [])
-                
+
                 # Extract LinkedIn profile URLs
                 linkedin_urls = []
                 for result in results:
                     url = result.get("url", "")
                     if self._is_linkedin_profile_url(url):
                         linkedin_urls.append(url)
-                
+
                 return linkedin_urls
-                
+
         except Exception as e:
             logger.error(f"Brave search error: {e}")
             return []

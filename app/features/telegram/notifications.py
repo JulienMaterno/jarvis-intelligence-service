@@ -10,6 +10,7 @@ import os
 from typing import Optional, List, Dict, Any
 
 from app.shared.constants import TELEGRAM_BOT_URL, TELEGRAM_CHAT_ID
+from app.services.http_client import http_client_manager
 
 logger = logging.getLogger("Jarvis.Intelligence.Telegram")
 
@@ -54,28 +55,29 @@ async def send_telegram_message(
         headers["X-API-Key"] = INTERNAL_API_KEY
     
     last_error = None
+    client = await http_client_manager.get_client()
+
     for attempt in range(MAX_RETRIES):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json={
-                    "chat_id": target_chat_id,
-                    "text": text,
-                    "parse_mode": parse_mode
-                }, headers=headers)
-                
-                if response.status_code == 200:
-                    logger.info(f"Telegram message sent to {target_chat_id}")
-                    return True
-                elif response.status_code >= 500:
-                    # Server error - retry
-                    last_error = f"Server error: {response.status_code}"
-                    if attempt < MAX_RETRIES - 1:
-                        await asyncio.sleep(RETRY_DELAYS[attempt])
-                        continue
-                else:
-                    logger.error(f"Failed to send Telegram message: {response.status_code} - {response.text}")
-                    return False
-                    
+            response = await client.post(url, json={
+                "chat_id": target_chat_id,
+                "text": text,
+                "parse_mode": parse_mode
+            }, headers=headers, timeout=30.0)
+
+            if response.status_code == 200:
+                logger.info(f"Telegram message sent to {target_chat_id}")
+                return True
+            elif response.status_code >= 500:
+                # Server error - retry
+                last_error = f"Server error: {response.status_code}"
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAYS[attempt])
+                    continue
+            else:
+                logger.error(f"Failed to send Telegram message: {response.status_code} - {response.text}")
+                return False
+
         except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as e:
             last_error = str(e)
             if attempt < MAX_RETRIES - 1:
@@ -86,7 +88,7 @@ async def send_telegram_message(
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
             return False
-    
+
     logger.error(f"Failed to send Telegram message after {MAX_RETRIES} retries: {last_error}")
     return False
 
@@ -127,22 +129,22 @@ async def send_clarification_question(
         headers["X-API-Key"] = INTERNAL_API_KEY
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json={
-                "chat_id": chat_id,
-                "user_id": user_id,
-                "clarification_id": clarification_id,
-                "item": item,
-                "question": question
-            }, headers=headers)
-            
-            if response.status_code == 200:
-                logger.info(f"Clarification question sent to user {user_id}: {item}")
-                return True
-            else:
-                logger.error(f"Failed to send clarification: {response.status_code} - {response.text}")
-                return False
-                
+        client = await http_client_manager.get_client()
+        response = await client.post(url, json={
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "clarification_id": clarification_id,
+            "item": item,
+            "question": question
+        }, headers=headers, timeout=30.0)
+
+        if response.status_code == 200:
+            logger.info(f"Clarification question sent to user {user_id}: {item}")
+            return True
+        else:
+            logger.error(f"Failed to send clarification: {response.status_code} - {response.text}")
+            return False
+
     except Exception as e:
         logger.error(f"Error sending clarification question: {e}")
         return False
