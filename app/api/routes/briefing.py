@@ -272,19 +272,48 @@ async def trigger_briefing(request: TriggerBriefingRequest):
 @router.post("/briefings/contact/{contact_id}", response_model=BriefingResponse)
 async def generate_contact_briefing(
     contact_id: str,
-    send_notification: bool = False
+    send_notification: bool = False,
+    skip_if_recent_minutes: int = 0
 ):
     """
     Generate a briefing for a contact (useful before calling/meeting them).
-    
+
     This creates a briefing based on all history with the contact,
     not tied to a specific calendar event.
+
+    Args:
+        skip_if_recent_minutes: If > 0, skip generation if a briefing was already
+            sent for this contact within the last N minutes (avoids duplicates
+            when a scheduled briefing was already sent before the meeting).
     """
     db = get_database()
     llm = ClaudeMultiAnalyzer()
     memory = get_memory()
-    
+
     try:
+        # Check if a briefing was recently sent for this contact
+        if skip_if_recent_minutes > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=skip_if_recent_minutes)).isoformat()
+            recent = db.client.table("scheduled_briefings").select("id, briefing_text, event_title, sent_at").eq(
+                "contact_id", contact_id
+            ).eq(
+                "status", "sent"
+            ).gte(
+                "sent_at", cutoff
+            ).order("sent_at", desc=True).limit(1).execute()
+
+            if recent.data:
+                logger.info(f"[Contact Briefing] Skipping - briefing already sent for contact {contact_id} at {recent.data[0].get('sent_at')}")
+                return BriefingResponse(
+                    status="already_sent",
+                    event_id=f"manual-{contact_id}",
+                    event_title=recent.data[0].get("event_title", ""),
+                    event_start=datetime.now(timezone.utc).isoformat(),
+                    contact_name="",
+                    briefing_text=recent.data[0].get("briefing_text", ""),
+                    notification_sent=False
+                )
+
         # Create a pseudo-event for the contact
         contact_result = db.client.table("contacts").select("*").eq(
             "id", contact_id
@@ -553,15 +582,15 @@ async def schedule_hourly_briefings():
             event_id = event.get("id")
             event_start = event.get("start_time")
             
-            # Check if already scheduled
+            # Check if already scheduled or sent (prevent re-scheduling after send)
             existing = db.client.table("scheduled_briefings").select("id").eq(
                 "event_id", event_id
-            ).eq(
-                "status", "pending"
+            ).in_(
+                "status", ["pending", "sent"]
             ).execute()
-            
+
             if existing.data:
-                logger.info(f"[Hourly Schedule] Event {event_id} already scheduled, skipping")
+                logger.info(f"[Hourly Schedule] Event {event_id} already scheduled/sent, skipping")
                 continue
             
             try:
