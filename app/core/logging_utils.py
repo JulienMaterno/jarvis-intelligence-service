@@ -1,8 +1,15 @@
 """
 Logging utilities for safe logging of user data and sensitive information.
+
+Includes:
+- PII/secret redaction for safe logging
+- Structured cost logging for AI API calls
 """
+import json
+import logging
 import re
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
 
 # Sensitive keys that should be redacted in logs
@@ -108,3 +115,74 @@ def sanitize_log_message(message: str) -> str:
     # Remove control characters
     message = re.sub(r'[\x00-\x1F\x7F]', '', message)
     return message
+
+
+# =============================================================================
+# STRUCTURED COST LOGGING
+# =============================================================================
+
+_cost_logger = logging.getLogger("Jarvis.Cost")
+
+
+def log_llm_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+    duration_ms: Optional[int] = None,
+    tool_calls: int = 0,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    savings_usd: float = 0.0,
+    endpoint: str = "unknown",
+    client_type: str = "unknown",
+    conversation_id: Optional[str] = None,
+) -> None:
+    """
+    Log a structured cost event for an LLM API call.
+
+    This produces a single JSON log line that can be parsed by
+    log aggregation systems for cost tracking dashboards.
+
+    Args:
+        model: Model identifier (e.g., 'claude-haiku-4-5-20251001')
+        input_tokens: Number of input tokens
+        output_tokens: Number of output tokens
+        cost_usd: Total cost in USD
+        duration_ms: Request duration in milliseconds
+        tool_calls: Number of tool calls made
+        cache_creation_tokens: Prompt caching write tokens
+        cache_read_tokens: Prompt caching read tokens
+        savings_usd: Cost saved via prompt caching
+        endpoint: API endpoint that triggered this call
+        client_type: Client type ('telegram', 'web', 'internal')
+        conversation_id: Optional conversation identifier
+    """
+    event = {
+        "event": "llm_cost",
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "cost_usd": round(cost_usd, 6),
+        "tool_calls": tool_calls,
+        "endpoint": endpoint,
+        "client_type": client_type,
+    }
+
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+
+    if cache_creation_tokens > 0:
+        event["cache_creation_tokens"] = cache_creation_tokens
+
+    if cache_read_tokens > 0:
+        event["cache_read_tokens"] = cache_read_tokens
+
+    if savings_usd > 0:
+        event["savings_usd"] = round(savings_usd, 6)
+
+    if conversation_id:
+        event["conversation_id"] = conversation_id
+
+    _cost_logger.info("LLM_COST %s", json.dumps(event))
