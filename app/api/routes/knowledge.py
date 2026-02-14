@@ -414,8 +414,10 @@ async def incremental_index(request: Optional[IncrementalIndexRequest] = None):
                 continue
 
             try:
-                # Get IDs that are NOT already indexed
-                all_ids_result = db.client.table(table_name).select("id").limit(batch_size * 5).execute()
+                # Get newest IDs (most likely to be unindexed)
+                all_ids_result = db.client.table(table_name).select("id").order(
+                    "created_at", desc=True
+                ).limit(batch_size * 3).execute()
                 if not all_ids_result.data:
                     results[source_type] = {"indexed": 0, "skipped": 0}
                     continue

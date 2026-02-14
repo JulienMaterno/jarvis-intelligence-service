@@ -26,23 +26,26 @@ from app.features.knowledge.chunker import (
 logger = logging.getLogger("Jarvis.Knowledge.Indexer")
 
 
+_openai_client = None
+
+
+def _get_openai_client():
+    """Reuse a single AsyncOpenAI client across all embedding calls."""
+    global _openai_client
+    if _openai_client is None:
+        import openai
+        import os
+        _openai_client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _openai_client
+
+
 async def get_embedding(text: str) -> List[float]:
-    """
-    Generate embedding for text using OpenAI ada-002.
-    
-    Returns 1536-dimensional vector.
-    """
-    import openai
-    import os
-    
-    # Use OpenAI for embeddings (same as Mem0 uses)
-    client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    
+    """Generate embedding for text using OpenAI ada-002 (1536-dim)."""
+    client = _get_openai_client()
     response = await client.embeddings.create(
         model="text-embedding-ada-002",
-        input=text[:8000]  # Truncate to model limit
+        input=text[:8000]
     )
-    
     return response.data[0].embedding
 
 
