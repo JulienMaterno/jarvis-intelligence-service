@@ -220,23 +220,28 @@ def _query_knowledge(
     content_types: Optional[List[str]] = None,
     limit: int = 10
 ) -> Dict[str, Any]:
-    """Search the knowledge base using semantic search."""
+    """Search the knowledge base using hybrid (semantic + keyword) search."""
     if not query:
         return {"error": "Query is required"}
 
     try:
-        # Call the knowledge embeddings search via Supabase RPC
-        params = {
-            "query_text": query,
-            "match_count": limit
-        }
+        from app.features.knowledge.retriever import hybrid_search
 
-        if content_types:
-            params["filter_types"] = content_types
+        # Create a simple wrapper so the retriever can access supabase as db.client
+        class _DB:
+            def __init__(self, client):
+                self.client = client
 
-        result = supabase.rpc("search_knowledge", params).execute()
+        db = _DB(supabase)
 
-        if not result.data:
+        results = _run_async(hybrid_search(
+            query=query,
+            db=db,
+            source_types=content_types,
+            limit=limit
+        ))
+
+        if not results:
             return {
                 "status": "no_results",
                 "message": f"No results found for '{query}'",
@@ -245,9 +250,9 @@ def _query_knowledge(
 
         # Format results
         formatted = []
-        for item in result.data:
+        for item in results:
             formatted.append({
-                "content_type": item.get("content_type"),
+                "content_type": item.get("source_type"),
                 "content": item.get("content", "")[:500],
                 "source_id": item.get("source_id"),
                 "metadata": item.get("metadata"),
@@ -261,8 +266,8 @@ def _query_knowledge(
             "query": query
         }
     except Exception as e:
-        logger.error(f"Knowledge search error: {e}")
-        # Fallback to basic text search if vector search fails
+        logger.error(f"Knowledge search error: {e}", exc_info=True)
+        # Fallback to basic text search if semantic search fails
         return _fallback_text_search(query, content_types, limit)
 
 
