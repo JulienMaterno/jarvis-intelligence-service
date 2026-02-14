@@ -78,7 +78,7 @@ async def semantic_search(
     # Use RPC function for vector search
     # This assumes we have a match_knowledge_chunks function
     try:
-        result = db.rpc("match_knowledge_chunks", {
+        result = db.client.rpc("match_knowledge_chunks", {
             "query_embedding": query_embedding,
             "match_threshold": similarity_threshold,
             "match_count": limit,
@@ -118,7 +118,7 @@ async def _manual_semantic_search(
     import numpy as np
     
     # Fetch chunks (with filters)
-    query = db.table("knowledge_chunks").select(
+    query = db.client.table("knowledge_chunks").select(
         "id, source_type, source_id, chunk_index, content, metadata, embedding"
     ).is_("deleted_at", "null")
     
@@ -173,11 +173,12 @@ async def hybrid_search(
     db,
     source_types: List[str] = None,
     contact_id: str = None,
-    limit: int = 10
+    limit: int = 10,
+    threshold: float = 0.6
 ) -> List[Dict[str, Any]]:
     """
     Hybrid search combining semantic + keyword matching.
-    
+
     Better for queries with specific names or terms.
     """
     # Semantic search
@@ -187,7 +188,7 @@ async def hybrid_search(
         source_types=source_types,
         contact_id=contact_id,
         limit=limit * 2,  # Get more for re-ranking
-        similarity_threshold=0.6  # Lower threshold
+        similarity_threshold=threshold
     )
     
     # Keyword search
@@ -230,19 +231,22 @@ async def _keyword_search(
     limit: int = 10
 ) -> List[Dict[str, Any]]:
     """Simple keyword/text search as fallback."""
+    # Sanitize query for ILIKE pattern - escape special PostgreSQL LIKE chars
+    sanitized = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     # Use Postgres full-text search or ILIKE
     base_query = db.client.table("knowledge_chunks").select(
         "id, source_type, source_id, chunk_index, content, metadata"
     ).is_("deleted_at", "null")
-    
+
     if source_types:
         base_query = base_query.in_("source_type", source_types)
-    
-    # Use ILIKE for simple matching
-    base_query = base_query.ilike("content", f"%{query}%")
-    
+
+    # Use ILIKE for simple matching with sanitized input
+    base_query = base_query.ilike("content", f"%{sanitized}%")
+
     result = base_query.limit(limit).execute()
-    
+
     return result.data if result.data else []
 
 
@@ -321,20 +325,43 @@ async def get_contact_context(
 ) -> str:
     """
     Get all context related to a specific contact.
-    
+
     Useful for background agents analyzing relationships.
+    Uses a direct database query filtered by contact_id instead of
+    semantic search, since there is no meaningful query to embed.
     """
-    results = await semantic_search(
-        query="",  # Empty query - just filtering by contact
-        db=db,
-        contact_id=contact_id,
-        limit=limit,
-        similarity_threshold=0  # Get all
-    )
-    
+    try:
+        result = db.client.table("knowledge_chunks").select(
+            "id, source_type, source_id, chunk_index, content, metadata, created_at"
+        ).is_("deleted_at", "null").eq(
+            "metadata->>contact_id", contact_id
+        ).order("created_at", desc=True).limit(limit).execute()
+
+        results = []
+        for chunk in (result.data or []):
+            results.append({
+                "id": chunk["id"],
+                "source_type": chunk["source_type"],
+                "source_id": chunk["source_id"],
+                "chunk_index": chunk.get("chunk_index", 0),
+                "content": chunk["content"],
+                "metadata": chunk.get("metadata", {}),
+                "similarity": 1.0,  # Direct match, not semantic
+            })
+    except Exception as e:
+        logger.warning(f"Direct contact context query failed, falling back to semantic: {e}")
+        # Fall back to semantic search with contact name if direct query fails
+        results = await semantic_search(
+            query=f"contact {contact_id}",
+            db=db,
+            contact_id=contact_id,
+            limit=limit,
+            similarity_threshold=0
+        )
+
     # Sort by date if available
     results.sort(key=lambda x: x.get("metadata", {}).get("date", ""), reverse=True)
-    
+
     return await _format_contact_context(results)
 
 

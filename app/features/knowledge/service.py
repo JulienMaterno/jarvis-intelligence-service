@@ -57,28 +57,31 @@ class KnowledgeService:
         query: str,
         source_types: List[str] = None,
         contact_id: str = None,
-        limit: int = 10
+        limit: int = 10,
+        threshold: float = 0.6
     ) -> List[Dict[str, Any]]:
         """
         Semantic search across all knowledge.
-        
+
         Args:
             query: Natural language query
             source_types: Optional filter (e.g., ['transcript', 'meeting'])
             contact_id: Optional filter by related contact
             limit: Max results
-        
+            threshold: Minimum similarity score (0-1)
+
         Returns:
             List of matching chunks with content and metadata
         """
         from app.features.knowledge.retriever import hybrid_search
-        
+
         return await hybrid_search(
             query=query,
             db=self.db,
             source_types=source_types,
             contact_id=contact_id,
-            limit=limit
+            limit=limit,
+            threshold=threshold
         )
     
     async def search_messages(
