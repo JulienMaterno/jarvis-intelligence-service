@@ -848,6 +848,57 @@ class ChatService:
         # Cache behavior rules at startup (refreshed each conversation)
         self._behavior_rules_cache: Optional[str] = None
         self._behavior_rules_loaded: bool = False
+
+    async def _openai_fallback(self, messages: list, system_prompt: str, error_reason: str) -> ChatResponse:
+        """Fall back to OpenAI GPT-4o when Claude is unavailable.
+
+        No tool use — just conversational responses. Flags the response so clients know.
+        """
+        try:
+            from app.services.openai_client import get_openai_client
+            openai_client = get_openai_client()
+
+            # Convert Anthropic message format to OpenAI format
+            openai_messages = [
+                {"role": "system", "content": (
+                    f"{system_prompt}\n\n"
+                    "IMPORTANT: The primary AI backend (Claude) is temporarily unavailable. "
+                    "You are handling this request as a fallback. You do NOT have access to tools. "
+                    "Answer questions from your knowledge. For action requests (create task, etc.), "
+                    "acknowledge them and explain you can't execute tools right now. "
+                    "Keep responses concise."
+                )}
+            ]
+            for msg in messages:
+                if isinstance(msg.get("content"), str):
+                    openai_messages.append({"role": msg["role"], "content": msg["content"]})
+                elif isinstance(msg.get("content"), list):
+                    # Extract text from content blocks
+                    text_parts = [b["text"] for b in msg["content"] if isinstance(b, dict) and b.get("type") == "text"]
+                    if text_parts:
+                        openai_messages.append({"role": msg["role"], "content": " ".join(text_parts)})
+
+            response = await openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=openai_messages,
+                max_tokens=500,
+                temperature=0.3,
+            )
+
+            fallback_response = response.choices[0].message.content
+            logger.warning(f"🔄 OpenAI fallback used (reason: {error_reason}). Response: {fallback_response[:80]}")
+
+            return ChatResponse(
+                response=f"[GPT fallback] {fallback_response}",
+                tools_used=[],
+                error=None
+            )
+        except Exception as fallback_error:
+            logger.error(f"OpenAI fallback also failed: {fallback_error}")
+            return ChatResponse(
+                response="Both AI backends are currently unavailable. Please try again in a moment.",
+                error=f"both_backends_failed: {error_reason} + {fallback_error}"
+            )
     
     async def _get_behavior_rules(self) -> str:
         """
@@ -1371,14 +1422,15 @@ a genuine intellectual exchange, not robotic task completion.
             )
             letta_task = asyncio.create_task(self._get_letta_context())
             behavior_task = asyncio.create_task(self._get_behavior_rules())
-            
+            proactive_task = asyncio.create_task(self._get_proactive_outreach_context())
+
             # Journal context is sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
-            
+
             # Wait for async tasks (in parallel) with timeout
             try:
-                memory_context, letta_context, behavior_rules = await asyncio.wait_for(
-                    asyncio.gather(memory_task, letta_task, behavior_task, return_exceptions=True),
+                memory_context, letta_context, behavior_rules, proactive_context = await asyncio.wait_for(
+                    asyncio.gather(memory_task, letta_task, behavior_task, proactive_task, return_exceptions=True),
                     timeout=2.0  # 2 second max for context gathering
                 )
             except asyncio.TimeoutError:
@@ -1386,7 +1438,8 @@ a genuine intellectual exchange, not robotic task completion.
                 memory_context = ""
                 letta_context = ""
                 behavior_rules = ""
-            
+                proactive_context = ""
+
             # Handle exceptions from gather
             if isinstance(memory_context, Exception):
                 logger.warning(f"Memory context failed: {memory_context}")
@@ -1397,11 +1450,14 @@ a genuine intellectual exchange, not robotic task completion.
             if isinstance(behavior_rules, Exception):
                 logger.warning(f"Behavior rules failed: {behavior_rules}")
                 behavior_rules = ""
-            
+            if isinstance(proactive_context, Exception):
+                logger.warning(f"Proactive context failed: {proactive_context}")
+                proactive_context = ""
+
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
 
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules)
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
 
             model = request.model or MODEL_ID
@@ -1598,6 +1654,23 @@ a genuine intellectual exchange, not robotic task completion.
             else:
                 logger.info(f"💵 Streaming cost: ${cost_info['total_cost']:.4f} ({total_input_tokens} in / {total_output_tokens} out)")
 
+            # Structured cost log for aggregation
+            from app.core.logging_utils import log_llm_cost
+            log_llm_cost(
+                model=model,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                cost_usd=cost_info["total_cost"],
+                duration_ms=int((time.time() - start_time) * 1000),
+                tool_calls=tool_call_count,
+                cache_creation_tokens=total_cache_creation_tokens,
+                cache_read_tokens=total_cache_read_tokens,
+                savings_usd=cost_info["savings"],
+                endpoint="chat/stream",
+                client_type=request.client_type,
+                conversation_id=request.conversation_id,
+            )
+
             # Final event with usage statistics
             yield {
                 "type": "done", 
@@ -1721,7 +1794,13 @@ a genuine intellectual exchange, not robotic task completion.
             
             # Track important tool findings to persist in conversation history
             key_tool_findings = []
-            
+
+            # Track cumulative usage across all API calls in this request
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cache_creation_tokens = 0
+            total_cache_read_tokens = 0
+
             # Get all tools including research tools
             all_tools = get_all_tools()
             
@@ -1763,7 +1842,13 @@ a genuine intellectual exchange, not robotic task completion.
                         else:
                             # Not an overload or last attempt - re-raise
                             raise
-                
+
+                # Accumulate usage from this API call
+                total_input_tokens += response.usage.input_tokens
+                total_output_tokens += response.usage.output_tokens
+                total_cache_creation_tokens += getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+                total_cache_read_tokens += getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+
                 # Check if Claude wants to use a tool
                 if response.stop_reason == "tool_use":
                     tool_call_count += 1
@@ -1837,30 +1922,40 @@ a genuine intellectual exchange, not robotic task completion.
                     except Exception as e:
                         logger.warning(f"Failed to save conversation memory: {e}")
                     
-                    # Calculate and log cost using selected model, including cache info
-                    input_tokens = response.usage.input_tokens
-                    output_tokens = response.usage.output_tokens
-                    
-                    # Get cache metrics if available (only for requests with caching enabled)
-                    cache_creation_tokens = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
-                    cache_read_tokens = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
-                    
-                    # Calculate cost with cache savings
+                    # Calculate and log cost using CUMULATIVE totals across all API calls
+                    # (includes intermediate tool-calling iterations, not just the final response)
                     cost_info = _calculate_cost_with_cache(
                         model=model,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cache_creation_tokens=cache_creation_tokens,
-                        cache_read_tokens=cache_read_tokens
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        cache_creation_tokens=total_cache_creation_tokens,
+                        cache_read_tokens=total_cache_read_tokens
                     )
                     total_cost = cost_info["total_cost"]
-                    
-                    if cache_read_tokens > 0:
-                        logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | 🗄️ Cache: {cache_read_tokens} read, saved ${cost_info['savings']:.4f} | Model: {model}")
-                    elif cache_creation_tokens > 0:
-                        logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | 🗄️ Cache: {cache_creation_tokens} written | Model: {model}")
+
+                    if total_cache_read_tokens > 0:
+                        logger.info(f"💵 Cost: ${total_cost:.4f} ({total_input_tokens} in / {total_output_tokens} out) | 🗄️ Cache: {total_cache_read_tokens} read, saved ${cost_info['savings']:.4f} | Model: {model}")
+                    elif total_cache_creation_tokens > 0:
+                        logger.info(f"💵 Cost: ${total_cost:.4f} ({total_input_tokens} in / {total_output_tokens} out) | 🗄️ Cache: {total_cache_creation_tokens} written | Model: {model}")
                     else:
-                        logger.info(f"💵 Cost: ${total_cost:.4f} ({input_tokens} in / {output_tokens} out) | Model: {model}")
+                        logger.info(f"💵 Cost: ${total_cost:.4f} ({total_input_tokens} in / {total_output_tokens} out) | Model: {model}")
+
+                    # Structured cost log for aggregation
+                    from app.core.logging_utils import log_llm_cost
+                    log_llm_cost(
+                        model=model,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        cost_usd=total_cost,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        tool_calls=tool_call_count,
+                        cache_creation_tokens=total_cache_creation_tokens,
+                        cache_read_tokens=total_cache_read_tokens,
+                        savings_usd=cost_info["savings"],
+                        endpoint="chat",
+                        client_type=request.client_type,
+                        conversation_id=request.conversation_id,
+                    )
                     
                     # Store raw message exchange in Supabase (for audit trail + Letta batch)
                     # This is processed by Letta in batch later (hourly/daily), not per-message
@@ -1872,10 +1967,10 @@ a genuine intellectual exchange, not robotic task completion.
                             source=request.client_type,  # Track source (telegram/web)
                             tools_used=list(set(tools_used)) if tools_used else None,
                             assistant_metadata={
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "cache_creation_tokens": cache_creation_tokens,
-                                "cache_read_tokens": cache_read_tokens,
+                                "input_tokens": total_input_tokens,
+                                "output_tokens": total_output_tokens,
+                                "cache_creation_tokens": total_cache_creation_tokens,
+                                "cache_read_tokens": total_cache_read_tokens,
                                 "cost_usd": round(total_cost, 6),
                                 "savings_usd": round(cost_info["savings"], 6),
                                 "model": model,
@@ -1909,25 +2004,14 @@ a genuine intellectual exchange, not robotic task completion.
             )
         
         except anthropic.RateLimitError as e:
-            # Rate limit - fail fast, don't retry
-            logger.warning(f"Rate limited by Anthropic: {e}")
-            return ChatResponse(
-                response="🔄 I'm a bit overloaded right now. Please wait a moment and try again.",
-                error="rate_limited"
-            )
+            logger.warning(f"Rate limited by Anthropic: {e} — falling back to OpenAI")
+            return await self._openai_fallback(messages, system_prompt, f"rate_limited: {e}")
         except anthropic.APIStatusError as e:
-            # Other API errors (500s, etc) - fail fast
-            logger.error(f"Anthropic API status error {e.status_code}: {e.message}")
-            return ChatResponse(
-                response="Sorry, I'm having trouble connecting right now. Please try again in a moment.",
-                error=f"api_error_{e.status_code}"
-            )
+            logger.error(f"Anthropic API status error {e.status_code}: {e.message} — falling back to OpenAI")
+            return await self._openai_fallback(messages, system_prompt, f"api_error_{e.status_code}")
         except anthropic.APIError as e:
-            logger.error(f"Anthropic API error: {e}")
-            return ChatResponse(
-                response="Sorry, I'm having trouble connecting to my brain. Please try again.",
-                error=str(e)
-            )
+            logger.error(f"Anthropic API error: {e} — falling back to OpenAI")
+            return await self._openai_fallback(messages, system_prompt, f"api_error: {e}")
         except Exception as e:
             logger.exception("Chat processing error")
             return ChatResponse(
