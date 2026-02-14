@@ -240,11 +240,15 @@ async def get_recent_context(
             source_types=types_list,
             limit=limit
         )
-        
+
+        # context is a list of dicts, estimate tokens from content strings
+        total_chars = sum(len(c.get("content", "")) for c in context) if context else 0
+
         return {
             "days": days,
             "context": context,
-            "token_estimate": len(context) // 4
+            "total_chunks": len(context) if context else 0,
+            "token_estimate": total_chars // 4
         }
     except Exception as e:
         logger.error(f"Recent context failed: {e}")
@@ -341,26 +345,122 @@ async def trigger_reindex(
 ):
     """
     Trigger a reindex of the knowledge base.
-    
+
     **Warning**: This can be slow for large datasets.
     Use source_types filter to reindex specific content.
     Use limit for testing.
-    
+
     Example: POST /knowledge/reindex with body:
     {"source_types": ["meeting", "journal"], "limit": 100}
     """
     try:
         knowledge = get_knowledge_service()
-        
+
         results = await knowledge.reindex_all(
             content_types=source_types,
             limit=limit
         )
-        
+
         return {
             "status": "completed",
             "results": results
         }
     except Exception as e:
         logger.error(f"Reindex failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class IncrementalIndexRequest(BaseModel):
+    """Request for incremental indexing."""
+    source_types: Optional[List[str]] = Field(
+        None,
+        description="Types to index. Default: meeting, journal, reflection, email, contact"
+    )
+    batch_size: int = Field(50, ge=1, le=200, description="Records per type per run")
+
+
+@router.post("/index/incremental")
+async def incremental_index(request: Optional[IncrementalIndexRequest] = None):
+    """
+    Index only NEW records not yet in knowledge_chunks.
+
+    This is safe to call frequently (e.g., after each sync cycle).
+    It skips records that already have chunks, so it's fast when
+    there's nothing new to index.
+
+    Ideal for catching sync-created data (emails, contacts, meetings
+    from Notion sync, calendar events).
+    """
+    try:
+        from app.features.knowledge.indexer import (
+            INDEX_FUNCTION_MAP, TABLE_NAME_MAP,
+        )
+        knowledge = get_knowledge_service()
+        db = knowledge.db
+
+        source_types = (request.source_types if request else None) or [
+            "meeting", "journal", "reflection", "email",
+            "contact", "transcript", "calendar",
+        ]
+        batch_size = request.batch_size if request else 50
+
+        results: Dict[str, Any] = {}
+
+        for source_type in source_types:
+            table_name = TABLE_NAME_MAP.get(source_type)
+            index_func = INDEX_FUNCTION_MAP.get(source_type)
+            if not table_name or not index_func:
+                continue
+
+            try:
+                # Get IDs that are NOT already indexed
+                all_ids_result = db.client.table(table_name).select("id").limit(batch_size * 5).execute()
+                if not all_ids_result.data:
+                    results[source_type] = {"indexed": 0, "skipped": 0}
+                    continue
+
+                all_ids = [r["id"] for r in all_ids_result.data]
+
+                # Check which are already in knowledge_chunks
+                existing_result = db.client.table("knowledge_chunks").select(
+                    "source_id"
+                ).eq("source_type", source_type).is_(
+                    "deleted_at", "null"
+                ).in_("source_id", all_ids).execute()
+
+                existing_ids = {r["source_id"] for r in (existing_result.data or [])}
+                new_ids = [id for id in all_ids if id not in existing_ids][:batch_size]
+
+                indexed = 0
+                errors = 0
+                for record_id in new_ids:
+                    try:
+                        count = await index_func(record_id, db)
+                        indexed += count
+                    except Exception as e:
+                        logger.warning(f"Failed to index {source_type} {record_id}: {e}")
+                        errors += 1
+
+                results[source_type] = {
+                    "indexed": indexed,
+                    "new_records": len(new_ids),
+                    "skipped": len(existing_ids),
+                    "errors": errors,
+                }
+                if new_ids:
+                    logger.info(
+                        f"Incremental index {source_type}: {indexed} chunks from {len(new_ids)} new records"
+                    )
+            except Exception as e:
+                logger.error(f"Incremental index failed for {source_type}: {e}")
+                results[source_type] = {"error": str(e)}
+
+        total_indexed = sum(r.get("indexed", 0) for r in results.values() if isinstance(r, dict))
+        return {
+            "status": "completed",
+            "total_indexed": total_indexed,
+            "results": results,
+        }
+    except Exception as e:
+        logger.error(f"Incremental index failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

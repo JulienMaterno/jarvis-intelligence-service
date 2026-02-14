@@ -31,6 +31,59 @@ async def _seed_memory_from_analysis(analysis: dict, source_file: str) -> None:
         logger.warning(f"Failed to seed memories: {e}")
 
 
+async def _index_new_records(db_records: dict) -> None:
+    """Index newly created records into knowledge_chunks for RAG search.
+
+    Runs as a background task after transcript processing. Each record
+    type is indexed independently so a single failure doesn't block others.
+    """
+    try:
+        from app.features.knowledge import get_knowledge_service
+        knowledge = get_knowledge_service()
+
+        indexed_total = 0
+
+        # Index the transcript itself (raw text is valuable for search)
+        transcript_id = db_records.get("transcript_id")
+        if transcript_id:
+            try:
+                count = await knowledge.index_transcript(transcript_id)
+                indexed_total += count
+            except Exception as e:
+                logger.warning(f"Failed to index transcript {transcript_id}: {e}")
+
+        # Index meetings
+        for meeting_id in db_records.get("meeting_ids", []):
+            try:
+                count = await knowledge.index_meeting(meeting_id)
+                indexed_total += count
+            except Exception as e:
+                logger.warning(f"Failed to index meeting {meeting_id}: {e}")
+
+        # Index reflections
+        for reflection_id in db_records.get("reflection_ids", []):
+            try:
+                from app.features.knowledge.indexer import index_reflection
+                count = await index_reflection(reflection_id, knowledge.db)
+                indexed_total += count
+            except Exception as e:
+                logger.warning(f"Failed to index reflection {reflection_id}: {e}")
+
+        # Index journals
+        for journal_id in db_records.get("journal_ids", []):
+            try:
+                from app.features.knowledge.indexer import index_journal
+                count = await index_journal(journal_id, knowledge.db)
+                indexed_total += count
+            except Exception as e:
+                logger.warning(f"Failed to index journal {journal_id}: {e}")
+
+        if indexed_total > 0:
+            logger.info(f"Auto-indexed {indexed_total} knowledge chunks from transcript processing")
+    except Exception as e:
+        logger.error(f"Knowledge auto-indexing failed: {e}", exc_info=True)
+
+
 async def _handle_clarifications_needed(
     analysis: dict,
     db_records: dict,
@@ -353,6 +406,25 @@ async def process_transcript(
             use_two_stage=True,  # NEW: Enable two-stage processing
         )
 
+        # Log analysis quality check - detect when AI failed silently
+        if analysis.get("_analysis_failed"):
+            logger.error(
+                "ANALYSIS FAILED for transcript %s (file=%s, length=%d chars). "
+                "Fallback analysis in use - meetings will have generic content.",
+                transcript_id, filename, len(transcript_text),
+            )
+        else:
+            logger.info(
+                "Analysis complete for transcript %s: category=%s, meetings=%d, "
+                "reflections=%d, journals=%d, tasks=%d",
+                transcript_id,
+                analysis.get("primary_category", "unknown"),
+                len(analysis.get("meetings", [])),
+                len(analysis.get("reflections", [])),
+                len(analysis.get("journals", [])),
+                len(analysis.get("tasks", [])),
+            )
+
         db_records = {
             "transcript_id": transcript_id,
             "meeting_ids": [],
@@ -369,19 +441,44 @@ async def process_transcript(
         transcript_source_type = transcript_record.get("source_type")
         if transcript_source_type == "meeting":
             if primary_category != "meeting":
-                logger.info(f"Overriding category from '{primary_category}' to 'meeting' (source_type=meeting)")
+                logger.warning(
+                    "Overriding category from '%s' to 'meeting' for transcript %s "
+                    "(source_type=meeting, analysis_failed=%s)",
+                    primary_category,
+                    transcript_id,
+                    analysis.get("_analysis_failed", False),
+                )
                 primary_category = "meeting"
 
                 # Ensure at least one meeting is created if AI didn't extract any
                 if not analysis.get("meetings"):
-                    # Create a default meeting entry
+                    # Build a meaningful default meeting from the transcript content
+                    # instead of a completely generic stub
+                    default_summary = analysis.get("summary") or ""
+                    if not default_summary or default_summary == "Auto-captured meeting recording":
+                        # Use transcript preview as the summary when AI failed
+                        transcript_preview = transcript_text[:2000].strip() if transcript_text else ""
+                        default_summary = (
+                            f"Meeting recording ({len(transcript_text)} chars). "
+                            f"AI analysis {'failed' if analysis.get('_analysis_failed') else 'did not categorize as meeting'}. "
+                            f"Preview: {transcript_preview[:500]}..."
+                            if transcript_preview else "Auto-captured meeting recording"
+                        )
+
+                    default_topics = analysis.get("key_topics", [])
+
                     analysis["meetings"] = [{
                         "title": f"Meeting ({filename})",
-                        "summary": analysis.get("summary", "Auto-captured meeting recording"),
-                        "topics_discussed": analysis.get("key_topics", []),
+                        "summary": default_summary,
+                        "topics_discussed": default_topics,
                         "date": transcript_record.get("created_at"),
                     }]
-                    logger.info("Created default meeting entry for source_type=meeting")
+                    logger.warning(
+                        "Created default meeting entry for source_type=meeting "
+                        "(transcript_id=%s, summary_length=%d)",
+                        transcript_id,
+                        len(default_summary),
+                    )
 
         for journal in analysis.get("journals", []):
             j_id, _ = db.create_journal(
@@ -565,7 +662,7 @@ async def process_transcript(
                 transcript_id,
                 db
             )
-        
+
         # Send meeting feedback for EACH meeting (even if created with journal)
         if db_records["meeting_ids"]:
             background_tasks.add_task(
@@ -574,7 +671,10 @@ async def process_transcript(
                 analysis.get("meetings", []),
                 db_records["contact_matches"]
             )
-        
+
+        # Auto-index new records into knowledge_chunks for RAG search
+        background_tasks.add_task(_index_new_records, db_records)
+
         logger.info("Scheduled sync triggers for records from transcript %s", transcript_id)
 
         return AnalysisResponse(status="success", analysis=analysis, db_records=db_records)
@@ -792,7 +892,10 @@ async def analyze_transcript(request: TranscriptRequest, background_tasks: Backg
                 analysis.get("meetings", []),
                 db_records["contact_matches"]
             )
-        
+
+        # Auto-index new records into knowledge_chunks for RAG search
+        background_tasks.add_task(_index_new_records, db_records)
+
         logger.info("Scheduled sync triggers for new transcript %s", transcript_id)
 
         return AnalysisResponse(status="success", analysis=analysis, db_records=db_records)
@@ -1014,7 +1117,10 @@ async def process_meeting_transcript(
                 meetings,
                 db_records["contact_matches"]
             )
-        
+
+        # Auto-index new records into knowledge_chunks for RAG search
+        background_tasks.add_task(_index_new_records, db_records)
+
         meeting_id = db_records["meeting_ids"][0] if db_records["meeting_ids"] else None
         meeting_title = meetings[0].get("title") if meetings else None
         
