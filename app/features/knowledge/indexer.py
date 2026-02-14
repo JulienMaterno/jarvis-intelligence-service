@@ -73,13 +73,13 @@ async def index_content(
     """
     metadata = metadata or {}
     
-    # Delete existing chunks for this source (re-indexing)
+    # Soft-delete existing chunks for this source (re-indexing)
     try:
-        db.client.table("knowledge_chunks").delete().eq(
-            "source_id", source_id
-        ).execute()
+        db.client.table("knowledge_chunks").update({
+            "deleted_at": datetime.now(timezone.utc).isoformat()
+        }).eq("source_id", source_id).is_("deleted_at", "null").execute()
     except Exception as e:
-        logger.warning(f"Failed to delete existing chunks: {e}")
+        logger.warning(f"Failed to soft-delete existing chunks: {e}")
     
     # Chunk based on content type
     if source_type == "transcript":
@@ -478,6 +478,48 @@ async def index_calendar_event(event_id: str, db, force: bool = False) -> int:
         return 0
 
 
+async def index_task(task_id: str, db, force: bool = False) -> int:
+    """Index a task."""
+    if not force:
+        existing = db.client.table("knowledge_chunks").select("id").eq(
+            "source_id", task_id
+        ).eq("source_type", "task").limit(1).execute()
+        if existing.data:
+            return 0
+
+    result = db.client.table("tasks").select("*").eq("id", task_id).execute()
+    if not result.data:
+        return 0
+
+    task = result.data[0]
+
+    # Skip deleted tasks
+    if task.get("deleted_at"):
+        return 0
+
+    chunk = chunk_task(task)
+
+    # Skip tasks with minimal content
+    if len(chunk["content"]) < 15:
+        return 0
+
+    try:
+        embedding = await get_embedding(chunk["content"])
+        db.client.table("knowledge_chunks").insert({
+            "source_type": "task",
+            "source_id": task_id,
+            "chunk_index": 0,
+            "content": chunk["content"],
+            "content_hash": chunk.get("content_hash"),
+            "embedding": embedding,
+            "metadata": chunk.get("metadata", {}),
+        }).execute()
+        return 1
+    except Exception as e:
+        logger.error(f"Failed to index task: {e}")
+        return 0
+
+
 async def index_journal(journal_id: str, db, force: bool = False) -> int:
     """Index a journal entry."""
     if not force:
@@ -785,6 +827,7 @@ INDEX_FUNCTION_MAP = {
     "contact": lambda id, db: index_contact(id, db, force=True),
     "journal": lambda id, db: index_journal(id, db, force=True),
     "reflection": lambda id, db: index_reflection(id, db, force=True),
+    "task": lambda id, db: index_task(id, db, force=True),
     "calendar": lambda id, db: index_calendar_event(id, db, force=True),
     "application": lambda id, db: index_application(id, db, force=True),
     "document": lambda id, db: index_document(id, db, force=True),

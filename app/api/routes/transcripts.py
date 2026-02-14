@@ -81,30 +81,9 @@ async def _index_new_records(db_records: dict) -> None:
         # Index tasks created from the analysis
         for task_id in db_records.get("task_ids", []):
             try:
-                from app.features.knowledge.indexer import index_content
-                # Fetch task to build content
-                task_result = knowledge.db.client.table("tasks").select(
-                    "id, title, description, due_date, status"
-                ).eq("id", task_id).execute()
-                if task_result.data:
-                    task = task_result.data[0]
-                    content = f"Task: {task.get('title', '')}"
-                    if task.get("description"):
-                        content += f"\n{task['description']}"
-                    if task.get("due_date"):
-                        content += f"\nDue: {task['due_date']}"
-                    count = await index_content(
-                        source_type="task",
-                        source_id=task_id,
-                        content=content,
-                        db=knowledge.db,
-                        metadata={
-                            "title": task.get("title"),
-                            "due_date": task.get("due_date"),
-                            "status": task.get("status"),
-                        },
-                    )
-                    indexed_total += count
+                from app.features.knowledge.indexer import index_task
+                count = await index_task(task_id, knowledge.db)
+                indexed_total += count
             except Exception as e:
                 logger.warning(f"Failed to index task {task_id}: {e}")
 
