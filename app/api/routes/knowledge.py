@@ -401,6 +401,7 @@ async def incremental_index(request: Optional[IncrementalIndexRequest] = None):
         source_types = (request.source_types if request else None) or [
             "meeting", "journal", "reflection", "email",
             "contact", "transcript", "calendar",
+            "task", "book", "highlight", "application",
         ]
         batch_size = request.batch_size if request else 50
 

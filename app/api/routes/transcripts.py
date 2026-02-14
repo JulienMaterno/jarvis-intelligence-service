@@ -78,6 +78,46 @@ async def _index_new_records(db_records: dict) -> None:
             except Exception as e:
                 logger.warning(f"Failed to index journal {journal_id}: {e}")
 
+        # Index tasks created from the analysis
+        for task_id in db_records.get("task_ids", []):
+            try:
+                from app.features.knowledge.indexer import index_content
+                # Fetch task to build content
+                task_result = knowledge.db.client.table("tasks").select(
+                    "id, title, description, due_date, status"
+                ).eq("id", task_id).execute()
+                if task_result.data:
+                    task = task_result.data[0]
+                    content = f"Task: {task.get('title', '')}"
+                    if task.get("description"):
+                        content += f"\n{task['description']}"
+                    if task.get("due_date"):
+                        content += f"\nDue: {task['due_date']}"
+                    count = await index_content(
+                        source_type="task",
+                        source_id=task_id,
+                        content=content,
+                        db=knowledge.db,
+                        metadata={
+                            "title": task.get("title"),
+                            "due_date": task.get("due_date"),
+                            "status": task.get("status"),
+                        },
+                    )
+                    indexed_total += count
+            except Exception as e:
+                logger.warning(f"Failed to index task {task_id}: {e}")
+
+        # Index contacts that were matched/created during processing
+        for match in db_records.get("contact_matches", []):
+            contact_id = match.get("contact_id")
+            if contact_id:
+                try:
+                    count = await knowledge.index_contact(contact_id)
+                    indexed_total += count
+                except Exception as e:
+                    logger.warning(f"Failed to index contact {contact_id}: {e}")
+
         if indexed_total > 0:
             logger.info(f"Auto-indexed {indexed_total} knowledge chunks from transcript processing")
     except Exception as e:
