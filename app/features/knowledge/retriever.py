@@ -13,17 +13,8 @@ logger = logging.getLogger("Jarvis.Knowledge.Retriever")
 
 async def get_query_embedding(query: str) -> List[float]:
     """Generate embedding for a search query."""
-    import openai
-    import os
-    
-    client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    
-    response = await client.embeddings.create(
-        model="text-embedding-ada-002",
-        input=query[:8000]
-    )
-    
-    return response.data[0].embedding
+    from app.features.knowledge.indexer import get_embedding
+    return await get_embedding(query)
 
 
 async def semantic_search(

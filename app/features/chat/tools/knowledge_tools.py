@@ -58,7 +58,7 @@ EXAMPLE QUERIES:
                 "content_types": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional filter by type: emails, linkedin_posts, beeper_messages, transcripts, applications, documents, contacts, meetings, journals, reflections"
+                    "description": "Optional filter by type: email, linkedin_post, beeper_message, transcript, application, document, contact, meeting, journal, reflection, calendar, task, book, highlight"
                 },
                 "limit": {
                     "type": "integer",
@@ -215,6 +215,24 @@ Use when user asks about previous conversations or what they discussed before.""
 # TOOL IMPLEMENTATIONS
 # =============================================================================
 
+_PLURAL_TO_SINGULAR = {
+    "emails": "email",
+    "linkedin_posts": "linkedin_post",
+    "beeper_messages": "beeper_message",
+    "transcripts": "transcript",
+    "applications": "application",
+    "documents": "document",
+    "contacts": "contact",
+    "meetings": "meeting",
+    "journals": "journal",
+    "reflections": "reflection",
+    "calendars": "calendar",
+    "tasks": "task",
+    "books": "book",
+    "highlights": "highlight",
+}
+
+
 def _query_knowledge(
     query: str,
     content_types: Optional[List[str]] = None,
@@ -226,6 +244,12 @@ def _query_knowledge(
 
     try:
         from app.features.knowledge.retriever import hybrid_search
+
+        # Normalize plural type names to singular (DB uses singular)
+        if content_types:
+            content_types = [
+                _PLURAL_TO_SINGULAR.get(t, t) for t in content_types
+            ]
 
         # Create a simple wrapper so the retriever can access supabase as db.client
         class _DB:
