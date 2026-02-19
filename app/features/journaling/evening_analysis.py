@@ -42,6 +42,7 @@ class ActivityData(BaseModel):
     tasks_completed: List[Dict] = Field(default_factory=list)
     tasks_created: List[Dict] = Field(default_factory=list)
     tasks_due_today: List[Dict] = Field(default_factory=list)  # Tasks scheduled for today (may have been set earlier)
+    tasks_overdue: List[Dict] = Field(default_factory=list)  # Tasks past due date, still pending
     reflections: List[Dict] = Field(default_factory=list)
     highlights: List[Dict] = Field(default_factory=list)  # Book highlights
     reading: Optional[Dict] = None  # Reading progress
@@ -136,6 +137,21 @@ def build_activity_context(data: ActivityData) -> str:
                 line += f" ({priority})"
             task_lines.append(line)
         sections.append(f"TASKS DUE TODAY ({len(data.tasks_due_today)}):\n" + "\n".join(task_lines))
+
+    # Overdue Tasks (past due date, still pending - needs attention)
+    if data.tasks_overdue:
+        task_lines = []
+        for t in data.tasks_overdue[:10]:
+            title = t.get("title", "Task")
+            priority = t.get("priority", "")
+            due = t.get("due_date", "")
+            line = f"- {title}"
+            if due:
+                line += f" [was due: {due}]"
+            if priority:
+                line += f" ({priority})"
+            task_lines.append(line)
+        sections.append(f"⚠️ OVERDUE TASKS ({len(data.tasks_overdue)}):\n" + "\n".join(task_lines))
     
     # Reflections
     if data.reflections:
@@ -380,12 +396,16 @@ def format_telegram_message(
         created = activity_summary.get("tasks_created_count", 0)
         book_highlights = activity_summary.get("highlights_count", 0)
         
+        overdue = activity_summary.get("tasks_overdue_count", 0)
+
         if meetings:
             stats.append(f"🤝 {meetings} meeting{'s' if meetings > 1 else ''}")
         if completed:
             stats.append(f"✅ {completed} done")
         if created:
             stats.append(f"📝 {created} new tasks")
+        if overdue:
+            stats.append(f"⚠️ {overdue} overdue")
         if book_highlights:
             stats.append(f"📚 {book_highlights} highlights")
         

@@ -1139,6 +1139,72 @@ class ChatService:
             logger.warning(f"Could not get journal context: {e}")
             return ""
     
+    def _get_task_context(self) -> str:
+        """
+        Get pending/overdue tasks to inject into the chat system prompt.
+
+        Gives the AI awareness of what the user should be working on,
+        so it can proactively reference tasks in conversation.
+        """
+        try:
+            from app.core.database import supabase
+            from datetime import datetime, timezone
+
+            today = datetime.now(timezone.utc).date().isoformat()
+
+            # Get overdue tasks
+            overdue_resp = supabase.table("tasks").select(
+                "title, priority, due_date"
+            ).eq("status", "pending").lt(
+                "due_date", today
+            ).is_("deleted_at", "null").order("due_date").limit(10).execute()
+            overdue = overdue_resp.data or []
+
+            # Get tasks due today
+            today_resp = supabase.table("tasks").select(
+                "title, priority, due_date"
+            ).eq("status", "pending").eq(
+                "due_date", today
+            ).is_("deleted_at", "null").execute()
+            due_today = today_resp.data or []
+
+            # Get other high-priority pending tasks
+            high_resp = supabase.table("tasks").select(
+                "title, priority, due_date"
+            ).eq("status", "pending").eq(
+                "priority", "high"
+            ).is_("deleted_at", "null").limit(5).execute()
+            # Exclude already shown
+            shown_titles = {t["title"] for t in overdue + due_today}
+            high_priority = [t for t in (high_resp.data or []) if t["title"] not in shown_titles]
+
+            if not overdue and not due_today and not high_priority:
+                return ""
+
+            lines = []
+            if overdue:
+                lines.append("OVERDUE:")
+                for t in overdue:
+                    lines.append(f"  - {t['title']} (due {t.get('due_date', '?')}, {t.get('priority', 'medium')})")
+            if due_today:
+                lines.append("DUE TODAY:")
+                for t in due_today:
+                    lines.append(f"  - {t['title']} ({t.get('priority', 'medium')})")
+            if high_priority:
+                lines.append("HIGH PRIORITY:")
+                for t in high_priority:
+                    due = f", due {t['due_date']}" if t.get("due_date") else ""
+                    lines.append(f"  - {t['title']}{due}")
+
+            return (
+                "\n\n**PENDING TASKS (user's current action items - reference naturally when relevant):**\n"
+                + "\n".join(lines)
+            )
+
+        except Exception as e:
+            logger.warning(f"Could not get task context: {e}")
+            return ""
+
     async def _get_letta_context(self) -> str:
         """Get episodic memory context from Letta (conversation history, topics, decisions)."""
         try:
@@ -1293,8 +1359,8 @@ If Aaron says "yes" or confirms, USE THE RELEVANT TOOLS to actually do the resea
             logger.warning(f"Failed to get proactive outreach context: {e}")
             return ""
     
-    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "", proactive_context: str = "") -> str:
-        """Build system prompt with current date/time/location, memory, journal, Letta context, behavior rules, and proactive outreach context."""
+    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "", proactive_context: str = "", task_context: str = "") -> str:
+        """Build system prompt with current date/time/location, memory, journal, Letta context, behavior rules, proactive outreach context, and task awareness."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -1336,6 +1402,10 @@ If Aaron says "yes" or confirms, USE THE RELEVANT TOOLS to actually do the resea
         # Append journal context (user's current mood/focus)
         if journal_context:
             base_prompt += journal_context
+
+        # Append task context (pending/overdue tasks)
+        if task_context:
+            base_prompt += task_context
 
         # Append Mem0 semantic memory context last
         if memory_context:
@@ -1424,8 +1494,9 @@ a genuine intellectual exchange, not robotic task completion.
             behavior_task = asyncio.create_task(self._get_behavior_rules())
             proactive_task = asyncio.create_task(self._get_proactive_outreach_context())
 
-            # Journal context is sync/fast, run directly
+            # Journal + task context are sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
+            task_context = self._get_task_context()
 
             # Wait for async tasks (in parallel) with timeout
             try:
@@ -1457,7 +1528,7 @@ a genuine intellectual exchange, not robotic task completion.
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
 
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context)
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context, task_context)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
 
             model = request.model or MODEL_ID
@@ -1707,9 +1778,10 @@ a genuine intellectual exchange, not robotic task completion.
             behavior_task = asyncio.create_task(self._get_behavior_rules())
             proactive_task = asyncio.create_task(self._get_proactive_outreach_context())
             
-            # Journal context is sync/fast, run directly
+            # Journal + task context are sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
-            
+            task_context = self._get_task_context()
+
             # Wait for async tasks (in parallel) with timeout
             try:
                 memory_context, letta_context, behavior_rules, proactive_context = await asyncio.wait_for(
@@ -1722,7 +1794,7 @@ a genuine intellectual exchange, not robotic task completion.
                 letta_context = ""
                 behavior_rules = ""
                 proactive_context = ""
-            
+
             # Handle exceptions from gather
             if isinstance(memory_context, Exception):
                 logger.warning(f"Memory context failed: {memory_context}")
@@ -1736,12 +1808,12 @@ a genuine intellectual exchange, not robotic task completion.
             if isinstance(proactive_context, Exception):
                 logger.warning(f"Proactive context failed: {proactive_context}")
                 proactive_context = ""
-            
+
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
-            
-            # Build dynamic system prompt with current context, journals, Letta, behavior rules, proactive context, and memory
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context)
+
+            # Build dynamic system prompt with current context, journals, Letta, behavior rules, proactive context, tasks, and memory
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context, task_context)
 
             # Add client-specific response style instructions (telegram vs web)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
