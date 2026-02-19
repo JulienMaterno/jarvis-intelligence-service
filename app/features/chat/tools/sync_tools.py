@@ -5,12 +5,11 @@ This module contains tools for triggering data synchronization between
 Supabase, Notion, and external services.
 """
 
-import os
 import httpx
 import logging
 from typing import Dict, List, Any, Optional
 
-from .base import _get_identity_token, logger
+from .base import _get_sync_service_headers, _get_sync_service_url, logger
 
 
 # =============================================================================
@@ -68,13 +67,8 @@ def _quick_sync(params: Dict[str, Any]) -> Dict[str, Any]:
     if entity_type not in valid_entities:
         return {"error": f"Invalid entity_type. Must be one of: {valid_entities}"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
-
-    # Get identity token for service-to-service auth
-    identity_token = _get_identity_token(sync_service_url)
-    headers = {"Content-Type": "application/json"}
-    if identity_token:
-        headers["Authorization"] = f"Bearer {identity_token}"
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers(content_type=True)
 
     try:
         with httpx.Client(timeout=60.0) as client:

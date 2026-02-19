@@ -5,14 +5,13 @@ This module contains tools for email operations including reading emails,
 creating drafts, sending emails, and managing drafts.
 """
 
-import os
 import httpx
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 from app.core.database import supabase
-from .base import logger
+from .base import _get_sync_service_headers, _get_sync_service_url, logger
 
 
 # =============================================================================
@@ -260,6 +259,13 @@ def _get_email_by_id(input: Dict) -> Dict[str, Any]:
             return {"error": "Either email_id or thread_id is required"}
 
         if email_id:
+            # Sanitize input: strip whitespace, reject values with PostgREST
+            # filter operators (commas, dots followed by operators) to prevent
+            # filter injection via the .or_() f-string
+            email_id = str(email_id).strip()
+            if any(c in email_id for c in (",", "(", ")")):
+                return {"error": "Invalid email_id format"}
+
             result = supabase.table("emails").select("*").or_(
                 f"id.eq.{email_id},google_message_id.eq.{email_id}"
             ).execute()
@@ -317,16 +323,24 @@ def _search_emails_live(input: Dict) -> Dict[str, Any]:
         if not query:
             return {"error": "Search query is required"}
 
-        sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+        sync_service_url = _get_sync_service_url()
+        headers = _get_sync_service_headers()
+
+        # Build Gmail search query string with optional filters
+        gmail_query = query
+        if from_email:
+            gmail_query = f"from:{from_email} {gmail_query}"
+        if days_back:
+            date_cutoff = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
+            gmail_query = f"after:{date_cutoff} {gmail_query}"
 
         with httpx.Client(timeout=30.0) as client:
             response = client.get(
                 f"{sync_service_url}/gmail/search",
+                headers=headers,
                 params={
-                    "query": query,
-                    "from_email": from_email,
-                    "days_back": days_back,
-                    "limit": limit
+                    "q": gmail_query,
+                    "max_results": limit
                 }
             )
 
@@ -404,12 +418,14 @@ def _create_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
     if not subject or not body:
         return {"error": "Missing required fields: subject, body"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers(content_type=True)
 
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 f"{sync_service_url}/gmail/drafts",
+                headers=headers,
                 json={
                     "to": to,
                     "subject": subject,
@@ -450,12 +466,14 @@ def _create_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
 def _list_email_drafts(params: Dict[str, Any]) -> Dict[str, Any]:
     """List all email drafts from Gmail."""
     limit = params.get("limit", 10)
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers()
 
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.get(
                 f"{sync_service_url}/gmail/drafts",
+                headers=headers,
                 params={"limit": limit}
             )
 
@@ -494,11 +512,15 @@ def _get_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
     if not draft_id:
         return {"error": "Missing draft_id"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers()
 
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.get(f"{sync_service_url}/gmail/drafts/{draft_id}")
+            response = client.get(
+                f"{sync_service_url}/gmail/drafts/{draft_id}",
+                headers=headers
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -526,11 +548,15 @@ def _send_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
     if not draft_id:
         return {"error": "Missing draft_id"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers()
 
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.post(f"{sync_service_url}/gmail/drafts/{draft_id}/send")
+            response = client.post(
+                f"{sync_service_url}/gmail/drafts/{draft_id}/send",
+                headers=headers
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -554,11 +580,15 @@ def _delete_email_draft(params: Dict[str, Any]) -> Dict[str, Any]:
     if not draft_id:
         return {"error": "Missing draft_id"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers()
 
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.delete(f"{sync_service_url}/gmail/drafts/{draft_id}")
+            response = client.delete(
+                f"{sync_service_url}/gmail/drafts/{draft_id}",
+                headers=headers
+            )
 
             if response.status_code == 200:
                 return {

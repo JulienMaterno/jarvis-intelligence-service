@@ -128,6 +128,51 @@ def _get_identity_token(audience: str) -> Optional[str]:
     return None
 
 
+def _get_sync_service_headers(content_type: bool = False) -> dict:
+    """Get headers for calling the sync service with X-API-Key auth.
+
+    The sync service uses X-API-Key middleware, NOT Bearer tokens.
+    This replaces the broken _get_identity_token pattern for sync service calls.
+
+    Args:
+        content_type: Include Content-Type: application/json header
+    """
+    headers = {}
+    if content_type:
+        headers["Content-Type"] = "application/json"
+
+    api_key = os.getenv("INTERNAL_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    else:
+        logger.warning("INTERNAL_API_KEY not set - sync service calls will fail with 401")
+
+    return headers
+
+
+def _get_sync_service_url() -> str:
+    """Get the sync service URL with correct default."""
+    return os.getenv(
+        "SYNC_SERVICE_URL",
+        "https://jarvis-sync-service-776871804948.asia-southeast1.run.app"
+    )
+
+
+# =============================================================================
+# INPUT SANITIZATION
+# =============================================================================
+
+def _sanitize_ilike(value: str) -> str:
+    """Sanitize a value for safe use in PostgREST ILIKE filters.
+
+    Escapes special characters that have meaning in LIKE/ILIKE patterns
+    and strips commas which act as filter separators in PostgREST or_() calls.
+    """
+    sanitized = value.replace(",", "").replace("(", "").replace(")", "")
+    sanitized = sanitized.replace("%", r"\%").replace("_", r"\_")
+    return sanitized.strip()
+
+
 # =============================================================================
 # ASYNC HELPERS
 # =============================================================================

@@ -9,7 +9,7 @@ import logging
 from typing import Dict, List, Any, Optional
 
 from app.core.database import supabase
-from .base import _run_async, logger
+from .base import _run_async, _sanitize_ilike, logger
 
 
 # =============================================================================
@@ -303,13 +303,14 @@ def _fallback_text_search(
     """Fallback text search when vector search is unavailable."""
     try:
         results = []
+        safe_query = _sanitize_ilike(query)
 
         # Search emails
         if not content_types or "emails" in content_types:
             emails = supabase.table("emails").select(
                 "id, subject, sender, snippet, date"
             ).or_(
-                f"subject.ilike.%{query}%,snippet.ilike.%{query}%,body_text.ilike.%{query}%"
+                f"subject.ilike.%{safe_query}%,snippet.ilike.%{safe_query}%,body_text.ilike.%{safe_query}%"
             ).order("date", desc=True).limit(limit).execute()
 
             for e in (emails.data or []):
@@ -325,7 +326,7 @@ def _fallback_text_search(
             meetings = supabase.table("meetings").select(
                 "id, title, summary, date, contact_name"
             ).or_(
-                f"title.ilike.%{query}%,summary.ilike.%{query}%"
+                f"title.ilike.%{safe_query}%,summary.ilike.%{safe_query}%"
             ).order("date", desc=True).limit(limit).execute()
 
             for m in (meetings.data or []):
@@ -341,7 +342,7 @@ def _fallback_text_search(
             reflections = supabase.table("reflections").select(
                 "id, title, content, topic_key"
             ).or_(
-                f"title.ilike.%{query}%,content.ilike.%{query}%"
+                f"title.ilike.%{safe_query}%,content.ilike.%{safe_query}%"
             ).is_("deleted_at", "null").limit(limit).execute()
 
             for r in (reflections.data or []):

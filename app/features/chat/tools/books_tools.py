@@ -10,13 +10,12 @@ Tools:
 - list_summary_book_projects: List all summary book projects
 """
 
-import os
 import logging
 from typing import Dict, Any
 
 import httpx
 
-from .base import _get_identity_token, logger
+from .base import _get_sync_service_headers, _get_sync_service_url as _base_get_sync_service_url, logger
 
 
 # =============================================================================
@@ -137,10 +136,7 @@ Returns all projects with their status.""",
 
 def _get_sync_service_url() -> str:
     """Get the sync service URL."""
-    return os.getenv(
-        "SYNC_SERVICE_URL",
-        "https://jarvis-sync-service-776871804948.asia-southeast1.run.app"
-    )
+    return _base_get_sync_service_url()
 
 
 def _call_sync_service(method: str, path: str, json_data: dict | None = None, timeout: float = 120.0) -> dict:
@@ -156,11 +152,7 @@ def _call_sync_service(method: str, path: str, json_data: dict | None = None, ti
         Response JSON or error dict
     """
     sync_url = _get_sync_service_url()
-    identity_token = _get_identity_token(sync_url)
-
-    headers = {"Content-Type": "application/json"}
-    if identity_token:
-        headers["Authorization"] = f"Bearer {identity_token}"
+    headers = _get_sync_service_headers(content_type=True)
 
     try:
         with httpx.Client(timeout=timeout) as client:

@@ -106,36 +106,41 @@ async def _manual_semantic_search(
     
     Less efficient but works on any Supabase setup.
     """
+    import json
     import numpy as np
-    
+
     # Fetch chunks (with filters)
     query = db.client.table("knowledge_chunks").select(
         "id, source_type, source_id, chunk_index, content, metadata, embedding"
     ).is_("deleted_at", "null")
-    
+
     if source_types:
         query = query.in_("source_type", source_types)
-    
+
     if contact_id:
         query = query.eq("metadata->>contact_id", contact_id)
-    
+
     # Limit to reasonable number for in-memory processing
     query = query.limit(1000)
-    
+
     result = query.execute()
-    
+
     if not result.data:
         return []
-    
+
     # Calculate similarities
-    query_vec = np.array(query_embedding)
+    query_vec = np.array(query_embedding, dtype=np.float32)
     results = []
-    
+
     for chunk in result.data:
         if not chunk.get("embedding"):
             continue
-        
-        chunk_vec = np.array(chunk["embedding"])
+
+        # pgvector may return embeddings as JSON strings - parse to float array
+        chunk_embedding = chunk["embedding"]
+        if isinstance(chunk_embedding, str):
+            chunk_embedding = json.loads(chunk_embedding)
+        chunk_vec = np.array(chunk_embedding, dtype=np.float32)
         
         # Cosine similarity
         similarity = np.dot(query_vec, chunk_vec) / (

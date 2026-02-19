@@ -5,14 +5,13 @@ This module contains tools for calendar operations including viewing events,
 creating events, updating events, and declining invitations.
 """
 
-import os
 import httpx
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 from app.core.database import supabase
-from .base import _get_identity_token, logger
+from .base import _get_sync_service_headers, _get_sync_service_url, logger
 
 
 # =============================================================================
@@ -187,6 +186,7 @@ def _get_upcoming_events(days: int = 7) -> Dict[str, Any]:
             "id, google_event_id, summary, description, start_time, end_time, "
             "location, status, attendees, contact_id"
         ).gte("start_time", now.isoformat()).lte("start_time", end.isoformat()
+        ).neq("status", "cancelled"
         ).order("start_time").limit(50).execute()
 
         events = []
@@ -223,13 +223,8 @@ def _create_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
     if not title or not start_time or not end_time:
         return {"error": "Missing required fields: title, start_time, end_time"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
-
-    # Get identity token for service-to-service auth
-    identity_token = _get_identity_token(sync_service_url)
-    headers = {"Content-Type": "application/json"}
-    if identity_token:
-        headers["Authorization"] = f"Bearer {identity_token}"
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers(content_type=True)
 
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -288,13 +283,8 @@ def _update_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
     if not event_id:
         return {"error": "Missing required field: event_id"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
-
-    # Get identity token for service-to-service auth
-    identity_token = _get_identity_token(sync_service_url)
-    headers = {"Content-Type": "application/json"}
-    if identity_token:
-        headers["Authorization"] = f"Bearer {identity_token}"
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers(content_type=True)
 
     try:
         payload = {"event_id": event_id, "send_updates": send_updates}
@@ -362,13 +352,8 @@ def _decline_calendar_event(params: Dict[str, Any]) -> Dict[str, Any]:
     if not event_id:
         return {"error": "Missing required field: event_id"}
 
-    sync_service_url = os.getenv("SYNC_SERVICE_URL", "https://jarvis-sync-service-qkz4et4n4q-as.a.run.app")
-
-    # Get identity token for service-to-service auth
-    identity_token = _get_identity_token(sync_service_url)
-    headers = {"Content-Type": "application/json"}
-    if identity_token:
-        headers["Authorization"] = f"Bearer {identity_token}"
+    sync_service_url = _get_sync_service_url()
+    headers = _get_sync_service_headers(content_type=True)
 
     try:
         payload = {"event_id": event_id}
