@@ -294,6 +294,18 @@ def _create_contact(input: Dict) -> Dict[str, Any]:
             if email_check.data:
                 existing_contact = email_check.data[0]
 
+        # Also check email if provided (even when name check passed)
+        if not existing_contact and email:
+            email_check = supabase.table("contacts").select("id, first_name, last_name, email").ilike(
+                "email", email.strip()
+            ).is_("deleted_at", "null").limit(1).execute()
+            if email_check.data:
+                existing = email_check.data[0]
+                return {
+                    "warning": f"Contact with email '{email}' already exists: {existing.get('first_name', '')} {existing.get('last_name', '')}",
+                    "existing_contact_id": existing["id"]
+                }
+
         # If duplicate found, return early
         if existing_contact:
             existing_name = f"{existing_contact.get('first_name', '')} {existing_contact.get('last_name', '')}".strip()

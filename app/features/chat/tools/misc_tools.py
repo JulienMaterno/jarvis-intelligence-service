@@ -17,7 +17,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 from app.core.database import supabase
-from .base import logger, SYNC_MANAGED_TABLES, _sanitize_ilike
+from .base import logger, _sanitize_ilike
 
 
 # =============================================================================
@@ -485,11 +485,12 @@ def _get_user_location() -> Dict[str, Any]:
                 "last_updated": location.get("updated_at")
             }
         else:
+            sg_tz = timezone(timedelta(hours=8))
             return {
                 "city": "Singapore",
                 "country": "Singapore",
                 "timezone": "Asia/Singapore",
-                "local_time": datetime.now(timezone.utc).strftime("%I:%M %p on %A, %B %d, %Y") + " (default)",
+                "local_time": datetime.now(sg_tz).strftime("%I:%M %p on %A, %B %d, %Y") + " (default)",
                 "message": "No location set - using default Singapore timezone"
             }
     except Exception as e:

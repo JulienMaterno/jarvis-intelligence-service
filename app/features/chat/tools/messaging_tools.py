@@ -8,7 +8,7 @@ inbox management, sending messages, and chat operations.
 import os
 import httpx
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
 from app.core.database import supabase
@@ -264,8 +264,12 @@ def _get_beeper_inbox(params: Dict[str, Any]) -> Dict[str, Any]:
         other_active_result = other_active_query.limit(limit).execute()
 
         # Format responses
+        # Cap the number of chats to avoid excessive DB calls (N+1 pattern)
+        needs_response_data = (needs_response_result.data or [])[:5]
+        other_active_data = (other_active_result.data or [])[:5]
+
         needs_response = []
-        for chat in (needs_response_result.data or []):
+        for chat in needs_response_data:
             # Get last message
             last_msg = supabase.table("beeper_messages").select(
                 "content, timestamp, is_outgoing"
@@ -283,7 +287,7 @@ def _get_beeper_inbox(params: Dict[str, Any]) -> Dict[str, Any]:
             })
 
         other_active = []
-        for chat in (other_active_result.data or []):
+        for chat in other_active_data:
             last_msg = supabase.table("beeper_messages").select(
                 "content, timestamp, is_outgoing"
             ).eq("beeper_chat_id", chat["beeper_chat_id"]
@@ -377,14 +381,18 @@ def _search_beeper_messages(params: Dict[str, Any]) -> Dict[str, Any]:
 
         result = search_query.execute()
 
+        # Batch fetch chat info for all results to avoid N+1 queries
+        chat_ids = list(set(m["beeper_chat_id"] for m in (result.data or [])))
+        chat_map = {}
+        if chat_ids:
+            chat_result = supabase.table("beeper_chats").select(
+                "beeper_chat_id, chat_name, platform"
+            ).in_("beeper_chat_id", chat_ids).execute()
+            chat_map = {c["beeper_chat_id"]: c for c in (chat_result.data or [])}
+
         messages = []
         for msg in (result.data or []):
-            # Get chat info
-            chat_result = supabase.table("beeper_chats").select(
-                "chat_name, platform"
-            ).eq("beeper_chat_id", msg["beeper_chat_id"]).execute()
-
-            chat_info = chat_result.data[0] if chat_result.data else {}
+            chat_info = chat_map.get(msg["beeper_chat_id"], {})
 
             # Filter by contact name if specified (requires join to contacts, so post-filter)
             if contact_name and contact_name.lower() not in (chat_info.get("chat_name") or "").lower():
@@ -563,7 +571,7 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # Verify user actually confirmed in their message
-    confirmation_phrases = ["yes", "send", "confirm", "go ahead", "do it", "proceed"]
+    confirmation_phrases = ["yes", "confirm", "go ahead", "do it", "proceed"]
     if not any(phrase in last_user_message.lower() for phrase in confirmation_phrases):
         logger.warning(f"Send attempted without confirmation. User message: '{last_user_message}'")
         return {

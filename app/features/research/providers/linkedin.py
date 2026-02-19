@@ -338,7 +338,7 @@ class LinkedInProvider(BaseProvider):
         try:
             async with self._create_client() as client:
                 response = await client.get(
-                    f"{BRIGHTDATA_BASE_URL}/snapshots/{snapshot_id}"
+                    f"{BRIGHTDATA_BASE_URL}/snapshot/{snapshot_id}"
                 )
                 
                 if response.status_code == 200:

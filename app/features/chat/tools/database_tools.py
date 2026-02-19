@@ -442,24 +442,14 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
     try:
         # For tables managed by sync, add updated_at and last_sync_source
         if operation == "UPDATE" and table_name in SYNC_MANAGED_TABLES:
-            # Add updated_at if not present
-            if "updated_at" not in sql.lower():
-                sql = re.sub(
-                    r'\bSET\s+',
-                    f"SET updated_at='{datetime.now(timezone.utc).isoformat()}', ",
-                    sql,
-                    count=1,
-                    flags=re.IGNORECASE
-                )
-            # Add last_sync_source
-            if "last_sync_source" not in sql.lower():
-                sql = re.sub(
-                    r'\bSET\s+',
-                    "SET last_sync_source='supabase', ",
-                    sql,
-                    count=1,
-                    flags=re.IGNORECASE
-                )
+            inject_fields = []
+            if not re.search(r'\bupdated_at\b', sql, re.IGNORECASE):
+                inject_fields.append("updated_at=NOW()")
+            if not re.search(r'\blast_sync_source\b', sql, re.IGNORECASE):
+                inject_fields.append("last_sync_source='supabase'")
+            if inject_fields:
+                inject_str = ", ".join(inject_fields) + ", "
+                sql = re.sub(r'\bSET\s+', f'SET {inject_str}', sql, count=1, flags=re.IGNORECASE)
 
         # Execute using RPC
         result = supabase.rpc("exec_sql", {"query": sql}).execute()
@@ -736,7 +726,7 @@ def _create_database_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
         create_sql = f"CREATE TABLE {table_name} ({', '.join(column_defs)})"
 
-        result = supabase.rpc("exec_sql", {"query": create_sql}).execute()
+        supabase.rpc("exec_sql", {"query": create_sql}).execute()
 
         logger.info(f"Created table: {table_name}")
         return {
@@ -814,7 +804,7 @@ def _add_column_to_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         if default_value:
             alter_sql += f" DEFAULT {default_value}"
 
-        result = supabase.rpc("exec_sql", {"query": alter_sql}).execute()
+        supabase.rpc("exec_sql", {"query": alter_sql}).execute()
 
         logger.info(f"Added column {column_name} to {table_name}")
         return {
@@ -1004,14 +994,16 @@ def _get_database_backup_status(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 }
                 for f in (backups or [])
             ]
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to list backup files: {e}")
             backup_files = []
 
         # Check sync_logs for backup events
         try:
             logs = supabase.table("sync_logs").select("*").eq("event_type", "backup").order("created_at", desc=True).limit(10).execute()
             recent_backup_logs = logs.data or []
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to fetch backup logs: {e}")
             recent_backup_logs = []
 
         return {
@@ -1048,7 +1040,7 @@ def _backup_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
             if len(batch) < page_size:
                 break
             start += page_size
-            if start > 10000:
+            if start >= 10000:
                 break
 
         if not all_rows:
@@ -1081,8 +1073,8 @@ def _backup_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                 "message": f"Backed up {len(all_rows)} rows from {table_name}",
                 "details": {"table": table_name, "rows": len(all_rows), "filename": filename}
             }).execute()
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to log backup event: {e}")
 
         return {
             "status": "success",

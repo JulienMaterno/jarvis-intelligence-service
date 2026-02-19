@@ -6,7 +6,7 @@ behaviors, searching memories, and forgetting/correcting memories.
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 
 from .base import _run_async, logger
 
@@ -85,7 +85,8 @@ Use when you need to recall what you know about a topic.""",
                 "limit": {
                     "type": "integer",
                     "description": "Max results",
-                    "default": 10
+                    "default": 10,
+                    "maximum": 50
                 }
             },
             "required": ["query"]
@@ -113,7 +114,8 @@ Use when user says something you remembered is wrong.""",
     {
         "name": "forget_memory",
         "description": """Delete a memory by ID or search query.
-Use when user asks you to forget something.""",
+Use when user asks you to forget something.
+You must provide at least one of memory_id or query.""",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -373,7 +375,8 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
     try:
         memory_service = get_memory_service()
 
-        memories = _run_async(memory_service.search(query, limit=limit))
+        search_limit = limit * 3 if memory_type else limit
+        memories = _run_async(memory_service.search(query, limit=search_limit))
 
         if not memories:
             return {
@@ -408,6 +411,7 @@ def _search_memories(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         # Optionally filter by type if specified
         if memory_type:
             formatted = [m for m in formatted if m["type"] == memory_type]
+        formatted = formatted[:limit]  # Trim to requested limit
 
         return {
             "status": "found",

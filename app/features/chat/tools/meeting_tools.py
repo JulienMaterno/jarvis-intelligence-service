@@ -203,6 +203,8 @@ def _create_meeting(input: Dict) -> Dict[str, Any]:
                         task_result = supabase.table("tasks").insert(task_data).execute()
                         if task_result.data:
                             tasks_created.append(task_result.data[0]["title"])
+                        else:
+                            logger.warning(f"Failed to create task from action item: {item[:50]}")
 
             return {
                 "success": True,

@@ -245,7 +245,9 @@ def _update_task(input: Dict) -> Dict[str, Any]:
         update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
         update_fields["last_sync_source"] = "supabase"
 
-        supabase.table("tasks").update(update_fields).eq("id", task_id).execute()
+        update_result = supabase.table("tasks").update(update_fields).eq("id", task_id).execute()
+        if not update_result.data:
+            return {"error": "Task update failed - no data returned"}
 
         logger.info(f"Updated task via chat: {task['title']}")
         return {
