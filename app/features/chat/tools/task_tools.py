@@ -5,8 +5,7 @@ This module contains tools for task/to-do operations including creating,
 updating, completing, and managing tasks.
 """
 
-import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timezone
 
 from app.core.database import supabase
@@ -141,7 +140,7 @@ def _get_tasks(status: str = "pending", limit: int = 100) -> Dict[str, Any]:
         query = supabase.table("tasks").select(
             "id, title, description, status, priority, due_date, completed_at, "
             "project, tags, origin_type, created_at"
-        )
+        ).is_("deleted_at", "null")
 
         if status != "all":
             query = query.eq("status", status)
@@ -212,11 +211,11 @@ def _update_task(input: Dict) -> Dict[str, Any]:
 
         # Try to find task by ID or title
         if len(task_id) == 36 and "-" in task_id:  # UUID format
-            result = supabase.table("tasks").select("id, title").eq("id", task_id).execute()
+            result = supabase.table("tasks").select("id, title").eq("id", task_id).is_("deleted_at", "null").execute()
         else:
             result = supabase.table("tasks").select("id, title").ilike(
                 "title", f"%{task_id}%"
-            ).eq("status", "pending").limit(1).execute()
+            ).neq("status", "done").is_("deleted_at", "null").limit(1).execute()
 
         if not result.data:
             return {"error": "Task not found"}
@@ -270,11 +269,11 @@ def _complete_task(input: Dict) -> Dict[str, Any]:
 
         # Try to find task by ID or title
         if len(task_id) == 36 and "-" in task_id:
-            result = supabase.table("tasks").select("id, title, status").eq("id", task_id).execute()
+            result = supabase.table("tasks").select("id, title, status").eq("id", task_id).is_("deleted_at", "null").execute()
         else:
             result = supabase.table("tasks").select("id, title, status").ilike(
                 "title", f"%{task_id}%"
-            ).neq("status", "done").limit(1).execute()
+            ).neq("status", "done").is_("deleted_at", "null").limit(1).execute()
 
         if not result.data:
             return {"error": "Task not found or already completed"}
@@ -313,11 +312,11 @@ def _delete_task(input: Dict) -> Dict[str, Any]:
 
         # Try to find task by ID or title
         if len(task_id) == 36 and "-" in task_id:
-            result = supabase.table("tasks").select("id, title").eq("id", task_id).execute()
+            result = supabase.table("tasks").select("id, title").eq("id", task_id).is_("deleted_at", "null").execute()
         else:
             result = supabase.table("tasks").select("id, title").ilike(
                 "title", f"%{task_id}%"
-            ).limit(1).execute()
+            ).is_("deleted_at", "null").limit(1).execute()
 
         if not result.data:
             return {"error": "Task not found"}
@@ -325,7 +324,10 @@ def _delete_task(input: Dict) -> Dict[str, Any]:
         task = result.data[0]
         task_id = task["id"]
 
-        supabase.table("tasks").delete().eq("id", task_id).execute()
+        supabase.table("tasks").update({
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_source": "supabase"
+        }).eq("id", task_id).execute()
 
         logger.info(f"Deleted task via chat: {task['title']}")
         return {

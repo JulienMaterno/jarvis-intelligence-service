@@ -17,7 +17,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 from app.core.database import supabase
-from .base import logger, SYNC_MANAGED_TABLES
+from .base import logger, SYNC_MANAGED_TABLES, _sanitize_ilike
 
 
 # =============================================================================
@@ -549,6 +549,7 @@ def _get_books(input: Dict) -> Dict[str, Any]:
             query = query.ilike("author", f"%{author}%")
 
         if search:
+            search = _sanitize_ilike(search)
             query = query.or_(
                 f"title.ilike.%{search}%,author.ilike.%{search}%,notes.ilike.%{search}%"
             )
@@ -593,6 +594,7 @@ def _get_highlights(input: Dict) -> Dict[str, Any]:
             query = query.ilike("book_title", f"%{book_title}%")
 
         if search:
+            search = _sanitize_ilike(search)
             query = query.or_(
                 f"content.ilike.%{search}%,note.ilike.%{search}%"
             )
@@ -629,6 +631,8 @@ def _search_reading_notes(input: Dict) -> Dict[str, Any]:
 
         if not query_str:
             return {"error": "query is required"}
+
+        query_str = _sanitize_ilike(query_str)
 
         results = []
 
@@ -772,12 +776,13 @@ def _get_recent_voice_memo(input: Dict) -> Dict[str, Any]:
         ).eq("source_transcript_id", transcript_id).execute()
 
         # Get related tasks
-        tasks = supabase.table("tasks").select(
-            "id, title, status"
-        ).eq("origin_type", "meeting").execute()
-        # Filter to tasks from meetings linked to this transcript
         meeting_ids = [m["id"] for m in (meetings.data or [])]
-        related_tasks = [t for t in (tasks.data or []) if t.get("origin_id") in meeting_ids]
+        if meeting_ids:
+            related_tasks = supabase.table("tasks").select(
+                "id, title, status"
+            ).eq("origin_type", "meeting").in_("origin_id", meeting_ids).execute().data or []
+        else:
+            related_tasks = []
 
         response = {
             "transcript_id": transcript_id,
@@ -829,7 +834,7 @@ def _summarize_activity(period: str = "today") -> Dict[str, Any]:
         # Get meetings
         meetings = supabase.table("meetings").select("title, date").gte(
             "date", start.isoformat()
-        ).lte("date", end.isoformat()).execute()
+        ).lte("date", end.isoformat()).is_("deleted_at", "null").execute()
 
         # Get tasks completed
         tasks_completed = supabase.table("tasks").select("title").eq(
@@ -915,7 +920,7 @@ def _search_applications(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         if not query_str:
             return {"error": "query is required"}
 
-        query_str = query_str.replace("%", "\\%").replace("_", "\\_")
+        query_str = _sanitize_ilike(query_str)
 
         result = supabase.table("applications").select(
             "id, name, application_type, status, institution, website, grant_amount, deadline, context, notes, content"
@@ -1118,7 +1123,7 @@ def _search_linkedin_posts(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         if not query_str:
             return {"error": "query is required"}
 
-        query_str = query_str.replace("%", "\\%").replace("_", "\\_")
+        query_str = _sanitize_ilike(query_str)
 
         result = supabase.table("linkedin_posts").select(
             "id, title, post_date, status, pillar, likes, content"

@@ -31,7 +31,14 @@ BRAVE_NEWS_URL = "https://api.search.brave.com/res/v1/news/search"
 
 # Rate limiting: 1 request per second
 _last_request_time: float = 0.0
-_rate_limit_lock = asyncio.Lock()
+_rate_limit_lock = None
+
+def _get_rate_limit_lock():
+    """Get or create the rate limit lock in the current event loop."""
+    global _rate_limit_lock
+    if _rate_limit_lock is None:
+        _rate_limit_lock = asyncio.Lock()
+    return _rate_limit_lock
 
 
 class WebSearchProvider(BaseProvider):
@@ -64,7 +71,7 @@ class WebSearchProvider(BaseProvider):
     async def _rate_limit(self):
         """Ensure we don't exceed 1 request per second."""
         global _last_request_time
-        async with _rate_limit_lock:
+        async with _get_rate_limit_lock():
             now = time.time()
             elapsed = now - _last_request_time
             if elapsed < 1.0:

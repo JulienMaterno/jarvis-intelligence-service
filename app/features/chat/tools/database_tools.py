@@ -351,6 +351,12 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
     else:
         return {"error": "Only UPDATE, INSERT, or DELETE statements are allowed. For SELECT, use query_database."}
 
+    # Block multi-statement injection via semicolons
+    # Strip trailing semicolons first, then check for embedded ones
+    sql_stripped = sql.rstrip().rstrip(";").strip()
+    if ";" in sql_stripped:
+        return {"error": "Multiple SQL statements (semicolons) are not allowed. Submit one statement at a time."}
+
     # Block extremely dangerous SQL commands (using word boundaries to avoid false positives)
     dangerous_patterns = [
         r'\bDROP\s+(TABLE|DATABASE|INDEX|VIEW)',
@@ -395,7 +401,7 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
         if where_match:
             where_clause = where_match.group(1).upper()
             # Must have id = 'uuid' pattern
-            if not re.search(r"ID\s*=\s*'[A-F0-9\-]+'", where_clause, re.IGNORECASE):
+            if not re.search(r"\w*id\s*=\s*'[A-F0-9a-f\-]+'", where_clause, re.IGNORECASE):
                 return {
                     "error": f"{operation} must target specific record(s) by id. Got WHERE: {where_match.group(1)[:50]}",
                     "hint": "Use WHERE id='specific-uuid' to target a specific record"
@@ -412,7 +418,7 @@ def _execute_sql_write(input: Dict) -> Dict[str, Any]:
             if where_match:
                 where_clause = where_match.group(1)
                 try:
-                    preview_sql = f"SELECT id, * FROM {table_name} WHERE {where_clause} LIMIT 5"
+                    preview_sql = f"SELECT * FROM {table_name} WHERE {where_clause} LIMIT 5"
                     preview_result = supabase.rpc("exec_sql", {"query": preview_sql}).execute()
                     if preview_result.data:
                         preview_data = preview_result.data
@@ -582,13 +588,20 @@ def _query_database(sql: str) -> Dict[str, Any]:
     if not sql_upper.startswith("SELECT"):
         return {"error": "Only SELECT queries are allowed. For writes, use execute_sql_write or specific tools."}
 
+    # Block multi-statement injection via semicolons
+    sql_no_trailing = sql.strip().rstrip(";").strip()
+    if ";" in sql_no_trailing:
+        return {"error": "Multiple SQL statements (semicolons) are not allowed. Submit one SELECT statement."}
+
     # Block dangerous operations even in SELECT
+    # Strip quoted strings before checking to avoid false positives on words inside string literals
+    sql_without_strings = re.sub(r"'[^']*'", "''", sql_upper)
     dangerous_patterns = [
         r'\bDROP\b', r'\bDELETE\b', r'\bUPDATE\b', r'\bINSERT\b',
         r'\bTRUNCATE\b', r'\bALTER\b', r'\bCREATE\b', r'\bGRANT\b', r'\bREVOKE\b'
     ]
     for pattern in dangerous_patterns:
-        if re.search(pattern, sql_upper):
+        if re.search(pattern, sql_without_strings):
             return {"error": f"Query contains forbidden operation: {pattern}"}
 
     # Add default LIMIT if not present
@@ -755,6 +768,31 @@ def _add_column_to_table(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
         if not all([table_name, column_name, column_type]):
             return {"error": "table_name, column_name, and column_type are required"}
+
+        # Validate table name format to prevent SQL injection
+        if not re.match(r'^[a-z][a-z0-9_]*$', table_name):
+            return {"error": "Table name must start with a letter and contain only lowercase letters, numbers, underscores"}
+
+        # Validate column name format to prevent SQL injection
+        if not re.match(r'^[a-z][a-z0-9_]*$', column_name):
+            return {"error": "Column name must start with a letter and contain only lowercase letters, numbers, underscores"}
+
+        # Validate column type against allowed PostgreSQL types
+        allowed_types = [
+            "TEXT", "INTEGER", "INT", "BIGINT", "SMALLINT",
+            "BOOLEAN", "BOOL", "TIMESTAMPTZ", "TIMESTAMP",
+            "UUID", "JSONB", "JSON", "FLOAT", "DOUBLE PRECISION",
+            "NUMERIC", "DECIMAL", "DATE", "TIME", "SERIAL",
+            "VARCHAR", "CHAR",
+        ]
+        # Allow types with length specifier like VARCHAR(255)
+        base_type = re.match(r'^([A-Z ]+)', column_type)
+        if not base_type or base_type.group(1).strip() not in allowed_types:
+            return {"error": f"Column type '{column_type}' is not an allowed PostgreSQL type. Allowed: {', '.join(allowed_types)}"}
+
+        # Validate default_value to prevent SQL injection
+        if default_value and re.search(r'[;\'\"\\]', default_value):
+            return {"error": "Default value contains forbidden characters (;, quotes, backslash)"}
 
         if not user_confirmed:
             alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
@@ -930,6 +968,12 @@ def _insert_data_batch(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
         if len(rows) > 100:
             return {"error": f"Maximum 100 rows per batch (got {len(rows)}). Split into multiple calls."}
+
+        # Enforce writable table whitelist
+        if table_name not in WRITABLE_TABLES:
+            if table_name in READONLY_TABLES:
+                return {"error": f"Table '{table_name}' is read-only (sync-managed). Cannot insert."}
+            return {"error": f"Table '{table_name}' is not in the allowed writable tables list."}
 
         result = supabase.table(table_name).insert(rows).execute()
 

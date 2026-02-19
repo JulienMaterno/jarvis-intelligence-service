@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 
 from app.core.database import supabase
-from .base import logger
+from .base import logger, _sanitize_ilike
 
 
 # =============================================================================
@@ -222,9 +222,15 @@ The two-step process:
 
 def _get_beeper_http_headers() -> Dict[str, str]:
     """Get HTTP headers for Beeper bridge API calls."""
-    return {
+    headers = {
         "Content-Type": "application/json",
     }
+    # Bridge requires X-API-Key for authentication (fail-closed if not set)
+    bridge_api_key = os.getenv("BEEPER_BRIDGE_API_KEY")
+    if not bridge_api_key:
+        logger.warning("BEEPER_BRIDGE_API_KEY not set - bridge calls will fail")
+    headers["X-API-Key"] = bridge_api_key or ""
+    return headers
 
 
 # =============================================================================
@@ -359,9 +365,15 @@ def _search_beeper_messages(params: Dict[str, Any]) -> Dict[str, Any]:
             return {"error": "Search query is required"}
 
         # Build search query
+        db_limit = limit * 2 if contact_name else limit
         search_query = supabase.table("beeper_messages").select(
             "beeper_chat_id, content, is_outgoing, timestamp"
-        ).ilike("content", f"%{query}%").order("timestamp", desc=True).limit(limit)
+        ).ilike("content", f"%{query}%").order("timestamp", desc=True)
+
+        if platform:
+            search_query = search_query.eq("platform", platform)
+
+        search_query = search_query.limit(db_limit)
 
         result = search_query.execute()
 
@@ -374,11 +386,7 @@ def _search_beeper_messages(params: Dict[str, Any]) -> Dict[str, Any]:
 
             chat_info = chat_result.data[0] if chat_result.data else {}
 
-            # Filter by platform if specified
-            if platform and chat_info.get("platform") != platform:
-                continue
-
-            # Filter by contact name if specified
+            # Filter by contact name if specified (requires join to contacts, so post-filter)
             if contact_name and contact_name.lower() not in (chat_info.get("chat_name") or "").lower():
                 continue
 
@@ -411,8 +419,9 @@ def _get_beeper_contact_messages(params: Dict[str, Any]) -> Dict[str, Any]:
             return {"error": "contact_name is required"}
 
         # Find contact
+        safe_contact_name = _sanitize_ilike(contact_name)
         contact_result = supabase.table("contacts").select("id").or_(
-            f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+            f"first_name.ilike.%{safe_contact_name}%,last_name.ilike.%{safe_contact_name}%"
         ).is_("deleted_at", "null").limit(1).execute()
 
         if not contact_result.data:
@@ -440,7 +449,7 @@ def _get_beeper_contact_messages(params: Dict[str, Any]) -> Dict[str, Any]:
             messages_result = supabase.table("beeper_messages").select(
                 "content, is_outgoing, timestamp"
             ).eq("beeper_chat_id", chat["beeper_chat_id"]
-            ).order("timestamp", desc=True).limit(limit // len(chats_result.data) or limit).execute()
+            ).order("timestamp", desc=True).limit(max(limit // len(chats_result.data), 1)).execute()
 
             for msg in (messages_result.data or []):
                 all_messages.append({
@@ -510,6 +519,8 @@ def _unarchive_beeper_chat(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
     """Send a message via Beeper."""
+    import urllib.parse
+
     beeper_chat_id = params.get("beeper_chat_id")
     contact_name = params.get("contact_name")
     message = params.get("message", "").strip()
@@ -560,17 +571,17 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
             "message": "Please explicitly confirm you want to send this message (say 'yes' or 'send it')"
         }
 
-    # Actually send the message
+    # Actually send the message via the bridge
     beeper_bridge_url = os.getenv("BEEPER_BRIDGE_URL", "http://localhost:8377")
+    encoded_chat_id = urllib.parse.quote(beeper_chat_id, safe='')
 
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                f"{beeper_bridge_url}/api/send_message",
+                f"{beeper_bridge_url}/chats/{encoded_chat_id}/send",
                 headers=_get_beeper_http_headers(),
                 json={
-                    "chat_id": beeper_chat_id,
-                    "message": message
+                    "text": message
                 }
             )
 
@@ -595,19 +606,21 @@ def _send_beeper_message(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def _mark_beeper_read(params: Dict[str, Any]) -> Dict[str, Any]:
     """Mark messages in a Beeper chat as read."""
+    import urllib.parse
+
     try:
         beeper_chat_id = params.get("beeper_chat_id")
         if not beeper_chat_id:
             return {"error": "beeper_chat_id is required"}
 
         beeper_bridge_url = os.getenv("BEEPER_BRIDGE_URL", "http://localhost:8377")
+        encoded_chat_id = urllib.parse.quote(beeper_chat_id, safe='')
 
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(
-                    f"{beeper_bridge_url}/api/mark_read",
+                    f"{beeper_bridge_url}/chats/{encoded_chat_id}/read",
                     headers=_get_beeper_http_headers(),
-                    json={"chat_id": beeper_chat_id}
                 )
 
                 if response.status_code == 200:
@@ -628,9 +641,8 @@ def _mark_beeper_read(params: Dict[str, Any]) -> Dict[str, Any]:
 
 def _get_beeper_status(params: Dict[str, Any]) -> Dict[str, Any]:
     """Check Beeper bridge connection status."""
+    beeper_bridge_url = os.getenv("BEEPER_BRIDGE_URL", "http://localhost:8377")
     try:
-        beeper_bridge_url = os.getenv("BEEPER_BRIDGE_URL", "http://localhost:8377")
-
         with httpx.Client(timeout=10.0) as client:
             response = client.get(f"{beeper_bridge_url}/health")
 

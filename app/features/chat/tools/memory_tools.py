@@ -303,13 +303,17 @@ def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
         if not memories:
             # No existing memory found, just add the correct one
-            memory_id = _run_async(
+            result = _run_async(
                 memory_service.add(
                     content=correct_info,
                     memory_type=MemoryType.FACT,
                     metadata={"source": "chat_correction", "corrected_from": incorrect_info}
                 )
             )
+            if isinstance(result, dict):
+                memory_id = result.get("id") or result.get("memory_id") or str(result)
+            else:
+                memory_id = result
             return {
                 "status": "added_new",
                 "message": f"No existing memory found with '{incorrect_info}'. Created new memory: '{correct_info}'",
@@ -329,13 +333,17 @@ def _correct_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                     deleted_items.append({"id": mem_id, "content": mem_text[:80]})
 
         # Add the correct memory
-        new_id = _run_async(
+        new_result = _run_async(
             memory_service.add(
                 content=correct_info,
                 memory_type=MemoryType.FACT,
                 metadata={"source": "chat_correction", "corrected_from": incorrect_info}
             )
         )
+        if isinstance(new_result, dict):
+            new_id = new_result.get("id") or new_result.get("memory_id") or str(new_result)
+        else:
+            new_id = new_result
 
         return {
             "status": "corrected",
@@ -456,12 +464,11 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
         deleted_items = []
         failed_items = []
 
+        # Delete all memories returned by semantic search (they're already relevance-filtered)
         for mem in memories:
             mem_id = mem.get("id")
             mem_text = mem.get("memory", "") or mem.get("data", "")
-
-            # Only delete if query appears in the memory text (case-insensitive)
-            if mem_id and query.lower() in mem_text.lower():
+            if mem_id:
                 success = _run_async(memory_service.delete(mem_id))
                 if success:
                     deleted_items.append({
@@ -470,16 +477,6 @@ def _forget_memory(tool_input: Dict[str, Any]) -> Dict[str, Any]:
                     })
                 else:
                     failed_items.append(mem_id)
-
-        if not deleted_items and not failed_items:
-            found_previews = [f"- {m.get('memory', m.get('data', ''))[:60]}..." for m in memories[:5]]
-            return {
-                "status": "FAILED",
-                "error": f"DELETION FAILED: Found {len(memories)} memories but query '{query}' didn't match any exactly.",
-                "found_count": len(memories),
-                "found_previews": found_previews,
-                "message": f"FAILED to delete! Query '{query}' found {len(memories)} memories but none contained that exact text. You MUST use the exact memory ID to delete. Here are the memories found:\n" + "\n".join(found_previews)
-            }
 
         return {
             "status": "deleted" if deleted_items else "FAILED",

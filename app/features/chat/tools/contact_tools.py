@@ -10,7 +10,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta, timezone
 
 from app.core.database import supabase
-from .base import SYNC_MANAGED_TABLES, logger
+from .base import SYNC_MANAGED_TABLES, logger, _sanitize_ilike
 
 
 # =============================================================================
@@ -169,12 +169,16 @@ Use this when user asks 'who should I reach out to?' or wants to reconnect with 
 def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
     """Search for contacts."""
     try:
+        safe_query = _sanitize_ilike(query)
+        if not safe_query:
+            return {"contacts": [], "count": 0}
+
         result = supabase.table("contacts").select(
             "id, first_name, last_name, email, company, job_title, phone, "
             "linkedin_url, location, notes, birthday"
         ).or_(
-            f"first_name.ilike.%{query}%,last_name.ilike.%{query}%,"
-            f"email.ilike.%{query}%,company.ilike.%{query}%"
+            f"first_name.ilike.%{safe_query}%,last_name.ilike.%{safe_query}%,"
+            f"email.ilike.%{safe_query}%,company.ilike.%{safe_query}%"
         ).is_("deleted_at", "null").limit(limit).execute()
 
         contacts = []
@@ -200,11 +204,15 @@ def _search_contacts(query: str, limit: int = 5) -> Dict[str, Any]:
 def _get_contact_history(contact_name: str) -> Dict[str, Any]:
     """Get full interaction history with a contact."""
     try:
+        safe_name = _sanitize_ilike(contact_name)
+        if not safe_name:
+            return {"error": "Invalid contact name"}
+
         # First find the contact
         contact_result = supabase.table("contacts").select(
             "id, first_name, last_name, email, company, notes"
         ).or_(
-            f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+            f"first_name.ilike.%{safe_name}%,last_name.ilike.%{safe_name}%"
         ).is_("deleted_at", "null").limit(1).execute()
 
         if not contact_result.data:
@@ -228,10 +236,11 @@ def _get_contact_history(contact_name: str) -> Dict[str, Any]:
         email = contact.get("email")
         emails = []
         if email:
+            safe_email = _sanitize_ilike(email)
             email_result = supabase.table("emails").select(
                 "subject, date, snippet"
             ).or_(
-                f"sender.ilike.%{email}%,recipient.ilike.%{email}%"
+                f"sender.ilike.%{safe_email}%,recipient.ilike.%{safe_email}%"
             ).order("date", desc=True).limit(10).execute()
             emails = email_result.data or []
 
@@ -344,8 +353,11 @@ def _update_contact(input: Dict) -> Dict[str, Any]:
         if contact_id:
             result = supabase.table("contacts").select("*").eq("id", contact_id).execute()
         elif contact_name:
+            safe_name = _sanitize_ilike(contact_name)
+            if not safe_name:
+                return {"error": "Invalid contact name"}
             result = supabase.table("contacts").select("*").or_(
-                f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+                f"first_name.ilike.%{safe_name}%,last_name.ilike.%{safe_name}%"
             ).is_("deleted_at", "null").limit(1).execute()
         else:
             return {"error": "Either contact_name or contact_id is required"}
@@ -360,8 +372,14 @@ def _update_contact(input: Dict) -> Dict[str, Any]:
         update_fields = {}
         for field in ["first_name", "last_name", "email", "company", "job_title",
                       "phone", "linkedin_url", "notes", "birthday"]:
-            if field in input and input[field]:
-                update_fields[field] = input[field].strip()
+            if field in input:
+                val = input[field]
+                if val is None or val == "":
+                    update_fields[field] = None  # Clear the field
+                elif isinstance(val, str):
+                    update_fields[field] = val.strip()
+                else:
+                    update_fields[field] = val
 
         if not update_fields:
             return {"error": "No fields to update"}
@@ -404,10 +422,13 @@ def _add_contact_note(input: Dict) -> Dict[str, Any]:
             return {"error": "note is required"}
 
         # Find the contact
+        safe_name = _sanitize_ilike(contact_name)
+        if not safe_name:
+            return {"error": "Invalid contact name"}
         result = supabase.table("contacts").select(
             "id, first_name, last_name, notes"
         ).or_(
-            f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+            f"first_name.ilike.%{safe_name}%,last_name.ilike.%{safe_name}%"
         ).is_("deleted_at", "null").limit(1).execute()
 
         if not result.data:
@@ -451,9 +472,10 @@ def _who_to_contact(input: Dict) -> Dict[str, Any]:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days_inactive)).isoformat()
 
         # Get contacts with their last meeting date
+        # Limit to 100 and order by least-recently-updated to cap N+1 queries
         contacts = supabase.table("contacts").select(
             "id, first_name, last_name, company, email"
-        ).is_("deleted_at", "null").execute()
+        ).is_("deleted_at", "null").order("updated_at", desc=False).limit(100).execute()
 
         inactive_contacts = []
 
@@ -470,10 +492,11 @@ def _who_to_contact(input: Dict) -> Dict[str, Any]:
                 email = contact.get("email")
                 recent_email = None
                 if email:
+                    safe_email = _sanitize_ilike(email)
                     recent_email = supabase.table("emails").select(
                         "date"
                     ).or_(
-                        f"sender.ilike.%{email}%,recipient.ilike.%{email}%"
+                        f"sender.ilike.%{safe_email}%,recipient.ilike.%{safe_email}%"
                     ).gte("date", cutoff).limit(1).execute()
 
                 if not recent_email or not recent_email.data:

@@ -63,6 +63,7 @@ def _get_brave_lock() -> asyncio.Lock:
 SCRAPER_IDS = {
     "profile_by_url": "gd_l1viktl72bvl7bjuj0",  # LinkedIn Profile by URL
     "company_by_url": "gd_l1vikfnt1wgvvqz95w",  # LinkedIn Company by URL
+    "company_employees": "",  # TODO: Add Bright Data scraper ID when available
     "company_jobs": "gd_lpfll7v81kap1ke3i6",  # LinkedIn Company Jobs
     "posts_by_profile": "gd_m0r9v8k2hqr5hcd1o5",  # LinkedIn Posts by Profile URL
 }
@@ -576,11 +577,17 @@ class LinkedInProvider(BaseProvider):
             return ProviderResult.failure("Missing required parameter: company_url")
         
         limit = min(params.get("limit", 50), 500)
-        
+
+        scraper_id = SCRAPER_IDS.get("company_employees")
+        if not scraper_id:
+            return ProviderResult.failure(
+                "Company employees scraper not configured - missing Bright Data scraper ID"
+            )
+
         inputs = [{"url": url, "limit": limit}]
-        
+
         # Always async for employee lookups (can be large)
-        return await self._trigger_async(SCRAPER_IDS["company_employees"], inputs)
+        return await self._trigger_async(scraper_id, inputs)
     
     async def _get_company_jobs(self, params: Dict[str, Any]) -> ProviderResult:
         """

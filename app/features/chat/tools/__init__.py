@@ -130,8 +130,12 @@ TOOLS = (
 
 def get_all_tools() -> List[Dict[str, Any]]:
     """Get all tools including dynamically loaded research tools."""
-    from app.features.research import RESEARCH_TOOLS
-    return TOOLS + RESEARCH_TOOLS
+    import os
+    tools = list(TOOLS)
+    if os.getenv("BRIGHTDATA_API_KEY") or os.getenv("BRAVE_API_KEY"):
+        from app.features.research import RESEARCH_TOOLS
+        tools.extend(RESEARCH_TOOLS)
+    return tools
 
 
 # =============================================================================

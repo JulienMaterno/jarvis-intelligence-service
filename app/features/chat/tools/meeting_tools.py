@@ -5,12 +5,11 @@ This module contains tools for meeting operations including searching,
 creating, and managing meeting records.
 """
 
-import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timezone
 
 from app.core.database import supabase
-from .base import logger
+from .base import logger, _sanitize_ilike
 
 
 # =============================================================================
@@ -98,18 +97,19 @@ def _search_meetings(input: Dict) -> Dict[str, Any]:
         if not query:
             return {"error": "Search query is required"}
 
+        safe_query = _sanitize_ilike(query)
         search_query = supabase.table("meetings").select(
             "id, title, date, location, summary, contact_name, topics_discussed, action_items"
-        ).or_(
-            f"title.ilike.%{query}%,summary.ilike.%{query}%,contact_name.ilike.%{query}%"
-        ).order("date", desc=True).limit(limit)
+        ).is_("deleted_at", "null").or_(
+            f"title.ilike.%{safe_query}%,summary.ilike.%{safe_query}%,contact_name.ilike.%{safe_query}%"
+        )
 
         if days:
             from datetime import timedelta
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             search_query = search_query.gte("date", cutoff)
 
-        result = search_query.execute()
+        result = search_query.order("date", desc=True).limit(limit).execute()
 
         meetings = []
         for m in result.data or []:
@@ -158,8 +158,9 @@ def _create_meeting(input: Dict) -> Dict[str, Any]:
         # Look up contact if name provided
         contact_id = None
         if contact_name:
+            safe_contact = _sanitize_ilike(contact_name)
             contact_result = supabase.table("contacts").select("id").or_(
-                f"first_name.ilike.%{contact_name}%,last_name.ilike.%{contact_name}%"
+                f"first_name.ilike.%{safe_contact}%,last_name.ilike.%{safe_contact}%"
             ).is_("deleted_at", "null").limit(1).execute()
 
             if contact_result.data:
