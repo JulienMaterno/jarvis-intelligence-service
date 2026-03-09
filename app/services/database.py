@@ -275,13 +275,15 @@ class SupabaseMultiDatabase:
                 payload["meeting_ids"] = meeting_ids
             if reflection_ids:
                 payload["reflection_ids"] = reflection_ids
+            if journal_ids:
+                payload["journal_ids"] = journal_ids
             if not payload:
                 return True  # Nothing to update
 
             from datetime import datetime, timezone
             payload["processed_at"] = datetime.now(timezone.utc).isoformat()
             self.client.table("transcripts").update(payload).eq("id", transcript_id).execute()
-            logger.info(f"Updated transcript {transcript_id} linkage: {len(meeting_ids)} meetings, {len(reflection_ids)} reflections")
+            logger.info(f"Updated transcript {transcript_id} linkage: {len(meeting_ids)} meetings, {len(reflection_ids)} reflections, {len(journal_ids)} journals")
             return True
         except Exception as e:
             logger.error(f"Failed to update transcript linkage for {transcript_id}: {e}")
@@ -1159,21 +1161,78 @@ class SupabaseMultiDatabase:
     
     def get_contact_interactions(self, contact_id: str, limit: int = 50) -> List[Dict]:
         """
-        Get all meetings with a specific contact.
-        
-        Returns: List of meetings ordered by date (newest first)
+        Get all interactions (meetings, emails, calendar events) with a contact.
+
+        Queries meetings, emails, and calendar_events separately, then merges
+        them into a single chronological list with an ``interaction_type`` field.
+
+        Returns:
+            List of interaction dicts ordered by date (newest first).
         """
+        interactions: List[Dict] = []
+
         try:
-            result = self.client.table("meetings").select("*").eq(
+            # Meetings
+            meetings = self.client.table("meetings").select(
+                "id, title, date, summary"
+            ).eq(
                 "contact_id", contact_id
             ).is_("deleted_at", "null").order(
                 "date", desc=True
             ).limit(limit).execute()
-            
-            return result.data
+
+            for m in (meetings.data or []):
+                interactions.append({
+                    "interaction_type": "meeting",
+                    "interaction_id": m["id"],
+                    "interaction_date": m.get("date"),
+                    "title": m.get("title"),
+                    "summary": m.get("summary"),
+                })
+
+            # Emails
+            emails = self.client.table("emails").select(
+                "id, subject, date, sender, recipient, snippet"
+            ).eq(
+                "contact_id", contact_id
+            ).order("date", desc=True).limit(limit).execute()
+
+            for e in (emails.data or []):
+                interactions.append({
+                    "interaction_type": "email",
+                    "interaction_id": e["id"],
+                    "interaction_date": e.get("date"),
+                    "title": e.get("subject"),
+                    "summary": e.get("snippet"),
+                })
+
+            # Calendar events
+            events = self.client.table("calendar_events").select(
+                "id, summary, start_time, location"
+            ).eq(
+                "contact_id", contact_id
+            ).is_("deleted_at", "null").order(
+                "start_time", desc=True
+            ).limit(limit).execute()
+
+            for ev in (events.data or []):
+                interactions.append({
+                    "interaction_type": "calendar_event",
+                    "interaction_id": ev["id"],
+                    "interaction_date": ev.get("start_time"),
+                    "title": ev.get("summary"),
+                    "summary": ev.get("location"),
+                })
+
         except Exception as e:
-            logger.error(f"Error fetching meetings for contact {contact_id}: {e}")
-            return []
+            logger.error(f"Error fetching interactions for contact {contact_id}: {e}")
+
+        # Sort all interactions by date descending, then trim to limit
+        interactions.sort(
+            key=lambda x: x.get("interaction_date") or "",
+            reverse=True,
+        )
+        return interactions[:limit]
     
     # =========================================================================
     # EMAILS

@@ -459,6 +459,12 @@ QUERY TIPS:
 - For "when did I last meet [person]" → use get_meetings tool with contact filter
 - For "what happened today/yesterday" → use get_journals or search_transcripts
 - For "remind me to X" or "add task X" → use create_task tool
+- For TIME-SPECIFIC reminders ("remind me in 2 hours", "remind me tomorrow at 10am"):
+  1. FIRST call get_current_time to get the user's current time and timezone
+  2. Calculate the absolute ISO 8601 datetime (e.g. "in 2 hours" at 13:00 SGT → "2026-02-25T15:00:00+08:00")
+  3. Call create_task with the remind_at parameter set to that datetime
+  4. A push notification will be sent to Telegram at exactly that time
+  5. ALWAYS include the timezone offset in remind_at (use the user's timezone from get_current_time)
 - For "what time is it" → use get_current_time tool
 - For "what did I just say?" or "summarize that" → use get_recent_voice_memo tool
 - For "what books am I reading?" → use get_books tool
@@ -1139,6 +1145,76 @@ class ChatService:
             logger.warning(f"Could not get journal context: {e}")
             return ""
     
+    def _get_recent_meetings_context(self, limit: int = 3) -> str:
+        """
+        Get recent meetings to provide context about who the user talked to recently.
+
+        This gives the AI awareness of:
+        - Recent conversations and their key takeaways
+        - People the user recently interacted with
+        - Follow-up items and action items from meetings
+        - Context for when user refers to "that meeting" or "the call"
+        """
+        try:
+            from app.core.database import supabase
+            from datetime import datetime, timedelta
+
+            # Get meetings from the last 7 days
+            seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+
+            result = supabase.table("meetings").select(
+                "title, date, contact_name, summary, follow_up_items, people_mentioned"
+            ).gte("date", seven_days_ago).is_(
+                "deleted_at", "null"
+            ).order("date", desc=True).limit(limit).execute()
+
+            if not result.data:
+                return ""
+
+            meeting_lines = []
+            for m in result.data:
+                title = m.get("title", "Untitled meeting")
+                date_str = m.get("date", "Unknown date")
+                if isinstance(date_str, str) and "T" in date_str:
+                    date_str = date_str.split("T")[0]
+                contact = m.get("contact_name") or "Unknown"
+                summary = m.get("summary") or ""
+
+                # Truncate summary
+                if len(summary) > 400:
+                    summary = summary[:400] + "..."
+
+                meeting_lines.append(f"**{date_str} — {title}** (with {contact})")
+                if summary:
+                    meeting_lines.append(f"  {summary}")
+
+                # Add follow-ups
+                follow_ups = m.get("follow_up_items")
+                if follow_ups and isinstance(follow_ups, list) and len(follow_ups) > 0:
+                    for fu in follow_ups[:3]:
+                        if isinstance(fu, str):
+                            meeting_lines.append(f"  → Follow-up: {fu}")
+                        elif isinstance(fu, dict):
+                            meeting_lines.append(f"  → Follow-up: {fu.get('item', fu.get('description', str(fu)))}")
+
+                # Add people mentioned
+                people = m.get("people_mentioned")
+                if people and isinstance(people, list) and len(people) > 0:
+                    people_str = ", ".join(people[:5]) if isinstance(people[0], str) else ", ".join(
+                        p.get("name", str(p)) for p in people[:5] if isinstance(p, dict)
+                    )
+                    meeting_lines.append(f"  People mentioned: {people_str}")
+
+                meeting_lines.append("")
+
+            if meeting_lines:
+                return "\n\n**RECENT MEETINGS (user's recent conversations - reference when relevant, especially if user asks about 'the meeting' or recent contacts):**\n" + "\n".join(meeting_lines)
+            return ""
+
+        except Exception as e:
+            logger.warning(f"Could not get meeting context: {e}")
+            return ""
+
     def _get_task_context(self) -> str:
         """
         Get pending/overdue tasks to inject into the chat system prompt.
@@ -1310,23 +1386,55 @@ class ChatService:
     async def _get_proactive_outreach_context(self) -> str:
         """
         Get recent proactive outreach context for conversation continuity.
-        
+
         If Jarvis proactively reached out recently (within 30 min), include that
-        context so the chat understands WHY we reached out.
+        context so the chat understands WHY we reached out. This covers both
+        AI-initiated outreach and automated notifications (task alerts, digests).
         """
         try:
             storage = get_chat_storage()
             recent_outreach = await storage.get_recent_proactive_outreach(minutes=30)
-            
+
             if not recent_outreach:
                 return ""
-            
+
             content = recent_outreach.get("content", "")
             metadata = recent_outreach.get("metadata", {})
+            source = recent_outreach.get("source", "")
+
+            # Handle automated notifications (task alerts, morning digests)
+            if source == "automated_notification":
+                notification_type = metadata.get("notification_type", "notification")
+                task_ids = metadata.get("task_ids", [])
+                task_titles = metadata.get("task_titles", [])
+
+                context = f"""
+**📬 RECENT AUTOMATED NOTIFICATION (you sent this to Aaron):**
+---
+{content}
+---
+**Notification type:** {notification_type}
+"""
+                if task_ids:
+                    context += f"**Task IDs referenced:** {', '.join(task_ids)}\n"
+                    context += f"**Task titles:** {', '.join(task_titles)}\n"
+
+                context += """
+**IMPORTANT:** Aaron is likely replying to this notification.
+- If they say "done", "mark done", "complete" → use complete_task with the referenced task
+- If they say "snooze", "reschedule", "next week" → use update_task to change the due_date
+- If they reference "this one" or "that task" → they mean the task(s) from your notification above
+- Use the task IDs from metadata when possible for precise matching
+
+"""
+                logger.info(f"Added automated notification context ({notification_type})")
+                return context
+
+            # Handle proactive outreach (AI-initiated)
             outreach_type = metadata.get("outreach_type", "unknown")
             reason = metadata.get("reason", "")
             research_needed = metadata.get("research_needed", [])
-            
+
             context = f"""
 **🎯 RECENT PROACTIVE OUTREACH (YOU initiated this conversation):**
 You recently reached out to Aaron with this message:
@@ -1344,7 +1452,7 @@ If Aaron says "yes" or confirms, USE THE RELEVANT TOOLS to actually do the resea
 - linkedin_search_people for people/professional research
 - get_reflections/get_journals for historical context
 """
-            
+
             context += """
 **IMPORTANT:** This is a follow-up conversation. Aaron is likely responding to your outreach.
 - If they say "yes", "sure", "go ahead" → execute what you offered
@@ -1354,13 +1462,13 @@ If Aaron says "yes" or confirms, USE THE RELEVANT TOOLS to actually do the resea
 """
             logger.info(f"Added proactive outreach context ({outreach_type})")
             return context
-            
+
         except Exception as e:
             logger.warning(f"Failed to get proactive outreach context: {e}")
             return ""
     
-    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "", proactive_context: str = "", task_context: str = "") -> str:
-        """Build system prompt with current date/time/location, memory, journal, Letta context, behavior rules, proactive outreach context, and task awareness."""
+    def _build_system_prompt(self, memory_context: str = "", journal_context: str = "", letta_context: str = "", behavior_rules: str = "", proactive_context: str = "", task_context: str = "", meeting_context: str = "") -> str:
+        """Build system prompt with current date/time/location, memory, journal, Letta context, behavior rules, proactive outreach context, task awareness, and recent meetings."""
         from datetime import datetime
         from app.features.chat.tools import _get_user_location
         
@@ -1406,6 +1514,10 @@ If Aaron says "yes" or confirms, USE THE RELEVANT TOOLS to actually do the resea
         # Append task context (pending/overdue tasks)
         if task_context:
             base_prompt += task_context
+
+        # Append recent meetings context (who user talked to recently)
+        if meeting_context:
+            base_prompt += meeting_context
 
         # Append Mem0 semantic memory context last
         if memory_context:
@@ -1494,9 +1606,10 @@ a genuine intellectual exchange, not robotic task completion.
             behavior_task = asyncio.create_task(self._get_behavior_rules())
             proactive_task = asyncio.create_task(self._get_proactive_outreach_context())
 
-            # Journal + task context are sync/fast, run directly
+            # Journal + task + meeting context are sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
             task_context = self._get_task_context()
+            meeting_context = self._get_recent_meetings_context(limit=3)
 
             # Wait for async tasks (in parallel) with timeout
             try:
@@ -1528,7 +1641,7 @@ a genuine intellectual exchange, not robotic task completion.
             context_time = time.time() - start_time
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
 
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context, task_context)
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context, task_context, meeting_context)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)
 
             model = request.model or MODEL_ID
@@ -1778,9 +1891,10 @@ a genuine intellectual exchange, not robotic task completion.
             behavior_task = asyncio.create_task(self._get_behavior_rules())
             proactive_task = asyncio.create_task(self._get_proactive_outreach_context())
             
-            # Journal + task context are sync/fast, run directly
+            # Journal + task + meeting context are sync/fast, run directly
             journal_context = self._get_recent_journals_context(limit=3)
             task_context = self._get_task_context()
+            meeting_context = self._get_recent_meetings_context(limit=3)
 
             # Wait for async tasks (in parallel) with timeout
             try:
@@ -1813,7 +1927,7 @@ a genuine intellectual exchange, not robotic task completion.
             logger.info(f"Context gathered in {context_time:.2f}s (parallel)")
 
             # Build dynamic system prompt with current context, journals, Letta, behavior rules, proactive context, tasks, and memory
-            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context, task_context)
+            system_prompt = self._build_system_prompt(memory_context, journal_context, letta_context, behavior_rules, proactive_context, task_context, meeting_context)
 
             # Add client-specific response style instructions (telegram vs web)
             system_prompt = self._add_client_specific_instructions(system_prompt, request.client_type)

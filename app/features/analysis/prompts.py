@@ -452,7 +452,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - "other" if none apply
 
 3. **SMART TASK EXTRACTION** - Only extract REAL action items the user needs to do:
-   
+
    ✅ CREATE tasks for these (clear action required):
    - "I need to get new cash" → task: "Get new cash"
    - "Buy ear plugs before the flight" → task: "Buy ear plugs"
@@ -460,7 +460,15 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - "Respond to Will's email" → task: "Respond to Will's email"
    - "Book dentist appointment" → task: "Book dentist appointment"
    - "Send that proposal by Friday" → task with due date
-   
+
+   ✅ ALSO CREATE tasks for MEETING-DERIVED action items:
+   - User agrees to send/share something: "I'll send you the report" → task: "Send report to [person]"
+   - Someone offers introductions/connections: "I can connect you with farmers" → task: "Follow up with [person] re: [topic] introductions"
+   - User commits to doing research/work: "I'll look into that" → task: "Research [topic]"
+   - Someone recommends contacting a person: "You should reach out to Sean" → task: "Contact Sean Peters about [topic]"
+   - Concrete next steps from discussion: "Let's validate those numbers" → task: "Validate [specific thing]"
+   - IMPORTANT: If someone mentions specific people to contact, create a SEPARATE task for each person/group
+
    ❌ DO NOT create tasks for:
    - Vague intentions: "Maybe I should...", "Would be nice to...", "I wonder if..."
    - Observations: "I noticed that...", "It seems like..."
@@ -468,9 +476,11 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Events/appointments: "Meeting at 3pm", "Flight tomorrow" → NOT tasks
    - Passive thoughts: "Need to think about...", "Should consider..."
    - Things already done: "I did X today"
-   
+
    **KEY PRINCIPLE**: If it's not something that would go on a to-do list, don't create a task.
    Quality over quantity - 2-3 real tasks are better than 10 vague ones.
+   BUT: Don't be too conservative with meetings! Commitments made during conversations
+   (send documents, contact people, research topics) ARE real tasks even if stated casually.
 
 4. **MEETINGS** - One transcript typically = one meeting:
    - Create ONE meeting entry for the conversation
@@ -516,6 +526,8 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
    - Use "follow_up_conversation" for things to discuss NEXT TIME you see this person
      Example: "Next time I see John, ask about his startup" → goes in follow_up_conversation, NOT tasks
    - follow_up_conversation is for CONVERSATIONAL reminders, not action items
+   - IMPORTANT: "I'll send them the documents" is a TASK, not a follow_up. "Ask them about X next time" is a follow_up.
+     If the user agreed to DO something (send, share, contact, research), that's a task. If they want to DISCUSS something next meeting, that's a follow_up.
 
 8. **CRM** - Only for the person actually met with:
    - Don't create CRM entries for people merely mentioned
