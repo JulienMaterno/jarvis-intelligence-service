@@ -839,7 +839,7 @@ def _summarize_activity(period: str = "today") -> Dict[str, Any]:
 
         # Get tasks completed
         tasks_completed = supabase.table("tasks").select("title").eq(
-            "status", "done"
+            "status", "completed"
         ).gte("completed_at", start.isoformat()).lte("completed_at", end.isoformat()).execute()
 
         # Get tasks created

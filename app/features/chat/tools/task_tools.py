@@ -2,14 +2,27 @@
 Task Tools for Chat.
 
 This module contains tools for task/to-do operations including creating,
-updating, completing, and managing tasks.
+updating, completing, and managing tasks. Supports time-specific reminders
+via Google Cloud Tasks for exact-time delivery.
 """
 
-from typing import Dict, Any
+import json
+import os
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
 from app.core.database import supabase
 from .base import logger
+
+# Cloud Tasks configuration for scheduled reminders
+GCP_PROJECT = os.getenv("GCP_PROJECT", "jarvis-478401")
+GCP_LOCATION = os.getenv("GCP_LOCATION", "asia-southeast1")
+CLOUD_TASKS_QUEUE = os.getenv("CLOUD_TASKS_QUEUE", "jarvis-reminders")
+SYNC_SERVICE_URL = os.getenv(
+    "SYNC_SERVICE_URL",
+    "https://jarvis-sync-service-776871804948.asia-southeast1.run.app"
+)
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 # =============================================================================
@@ -25,7 +38,7 @@ TASK_TOOLS = [
             "properties": {
                 "status": {
                     "type": "string",
-                    "enum": ["pending", "in_progress", "done", "all"],
+                    "enum": ["pending", "in_progress", "completed", "all"],
                     "description": "Filter by status",
                     "default": "pending"
                 },
@@ -60,6 +73,10 @@ TASK_TOOLS = [
                 "due_date": {
                     "type": "string",
                     "description": "Due date in YYYY-MM-DD format"
+                },
+                "remind_at": {
+                    "type": "string",
+                    "description": "ISO 8601 datetime for when to send a reminder notification (e.g. '2026-02-25T15:30:00+08:00'). Use get_current_time first to calculate absolute time from relative requests like 'in 2 hours'."
                 }
             },
             "required": ["title"]
@@ -85,7 +102,7 @@ TASK_TOOLS = [
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["pending", "in_progress", "done"]
+                    "enum": ["pending", "in_progress", "completed"]
                 },
                 "priority": {
                     "type": "string",
@@ -94,6 +111,10 @@ TASK_TOOLS = [
                 "due_date": {
                     "type": "string",
                     "description": "New due date (YYYY-MM-DD)"
+                },
+                "remind_at": {
+                    "type": "string",
+                    "description": "New reminder time in ISO 8601 format. Set to reschedule a reminder."
                 }
             },
             "required": ["task_id"]
@@ -166,12 +187,70 @@ def _get_tasks(status: str = "pending", limit: int = 100) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+def _schedule_cloud_task(task_id: str, remind_at: datetime, title: str) -> Optional[str]:
+    """Schedule a Google Cloud Task to deliver a reminder at the specified time.
+
+    Returns the Cloud Task name on success, or None on failure.
+    """
+    try:
+        from google.cloud import tasks_v2
+        from google.protobuf import timestamp_pb2
+
+        client = tasks_v2.CloudTasksClient()
+        parent = client.queue_path(GCP_PROJECT, GCP_LOCATION, CLOUD_TASKS_QUEUE)
+
+        # Build the HTTP request that Cloud Tasks will fire at remind_at
+        url = f"{SYNC_SERVICE_URL}/deliver-reminder/{task_id}"
+        payload = json.dumps({"task_id": task_id, "title": title}).encode()
+
+        task = tasks_v2.Task(
+            http_request=tasks_v2.HttpRequest(
+                http_method=tasks_v2.HttpMethod.POST,
+                url=url,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": INTERNAL_API_KEY,
+                },
+                body=payload,
+            ),
+            schedule_time=timestamp_pb2.Timestamp(
+                seconds=int(remind_at.timestamp())
+            ),
+        )
+
+        created = client.create_task(parent=parent, task=task)
+        logger.info(f"Scheduled Cloud Task for reminder: task_id={task_id}, remind_at={remind_at.isoformat()}, cloud_task={created.name}")
+        return created.name
+
+    except ImportError:
+        logger.warning("google-cloud-tasks not installed - reminder will not fire automatically")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to schedule Cloud Task for task_id={task_id}: {e}")
+        return None
+
+
 def _create_task(input: Dict) -> Dict[str, Any]:
-    """Create a new task."""
+    """Create a new task, optionally with a scheduled reminder."""
     try:
         title = input.get("title", "").strip()
         if not title:
             return {"error": "title is required"}
+
+        # Dedup check: prevent creating tasks with identical titles
+        existing = supabase.table("tasks").select("id, title, status").eq(
+            "title", title
+        ).is_("deleted_at", "null").neq("status", "cancelled").limit(1).execute()
+        if existing.data:
+            existing_task = existing.data[0]
+            logger.info(f"Task already exists, skipping duplicate: '{title}' (id={existing_task['id']})")
+            return {
+                "success": False,
+                "task_id": existing_task["id"],
+                "title": title,
+                "message": f"Task '{title}' already exists (status: {existing_task['status']}). Use update_task to modify it.",
+                "duplicate": True
+            }
 
         task_data = {
             "title": title,
@@ -182,6 +261,18 @@ def _create_task(input: Dict) -> Dict[str, Any]:
             "last_sync_source": "supabase"
         }
 
+        # Parse remind_at if provided
+        remind_at_str = input.get("remind_at")
+        remind_at_dt = None
+        if remind_at_str:
+            try:
+                remind_at_dt = datetime.fromisoformat(remind_at_str)
+                if remind_at_dt.tzinfo is None:
+                    remind_at_dt = remind_at_dt.replace(tzinfo=timezone.utc)
+                task_data["remind_at"] = remind_at_dt.isoformat()
+            except ValueError as e:
+                logger.warning(f"Invalid remind_at format '{remind_at_str}': {e}")
+
         # Remove None values
         task_data = {k: v for k, v in task_data.items() if v is not None}
 
@@ -189,14 +280,36 @@ def _create_task(input: Dict) -> Dict[str, Any]:
 
         if result.data:
             task = result.data[0]
-            logger.info(f"Created task via chat: {title}")
-            return {
+            task_id = task["id"]
+
+            # Verify the task was actually persisted
+            verify = supabase.table("tasks").select("id").eq("id", task_id).execute()
+            if not verify.data:
+                logger.error(f"PHANTOM CREATE: Task insert returned data but verification failed for '{title}' (id={task_id})")
+                return {"error": f"Task creation failed verification - please try again"}
+
+            # Schedule Cloud Task for reminder delivery
+            cloud_task_name = None
+            if remind_at_dt:
+                cloud_task_name = _schedule_cloud_task(task_id, remind_at_dt, title)
+
+            logger.info(f"Created task via chat: {title} (id={task_id}, remind_at={remind_at_str})")
+
+            response = {
                 "success": True,
-                "task_id": task["id"],
+                "task_id": task_id,
                 "title": title,
                 "message": f"Created task: {title}"
             }
-        return {"error": "Failed to create task"}
+            if remind_at_dt:
+                response["remind_at"] = remind_at_dt.isoformat()
+                response["reminder_scheduled"] = cloud_task_name is not None
+                if cloud_task_name:
+                    response["message"] += f" (reminder scheduled for {remind_at_dt.strftime('%b %d at %H:%M')})"
+                else:
+                    response["message"] += " (reminder saved but automatic scheduling failed - will still appear in digests)"
+            return response
+        return {"error": "Failed to create task - no data returned from insert"}
     except Exception as e:
         logger.error(f"Error creating task: {e}")
         return {"error": str(e)}
@@ -215,7 +328,7 @@ def _update_task(input: Dict) -> Dict[str, Any]:
         else:
             result = supabase.table("tasks").select("id, title").ilike(
                 "title", f"%{task_id}%"
-            ).neq("status", "done").is_("deleted_at", "null").limit(1).execute()
+            ).neq("status", "completed").is_("deleted_at", "null").limit(1).execute()
 
         if not result.data:
             return {"error": "Task not found"}
@@ -231,12 +344,24 @@ def _update_task(input: Dict) -> Dict[str, Any]:
             update_fields["description"] = input["description"].strip()
         if input.get("status"):
             update_fields["status"] = input["status"]
-            if input["status"] == "done":
+            if input["status"] == "completed":
                 update_fields["completed_at"] = datetime.now(timezone.utc).isoformat()
         if input.get("priority"):
             update_fields["priority"] = input["priority"]
         if input.get("due_date"):
             update_fields["due_date"] = input["due_date"]
+
+        # Handle remind_at (reschedule reminder)
+        remind_at_dt = None
+        if input.get("remind_at"):
+            try:
+                remind_at_dt = datetime.fromisoformat(input["remind_at"])
+                if remind_at_dt.tzinfo is None:
+                    remind_at_dt = remind_at_dt.replace(tzinfo=timezone.utc)
+                update_fields["remind_at"] = remind_at_dt.isoformat()
+                update_fields["reminded_at"] = None  # Reset so new reminder fires
+            except ValueError as e:
+                logger.warning(f"Invalid remind_at in update: {e}")
 
         if not update_fields:
             return {"error": "No fields to update"}
@@ -248,6 +373,11 @@ def _update_task(input: Dict) -> Dict[str, Any]:
         update_result = supabase.table("tasks").update(update_fields).eq("id", task_id).execute()
         if not update_result.data:
             return {"error": "Task update failed - no data returned"}
+
+        # Schedule new Cloud Task if remind_at was updated
+        if remind_at_dt:
+            task_title = input.get("title", task["title"]).strip()
+            _schedule_cloud_task(task_id, remind_at_dt, task_title)
 
         logger.info(f"Updated task via chat: {task['title']}")
         return {
@@ -275,7 +405,7 @@ def _complete_task(input: Dict) -> Dict[str, Any]:
         else:
             result = supabase.table("tasks").select("id, title, status").ilike(
                 "title", f"%{task_id}%"
-            ).neq("status", "done").is_("deleted_at", "null").limit(1).execute()
+            ).neq("status", "completed").is_("deleted_at", "null").limit(1).execute()
 
         if not result.data:
             return {"error": "Task not found or already completed"}
@@ -283,17 +413,23 @@ def _complete_task(input: Dict) -> Dict[str, Any]:
         task = result.data[0]
         task_id = task["id"]
 
-        if task["status"] == "done":
+        if task["status"] == "completed":
             return {"message": f"Task '{task['title']}' is already completed"}
 
         supabase.table("tasks").update({
-            "status": "done",
+            "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "last_sync_source": "supabase"
         }).eq("id", task_id).execute()
 
-        logger.info(f"Completed task via chat: {task['title']}")
+        # Verify the completion actually persisted
+        verify = supabase.table("tasks").select("id, status").eq("id", task_id).execute()
+        if verify.data and verify.data[0].get("status") != "completed":
+            logger.error(f"PHANTOM COMPLETE: Task {task_id} update returned but status is still '{verify.data[0].get('status')}'")
+            return {"error": f"Task completion failed verification - status did not update. Please try again."}
+
+        logger.info(f"Completed task via chat: {task['title']} (id={task_id})")
         return {
             "success": True,
             "task_id": task_id,

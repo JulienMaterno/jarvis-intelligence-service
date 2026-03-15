@@ -618,7 +618,7 @@ Return ONLY the JSON, no explanation."""
             result = self.db.client.table("tasks").select(
                 "id, title, description, due_date, priority, status"
             ).neq(
-                "status", "Done"
+                "status", "completed"
             ).is_(
                 "deleted_at", "null"
             ).order(
